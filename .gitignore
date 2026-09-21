@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pdb
+.venv/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.benchmarks/
+
+# Regenerable outputs
+*.msgpack
+logs/
+
+# Harness outputs (none yet, 2026-09-21): checkpoints, frozen-pool snapshots, W&B runs
+checkpoints/
+frozen_pool/
+wandb/
+runs/
+
+# Build metadata
+*.egg-info/
+build/
+dist/
+
+# Recorded captures and traces from the real game (RoyaleLive's)
+*.jsonl
+*.jsonl.gz
+reports/
+
+# Secrets and editor cruft
+.env
+.env.*
+*.pem
+*.key
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Model weights and arrays
+*.pt
+*.ckpt
+*.npz

@@ -1,0 +1,24 @@
+RoyaleLearn
+Copyright (c) 2026 RoyaleGym contributors
+
+This product includes software from rlgym-ppo
+(https://github.com/AechPro/rlgym-ppo), Copyright Matthew Allen,
+licensed under the Apache License, Version 2.0.
+
+The following files are copied verbatim from rlgym-ppo's rlgym_ppo/ppo/
+subpackage (retrieved 2026-09-17) and remain under the Apache License,
+Version 2.0, a copy of which is in LICENSE-APACHE-2.0. Their contents are
+unmodified; the only addition is the three-line attribution comment at the
+top of each file:
+
+  royalelearn/continuous_policy.py
+  royalelearn/discrete_policy.py
+  royalelearn/multi_discrete_policy.py
+  royalelearn/value_estimator.py
+  royalelearn/experience_buffer.py
+  royalelearn/ppo_learner.py
+
+They are a seed: when the training harness is written they are replaced,
+not edited.
+
+All other files in this repository are under the MIT License in LICENSE.

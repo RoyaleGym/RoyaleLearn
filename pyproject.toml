@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "royalelearn"
+version = "0.1.0"
+description = "RoyaleLearn: the RLGym-PPO-style training harness for RoyaleGym environments"
+requires-python = ">=3.12"
+# MIT for this repo's own files; the six vendored rlgym-ppo seed modules stay Apache-2.0
+# (NOTICE, LICENSE-APACHE-2.0).
+license = { text = "MIT AND Apache-2.0" }
+# royalegym is not on PyPI: it is the sibling checkout ../RoyaleGym, installed editable before
+# this package by the workspace recipe in README.md (RoyaleSim -> RoyaleGym -> RoyaleViser ->
+# RoyaleLearn). pip resolves it from the venv; it never fetches it.
+dependencies = [
+    "royalegym>=0.1.0",
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+# The vendored rlgym_ppo seed (royalelearn/*_policy.py, value_estimator.py, experience_buffer.py,
+# ppo_learner.py) needs torch; the package imports without it (see royalelearn/__init__.py).
+torch = [
+    "torch>=2.4",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.16",
+]
+
+[tool.setuptools]
+packages = ["royalelearn"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["royalelearn", "tests"]
+# rlgym_ppo's files exactly as copied: they are replaced, not cleaned, when the harness is
+# written, so lint findings in them are noise.
+extend-exclude = [
+    "royalelearn/continuous_policy.py",
+    "royalelearn/discrete_policy.py",
+    "royalelearn/multi_discrete_policy.py",
+    "royalelearn/value_estimator.py",
+    "royalelearn/experience_buffer.py",
+    "royalelearn/ppo_learner.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003", "SIM108"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["royalelearn", "royalegym", "royalesim"]
