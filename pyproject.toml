@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "royalelearn"
 version = "0.1.0"
-description = "RoyaleLearn: the RLGym-PPO-style training harness for RoyaleGym environments"
+description = "RoyaleLearn: self-play PPO training harness for RoyaleGym Clash Royale environments"
 requires-python = ">=3.12"
 # MIT for this repo's own files; the six vendored rlgym-ppo seed modules stay Apache-2.0
 # (NOTICE, LICENSE-APACHE-2.0).

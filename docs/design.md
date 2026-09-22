@@ -46,7 +46,7 @@ would score well on parity and badly on the thing anyone cares about.
 
 ## Conventions
 
-These are RLGym's conventions, adopted across the family:
+The conventions the harness is held to are the family's, and will be familiar from RLGym:
 
 - **Every user-facing behaviour is an ABC with swappable implementations.** In this repo that
   means the rollout worker, the learner, the ladder's matchmaking and rating, the checkpoint

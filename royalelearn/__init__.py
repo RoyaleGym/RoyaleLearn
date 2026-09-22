@@ -1,4 +1,4 @@
-"""RoyaleLearn: the training harness for RoyaleGym environments (RLGym-PPO's role).
+"""RoyaleLearn: the self-play training harness for RoyaleGym environments.
 
 The harness itself is not written yet. The six modules beside this file
 (continuous_policy, discrete_policy, multi_discrete_policy, value_estimator,
