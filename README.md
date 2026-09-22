@@ -79,9 +79,12 @@ Six pieces, and all six run today.
   </tr>
 </table>
 
-Running is not the same as trained. The masked head and the PPO update that trains it work end
-to end, but nobody has trained a bot with them yet. So there is no evidence yet that they
-produce a good one.
+Running is not the same as trained. The masked head and the PPO update that trains it run end to
+end, but nobody has trained a bot with them yet, so there is no evidence yet that they produce a
+good one. As of 2026-09-22 there is more to say than that: a defect is open in the path that
+carries collected experience into the update, and no run so far shows the bot getting better.
+Until that is fixed and this line changes, treat every run here as a loop that completes rather
+than as training.
 
 In plain words, for anyone who has not trained a bot before:
 
