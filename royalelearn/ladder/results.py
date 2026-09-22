@@ -8,11 +8,20 @@ draws and a single ``wins: float`` with a draw adding a half cannot tell them ap
 method that is not a scalar rating at all -- Nash averaging, alpha-rank -- needs the games
 themselves.
 
-``context`` is what makes two results comparable. It hashes the env factory, the observation
-builder's own spec, the deck protocol and the engine build, so a policy that was shown the
-opponent's hand and one that was not are never pooled: rating them together would measure the
-information rather than the player. Results from different contexts are kept in one file and
-separated on the way out.
+``context`` is what separates results that must not be pooled. It hashes the env factory, the
+observation builder's own spec, the deck protocol and the engine build, so a policy that was
+shown the opponent's hand and one that was not are never pooled: rating them together would
+measure the information rather than the player. Results from different contexts are kept in one
+file and separated on the way out.
+
+It is a separator rather than a guarantee, and the gap is worth naming because a digest invites
+the stronger reading. The engine build it hashes covers the tables compiled into the engine, and
+NOT the card table, which the engine reads at runtime. So two games played against different
+card tables carry the same context and are pooled by ``eval_view``, and a rating fitted across a
+card-table change is fitted across a change in the game itself with nothing recording that it
+happened. This is not fixable here -- the missing stamp belongs to the engine's Python surface,
+which exposes no card-table vintage to read -- so the honest statement is that a shared context
+means the recorded inputs matched, not that the two policies played the same game.
 """
 
 from __future__ import annotations
