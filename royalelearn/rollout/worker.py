@@ -30,6 +30,7 @@ both from the report this file sends once its environments are up.
 from __future__ import annotations
 
 import contextlib
+import multiprocessing
 import os
 import signal
 import sys
@@ -40,6 +41,10 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from ..determinism import BLAS_THREAD_VARS, apply_blas_thread_env
+
+#: How often a worker asks whether its parent is still there. Often enough that a killed run
+#: does not leave a tree behind for long, rarely enough to cost nothing in a round.
+PARENT_CHECK_S = 2.0
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from multiprocessing.queues import Queue
@@ -158,7 +163,21 @@ def worker_main(
     spin_s = max(0.0, config.spin_us / 1e6)
     pending: dict[int, list[bytes]] = {shard: [] for shard in range(len(shards))}
     running = True
+    parent = multiprocessing.parent_process()
+    next_parent_check = time.monotonic() + PARENT_CHECK_S
     while running:
+        # A worker outlives its parent silently otherwise. The parent normally closes the farm
+        # on its way out, but it cannot when it is killed rather than asked, and what is left
+        # is a tree of processes holding a viewer port and a share of the memory -- which then
+        # makes the next run more likely to lose a worker to memory pressure, and harder to
+        # attribute when it does. Asking whether the parent is alive is exact, where an idle
+        # timeout would be a guess: a gate legitimately leaves these workers untouched for
+        # minutes at a time.
+        now = time.monotonic()
+        if now >= next_parent_check:
+            next_parent_check = now + PARENT_CHECK_S
+            if parent is not None and not parent.is_alive():
+                break
         for shard, runner in enumerate(shards):
             parity = runner.open_parity()
             if not _wait_command(runner, parity, actions_ready[shard], spin_s, STATE_OBS_READY):

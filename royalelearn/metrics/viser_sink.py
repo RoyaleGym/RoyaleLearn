@@ -343,7 +343,8 @@ class ViserSink(MetricsSink):
                         f"the learning status port {self.host}:{self.port} is not available "
                         f"({exc}); this run publishes no learning panel until it frees, which "
                         f"it retries every {VISER_REBIND_S:.0f}s. Another training run is the "
-                        f"usual holder."
+                        f"usual holder, and a run that was killed rather than asked to stop "
+                        f"can still be holding it."
                     )
                 return
             if self.unavailable is not None:

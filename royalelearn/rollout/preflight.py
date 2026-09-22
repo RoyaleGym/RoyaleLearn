@@ -19,6 +19,7 @@ whose catalogue is not the one a real run uses.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -197,6 +198,27 @@ def run_preflight(
             f"rollout.games_per_worker or ppo.timesteps_per_iteration, or raise the budget if "
             f"the machine really has the memory."
         )
+    free_mb = available_memory_mb()
+    if free_mb is not None:
+        say(f"              free right now               {free_mb:8.0f} MB")
+        if ram["total_mb"] > free_mb:
+            # A warning and not a refusal. `ram_budget_mb` is a statement about the machine
+            # and is worth refusing over; this is a statement about the machine at this
+            # moment, and whatever else is using it may well stop before the run needs the
+            # memory. Refusing here would mean a run that could have finished does not start
+            # because something unrelated was busy for a minute, which is the more expensive
+            # mistake. What starting over the line costs is a worker killed mid-round, which
+            # the run survives: its slots report nothing, the round continues without them,
+            # and health/worker_restarts counts it.
+            say(
+                f"              WARNING: the projection is {ram['total_mb'] - free_mb:.0f} MB "
+                f"over what is free."
+            )
+            say(
+                "              Something else on this machine is using it. A worker killed "
+                "for memory costs its seats for a round and shows up in "
+                "health/worker_restarts; if that number climbs, this is why."
+            )
 
     say(
         f"geometry      {geo.workers} workers x {geo.games_per_worker} battles = "
@@ -462,6 +484,45 @@ def _table_lines(spec: EnvSpec, table: CodecTable, row_bytes: int) -> list[str]:
     )
     lines.append(f"              {row_bytes} B a row, {table.digest()[:12]}")
     return lines
+
+
+def available_memory_mb() -> float | None:
+    """Memory a new process could actually obtain now, or None where that cannot be asked.
+
+    Not the machine's size: what is free on it at this moment. A training run sized against
+    the total is sized against a machine nobody else is using, and the way it fails when that
+    is untrue is a worker being killed in the middle of a round rather than a refusal at the
+    start.
+    """
+    if sys.platform == "win32":
+        import ctypes
+
+        class _Status(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _Status()
+        status.dwLength = ctypes.sizeof(_Status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return status.ullAvailPhys / (1024 * 1024)
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return float(line.split()[1]) / 1024
+    except OSError:
+        return None
+    return None
 
 
 def ram_ledger(config: RunConfig, geo: Geometry, row_bytes: int) -> dict[str, float]:
