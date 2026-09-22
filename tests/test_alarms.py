@@ -43,6 +43,10 @@ HEALTHY: dict[str, float | int | str] = {
     "env/elixir_count_exact_frac": 1.0,
     "env/reward_shaping_abs": 0.2,
     "env/reward_terminal_abs": 1.0,
+    # What laptop runs at minibatch 256 on a 4 GB card report: about 3372 MB available against
+    # a measured need of 2349.
+    "health/vram_available_mb": 3400.0,
+    "health/vram_needed_mb": 2350.0,
     "ladder/transitivity_residual": 0.02,
     "ladder/consecutive_gate_failures": 0,
     "throughput/rollout_capacity_ratio": 2.4,
@@ -71,10 +75,16 @@ TRIPS: dict[str, dict[str, float]] = {
     },
     "elixir_count_inexact": {"env/elixir_count_exact_frac": 0.4},
     "shaping_dominates": {"env/reward_shaping_abs": 4.0},
+    # A neighbour took about 1.4 GB of the card after startup.
+    "vram_spilling": {"health/vram_available_mb": 2000.0},
     "transitivity": {"ladder/transitivity_residual": 0.4},
     "gate_starved": {"ladder/consecutive_gate_failures": 6},
     "capacity_ratio": {"throughput/rollout_capacity_ratio": 0.8},
 }
+
+#: Alarms about a counter rising across rows rather than about one row's level. No single row
+#: can trip them, so they are tested on their own below and have no TRIPS entry.
+RISES = frozenset({"worker_failures", "worker_failures_persistent"})
 
 
 def _row(**moved: float) -> dict[str, float | int | str]:
@@ -98,6 +108,22 @@ def _set(**overrides: object) -> AlarmSet:
 def test_the_table_covers_every_alarm_the_schema_names() -> None:
     names = {alarm.name for alarm in default_alarms(AlarmConfig())}
     assert names == set(schema.ALARM_METRICS)
+
+
+def test_every_alarm_is_tested_firing_and_staying_silent() -> None:
+    """The healthy-row and trip tests below see only the alarms this file has rows for.
+
+    An alarm added to the table with no entry here passes both of them anyway. The healthy row
+    does not carry its keys, so the missing-key rule keeps it silent for a reason that has
+    nothing to do with its threshold, and nothing ever asks it to fire. The suite stays green
+    around an alarm nobody has seen work, which is the one kind of alarm section 13.3 says is
+    unvalidated.
+    """
+    built = {alarm.name: alarm for alarm in default_alarms(AlarmConfig())}
+    assert sorted(set(built) - set(TRIPS) - RISES) == [], "an alarm with no row that trips it"
+    for alarm in built.values():
+        absent = [key for key in alarm.keys if key not in HEALTHY]
+        assert absent == [], f"{alarm.name} is silent on the healthy row: it lacks {absent}"
 
 
 def test_every_alarm_reads_keys_the_schema_knows() -> None:

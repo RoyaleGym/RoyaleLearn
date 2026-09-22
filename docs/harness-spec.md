@@ -2666,8 +2666,8 @@ and the resume command verbatim. The reason a halt states its own evidence is th
 anyone asks on finding a stopped run is whether the stop was real, and a line reading only that a
 metric crossed a threshold costs the same morning as no run at all.
 
-This is also why no halting alarm has `patience = 1` on a *learning* quantity. The three that do —
-`illegal_actions`, `ratio_invariant`, `nonfinite`, `buffer_overflow` — are correctness assertions
+This is also why no halting alarm has `patience = 1` on a *learning* quantity. The four that do,
+`illegal_actions`, `ratio_invariant`, `nonfinite` and `buffer_overflow`, are correctness assertions
 whose first occurrence is already a defect, and continuing past one wastes the compute that follows.
 Everything that measures how training is *going* waits several consecutive iterations, because a
 policy that is still near-random moves these quantities around for reasons that are not the failure
@@ -2694,6 +2694,7 @@ being hunted, and a false halt costs everything the run was for.
 | `seat_bias` | `env/win_rate_by_seat`'s 95% interval excludes 0.45-0.55 | 3 | warn | an unseeded reset, a reward asymmetry, or an observation mirror bug; a few points inside that band can be the shipped engine's own seat asymmetry, which is why this warns rather than halts and why the ladder's paired evaluation swaps sides on every seed |
 | `elixir_count_inexact` | `env/elixir_count_exact_frac < 0.99` | 3 | warn | the observation's opponent-elixir field is an estimate on some episodes: a repeated card in a deck, or an engine whose elixir law is not the calibration's. The policy is reading a documented-exact slot that is not. A value near zero rather than slightly under one is the second cause and not a broken counter: it says the engine build and the card data disagree about elixir, so read `run/engine_build_digest` before anything else |
 | `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | shaping has taken over the objective |
+| `vram_spilling` | `health/vram_available_mb < health/vram_needed_mb`: the device memory this run could occupy (driver free plus what it already reserves) is below one minibatch's peak, measured by the preflight at startup, plus `doctor.vram_headroom_mb` | 3 | warn | another process took device memory after startup, so the update is being backed by host memory over PCIe and runs several times slower. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It is the one threshold in this table measured on the machine it is applied to. It stays silent when the preflight measured nothing (no CUDA device, or `doctor.vram_headroom_mb` set to 0), because `health/vram_needed_mb` is then absent |
 | `transitivity` | `ladder/transitivity_residual > 0.10` | 3 | warn | the scalar rating is lying |
 | `gate_starved` | five consecutive gate failures | 1 | warn | the plateau signal, stated as an event |
 | `capacity_ratio` | `throughput/rollout_capacity_ratio < 1.5` | 3 | warn | the harness is becoming the bottleneck |
