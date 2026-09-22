@@ -132,7 +132,7 @@ One config block per machine class; only numbers change.
 | `rollout.shards_per_worker` | 2 | 2 | 2 |
 | battles G = K·M | 96 | 768 | 1 536 |
 | slots R = 2G | 192 | 1 536 | 3 072 |
-| learner rows (0.75·R) | 144 | 1 152 | 2 304 |
+| learner rows G + mirror battles | 144 | 1 152 | 2 304 |
 | `ppo.timesteps_per_iteration` | 32 768 | 131 072 | 262 144 |
 | cycles T = ceil(ts / learner rows) | 228 | 114 | 114 |
 | `net.channels` C / `net.blocks` N | 64 / 4 | 96 / 8 | 128 / 12 |
@@ -2253,23 +2253,72 @@ battle's next episode is, and it is called by the parent at that battle's own ep
 the iteration's opening table. A policy is therefore bound to a battle for exactly one episode, and a
 partially controlled trajectory cannot occur.
 
-Drawing per episode rather than once per iteration matters for two reasons. An iteration spans several
-episodes in every slot, so one draw per slot per iteration would give every episode that starts inside
-that iteration the same opponent — a correlation across the mixture that nothing in the statistics
-accounts for. And because the draw is addressed by the battle and its ordinal rather than by the
-iteration, it does not move when the iteration length or the worker count changes: the same episode of
-the same battle meets the same opponent on any geometry, which is what makes a rerun a rerun.
+Two decisions go into an assignment, and they are made differently.
 
-| bucket | share | opponent | trainable seats |
+**The role is the battle slot's, for the whole run.** The mixture is a count of slots, not a
+probability each slot is drawn from. Of the laptop profile's 96 battles, exactly 48 are mirror slots,
+34 pool and 14 scripted, and those numbers do not move for the life of the run. `config.role_counts`
+turns the mixture into the three counts; the matchmaker lays them over the battle indices with a
+seeded permutation from `match/battle/-2/ordinal/{n_battles}`, so which battle gets which role is a
+pure function of the master seed and the battle count, and nothing else — not the iteration, not the
+ordinal, not the pool, not the ratings. A permutation rather than "the first 48 indices" because
+battles map to workers and shards in contiguous blocks: a role pinned to low indices would put every
+double-seat episode on the first worker and none on the last, and a shard-round is as long as its
+slowest worker.
+
+**The opponent and the learner's seat are still one draw per episode**, addressed by the battle and
+its ordinal. An iteration spans several episodes in every slot, so one draw per slot per iteration
+would give every episode that starts inside that iteration the same opponent — a correlation across
+the mixture that nothing in the statistics accounts for. And because that draw is addressed by the
+battle and its ordinal rather than by the iteration, it does not move when the iteration length
+changes: the same episode of the same battle meets the same opponent however the iteration boundary
+falls across it.
+
+| bucket | battle slots (of 96) | opponent | trainable seats |
 |---|---|---|---|
-| mirror | 0.50 | the live policy on both seats | 2 |
-| pool | 0.35 | one of at most `max_resident_opponents` frozen snapshots, PFSP-weighted | 1 |
-| scripted | 0.15 | uniform over `NoopOpponent` and `RandomLegalOpponent(0.9)`, run in the worker | 1 |
+| mirror | 48 (`mix[0]` = 0.50) | the live policy on both seats | 2 |
+| pool | 34 (`mix[1]` = 0.35) | one of at most `max_resident_opponents` frozen snapshots, PFSP-weighted | 1 |
+| scripted | 14 (`mix[2]` = 0.15) | uniform over `NoopOpponent` and `RandomLegalOpponent(0.9)`, run in the worker | 1 |
 
-Expected trainable rows per battle is `0.5*2 + 0.5*1 = 1.5`, so **75% of collected rows are kept** and
-`ppo.timesteps_per_iteration` counts kept rows. `throughput/discarded_rows_frac` is logged and its
-expected value is asserted within a tolerance; a drift there means the matchmaker is not doing what
-the config says.
+Trainable rows per cycle are therefore `n_battles + mirror_battles` — 96 + 48 = **144 of 192 slots,
+exactly three quarters**, on every cycle of every iteration whatever the master seed. `config.geometry`
+sizes the iteration from that number and `ppo.timesteps_per_iteration` counts kept rows, so
+`cycles × learner_rows ≥ timesteps_per_iteration` is a fact about the rectangle rather than about its
+average.
+
+Rounding, when the shares do not divide the battles: `mirror = round(mix[0] × n_battles)`, then the
+remaining battles split between pool and scripted in the ratio `mix[1] : mix[2]` with pool rounded and
+scripted taking the remainder. Halves round up rather than to even, because Python's `round(0.5)` is 0
+and a one-battle rectangle under the shipped mixture would then contain no mirror at all. The three
+counts always sum to `n_battles`, and each lands within one battle of its exact share. A share whose
+quota is under half a battle rounds to zero — three battles cannot hold a tenth of one — so the
+mixture a small run actually plays is the count, not the config.
+
+**Why counts and not a draw.** Under a per-episode draw the mirror count was Binomial(96, 0.5): a
+standard deviation of 4.9 rows per cycle, against a laptop iteration whose margin over the
+trainable-row floor (`0.98 × 32 768 = 32 113` against a planned 32 832) is 0.2%. Measured over master
+seeds 0–299, 76 of them — one in four — sized an iteration below the floor, and `TrainableRowsShort`
+halted the run in its first minutes. The shipped seed happened to draw 48 and survive, which is why no
+recorded run showed it.
+
+**A battle share and a row share are not the same quantity.** The mixture is a share of *battles*;
+`throughput/discarded_rows_frac` is a share of *rows*, and a row is one slot on one cycle. A mirror
+episode runs about 9% longer than a scripted one, so mirror battles occupy more of the rectangle's
+cycles than their share of the battles, and a sample row share sat about 0.022 below the battle share
+it was compared against. With the role fixed to the slot the question does not arise: every slot holds
+its role for the whole iteration whether its episodes are long or short, so the learner's rows are
+`cycles × (n_battles + mirror_battles)` and the discarded share is `(n_battles - mirror_battles) /
+(2 × n_battles)` exactly. The iteration invariant of section 14.1 still compares the two within
+`MIXTURE_TOLERANCE`; it can become an equality, short only of rows lost to a dead worker.
+
+*Landed in de70de8.* Before it, the role was drawn per episode from `mix` and the iteration was sized
+from the expectation. The shipped profiles do not change size — 144, 1 152 and 2 304 learner rows a
+cycle, as the table in section 2.2 always said — but they are now that size on every seed rather than
+on average: measured over master seeds 0–299, 76 iterations short of the floor became 0.
+`MixMatchmaker.FORMAT_VERSION` is 2, which adds `n_battles` to the checkpoint; a format-1 checkpoint
+still loads and recovers its rectangle at the resumed run's first `plan`. The one property given up is
+that a run replayed at a different worker count lays its roles out differently, since exactly half of
+96 battles and exactly half of 192 are not the same set of indices.
 
 - **PFSP weighting is `hard`, power 2**: `w_k` proportional to `(1 - p_k)^2`, with `p_k` the
   **fitted model's** predicted score probability rather than the direct head-to-head record. On a pool
@@ -2284,10 +2333,15 @@ the config says.
   carries the most information. Both weightings are already implemented in
   `royalegym.selfplay.pfsp_weights`.
 - **The learner's seat is drawn uniformly** between blue and red for every pool and scripted battle,
-  redrawn per episode like the rest of the assignment, so `env/win_rate_by_seat` measures the seat
-  advantage the learner actually experiences. The shipped engine is not a 180-degree rotation between
-  seats: multi-unit ground deploys land differently on the two sides, measured on the real game, so
-  a seat advantage of a few points can be the game's own and is a warning, not a leak.
+  redrawn at every episode boundary, so `env/win_rate_by_seat` measures the seat advantage the learner
+  actually experiences. Redrawing the seat costs nothing in exactness — a battle contributes one
+  learner row from whichever seat it takes — which is why the seat stayed a draw when the role stopped
+  being one. The shipped engine is not a 180-degree rotation between seats: multi-unit ground deploys
+  land differently on the two sides, so a seat advantage of a few points can be the game's own and is
+  a warning, not a leak.
+- **A pool slot plays scripted while no snapshot is resident.** Before the first candidate is admitted
+  there is nothing to draw from, and a scripted opponent is the honest substitute: it fills the same
+  one seat, so the iteration is still exactly the size it was planned at.
 - **Evaluation is not in this mixture at all** (D10). The studied alternative folds evaluation into the
   rollout worker at a small probability and swaps the live match object in place; that makes "win rate"
   depend on the training curriculum and, in the reference, leaves a worker permanently misconfigured if
@@ -3093,7 +3147,7 @@ metric.
 | `test_rollout_invariants.py` | the section 14.1 assertions fire on deliberately corrupted rounds: a dropped cycle, a mismatched slot count, an action illegal under its stored mask, a truncated cell with no `final_value` | fast |
 | `test_rating.py` | the Bradley-Terry-Davidson fit recovers known strengths from synthetic results within its own standard errors over 100 seeds and to within 5 Elo at n = 2000; it is invariant to result order and to a permutation of player ids; standard errors shrink as one over the square root of n; the anchor is pinned exactly; the standard error of a difference uses the 2x2 block; the Davidson term recovers a known draw rate; the residual is near zero on transitive data and large on synthetic rock-paper-scissors; `wilson_interval` matches the published table | fast |
 | `test_results_log.py` | the aggregate cache equals a rebuild from `games.jsonl`; a truncated last line is tolerated; contexts are never pooled without the flag | fast |
-| `test_matchmaker.py` | the empirical mixture matches the configured shares over 10^5 draws; PFSP weights are floored; `assign(battle, ordinal, ...)` is a pure function of its arguments and the master seed, and gives the same answer at a different iteration length and a different worker count; `plan()` equals `assign()` applied across the geometry; at most `max_resident_opponents` snapshots appear; an assignment is binding for a whole episode | fast |
+| `test_matchmaker.py` | the role counts land within one battle of the mixture over 30 master seeds and seven geometries, including an odd battle count, a single battle, `(1, 0, 0)` and shares that do not divide the battles; a role does not move with the ordinal, the pool or the ratings; every cycle collects exactly `n_battles + mirror_battles` learner rows and an iteration exactly `cycles ×` that; the shipped laptop iteration clears `MIN_TRAINABLE_FRACTION` on every one of those seeds; the layout is a permutation, so every worker carries mirror battles; one slot still draws both seats and several opponents over its episodes; PFSP weights are floored; `assign(battle, ordinal, ...)` is a pure function of its arguments and the master seed; `plan()` equals `assign()` applied across the geometry; at most `max_resident_opponents` snapshots appear; an assignment is binding for a whole episode; a checkpoint round-trips the roles and a format-1 checkpoint still loads | fast |
 | `test_gate.py` | each of the three conditions fails independently and the decision names which; an observed 55.2% at n = 1000 passes and 55.0% fails; condition 3 compares the candidate's observed mean against the champion's **fitted** predicted mean and passes on a champion with no games against the stratified eight; the cycle case admits without promoting; paired scoring collapses sides correctly and is symmetric under swapping A and B; the bootstrap interval covers a known rate at the nominal level over 200 synthetic replications | fast |
 | `test_eviction.py` | anchors, v0 and the champion chain are never evicted; the stratified sample spans the rating range; `cycle`-flagged snapshots are preferred; the archive and the log are untouched | fast |
 | `test_snapshots.py` | save and load round-trip; a mismatching `arch_digest`, `obs_digest` or `codec_table_digest` is refused with the field named; `EvalRunner` refuses a pairing whose two `obs_digest`s differ and names both; the LRU evicts; a byte scan finds no pickle protocol marker in any written file | fast |
