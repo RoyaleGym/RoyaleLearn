@@ -119,6 +119,16 @@ confirmation is to log how long the acquire actually blocks for. It is left unfi
 guessed at, because a wrong change to a wait loop is how a run hangs instead of how it slows
 down.
 
+**Anything that makes a worker's first episode special is a thing a resumed worker must not
+re-do**, because on a resume there is no first episode. That rule cost one real defect before it
+was written down: the warm-up that staggers first-episode phases apart was still running after a
+resume, moving every battle off the episode it was continuing. Two others were already guarded
+and are worth knowing about, since both look like the same trap and are not — the codec table is
+computed from a sample drawn from a named stream rather than from whatever the environment
+happened to produce, and the frame-stack history strip is checkpointed with an explicit guard
+against carrying an empty restored rectangle over it. A new piece of per-run warm-up is the thing
+to check this rule against.
+
 **Two behaviours that work but are not pinned by a test.** The ratio invariant under a
 deliberately corrupted mask, and an episode replayed from its shard seed against
 `royalegym.replay.verify_trace`. Both have been driven by hand and both passed, which is not the
