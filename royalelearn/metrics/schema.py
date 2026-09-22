@@ -168,10 +168,11 @@ METRICS: dict[str, MetricSpec] = {
     ),
     "ppo/noop_entropy": _m(
         "nats",
-        "Binary entropy of p(no-op) against p(play): the leading indicator of no-op collapse, "
-        "before cards_per_match bottoms out.",
-        low=0.05,
-        high=0.693,
+        "Binary entropy of play against wait, over the rows whose mask offered more than the "
+        "no-op. Conditioned on those rows because a decision the elixir bar cannot afford has "
+        "an entropy of zero by construction, and on this environment most decisions are that: "
+        "an unconditioned mean measures the elixir curve rather than the policy.",
+        low=0.02,
     ),
     "ppo/kl": _m(
         "nats",

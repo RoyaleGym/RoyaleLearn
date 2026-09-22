@@ -2568,7 +2568,7 @@ reference's residual silently absorbs the four places it is actually slow.
 |---|---|---|
 | `explained_variance` | rising to 0.5-0.9 | the critic's health. No reference logs it, and value loss is uninterpretable while returns are normalised by a moving standard deviation. Still negative after fifty iterations is the most likely cause of a plateau |
 | `entropy_normalised` | 0.3-0.8 | raw entropy falling is ambiguous — a confident policy or a tighter mask. Only the normalised form separates them |
-| `noop_entropy` | above 0.05 nats | the leading indicator of no-op collapse, before `cards_per_match` bottoms out |
+| `noop_entropy` | above 0.05 nats | the leading indicator of no-op collapse, before `cards_per_match` bottoms out. Taken over the rows whose mask offered more than the no-op, because a decision the elixir bar cannot afford has a binary entropy of zero by construction and most decisions on this environment are that one (section 18, item 8). An unconditioned mean measures the elixir curve: it reads near zero on a healthy run, so a floor on it fires permanently, and a gate that had really collapsed would move it by a fraction of what it moves on the rows that had a choice |
 | `clip_fraction` | 0.05-0.20 | pinned near 1.0 is the signature of a rollout/update mask disagreement, or a learning rate far too high |
 | `kl` | 0.003-0.02 | below the band, lower `batch_size`; above it, raise `batch_size` or let the backoff act |
 | `grad_norm_*` | below `max_grad_norm` most steps | pinned at 0.5 every step means the clip is the binding constraint and the effective learning rate is unknown |

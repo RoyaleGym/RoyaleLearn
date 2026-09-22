@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import msgspec
@@ -658,3 +659,51 @@ def test_a_missing_optimizer_state_is_an_error_on_a_strict_load(
 
     update.load_checkpoint(tmp_path, strict=False)
     assert update.model_updates == 0
+
+
+def test_the_play_wait_entropy_ignores_rows_that_had_no_choice(rect: Fixture) -> None:
+    """A decision the elixir bar cannot afford has a binary entropy of zero by construction.
+
+    On the shipped environment most decisions are exactly that, so a mean over every row
+    reports the elixir curve rather than the policy: it sits near zero on a healthy run, a
+    floor set on it fires permanently, and a gate that really had collapsed would move it by a
+    fraction of what it moves on the rows that had a choice.
+    """
+    import torch
+
+    from royalelearn.learn.ppo import _Diagnostics
+
+    device = torch.device("cpu")
+
+    def record(diagnostics: _Diagnostics, noop: list[float], legal: list[int]) -> None:
+        count = len(noop)
+        result = SimpleNamespace(
+            log_probs=torch.zeros(count),
+            entropy=torch.zeros(count),
+            noop_entropy=torch.tensor(noop),
+            values=torch.zeros(count),
+            n_legal=torch.tensor(legal),
+        )
+        diagnostics.minibatch(
+            epoch=0,
+            n=count,
+            ratio=torch.ones(count),
+            advantages=torch.zeros(count),
+            surr=torch.zeros(count),
+            dual=torch.zeros(count),
+            result=result,
+            value_loss=torch.zeros(()),
+            clip_range=0.2,
+            dual_clip_c=3.0,
+        )
+
+    # Three rows had a choice and carried 0.6 nats; seventeen could only wait.
+    conditioned = _Diagnostics(1, device)
+    record(conditioned, [0.6] * 3 + [0.0] * 17, [40] * 3 + [1] * 17)
+    out = conditioned.result(
+        n_samples=20, epochs=1, explained=0.0, update_actor=0.0, update_critic=0.0, seconds=0.0
+    )
+
+    assert out.noop_entropy == pytest.approx(0.6, abs=1e-6), (
+        "the play/wait entropy averaged over rows that had no play to choose"
+    )

@@ -644,6 +644,9 @@ class _Diagnostics:
         self.samples = 0
         self.minibatches = 0
         self.steps = 0
+        #: Rows whose mask offered more than the no-op. The play/wait entropy is a mean over
+        #: these and not over every row; see ``_Diagnostics.minibatch``.
+        self._chose = torch.zeros((), dtype=torch.float32, device=device)
         self._sums = {
             name: torch.zeros((), dtype=torch.float32, device=device)
             for name in (
@@ -651,6 +654,7 @@ class _Diagnostics:
                 "value_loss",
                 "entropy",
                 "noop_entropy",
+                "forced_rows",
                 "entropy_normalised",
                 "kl",
                 "clip_fraction",
@@ -690,12 +694,22 @@ class _Diagnostics:
         # policy that has learnt to wait -- and therefore sees fewer legal actions -- is not
         # read as one that has collapsed.
         legal = result.n_legal.clamp_min(2).to(ratio.dtype).log()
+        # The play/wait entropy is conditioned on the rows that HAD a choice. On the shipped
+        # environment about nine decisions in ten leave exactly one legal action -- the elixir
+        # bar can afford nothing -- and on those the binary entropy is zero by construction,
+        # not by anything the policy did. Averaging over all rows measures the elixir curve:
+        # it reads near zero on a healthy run, so a floor set on it fires permanently, and a
+        # gate that really had collapsed would move it by a fraction of what it moves here.
+        chose = (result.n_legal > 1).to(ratio.dtype)
+        chose_n = chose.sum()
         self.samples += n
         self.minibatches += 1
+        self._chose += chose_n
         self._sums["policy_loss"] += -dual.mean() * n
         self._sums["value_loss"] += value_loss * n
         self._sums["entropy"] += result.entropy.mean() * n
-        self._sums["noop_entropy"] += result.noop_entropy.mean() * n
+        self._sums["noop_entropy"] += (result.noop_entropy * chose).sum()
+        self._sums["forced_rows"] += (n - chose_n)
         self._sums["entropy_normalised"] += (result.entropy / legal).mean() * n
         self._sums["kl"] += kl * n
         self._sums["clip_fraction"] += clip * n
@@ -724,6 +738,13 @@ class _Diagnostics:
     ) -> UpdateResult:
         total = max(1, self.samples)
         means = {name: float((value / total).item()) for name, value in self._sums.items()}
+        # Two of them are not means over every row. The play/wait entropy is summed over the
+        # rows that had a choice and is divided by those; the forced-row count is a count.
+        chose = float(self._chose.item())
+        means["noop_entropy"] = (
+            float((self._sums["noop_entropy"] / max(chose, 1.0)).item()) if chose else 0.0
+        )
+        means["forced_rows"] = float(self._sums["forced_rows"].item())
         if self.ratio_deviation is not None:
             self.ratio_value = float(self.ratio_deviation.item())
         expected = n_samples * max(1, epochs)
