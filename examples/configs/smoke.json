@@ -221,6 +221,7 @@
   },
   "doctor": {
     "ram_budget_mb": 6500,
-    "run_mask_disagreement_gate": true
+    "run_mask_disagreement_gate": true,
+    "vram_headroom_mb": 256
   }
 }

@@ -224,7 +224,14 @@ class PPOConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Samples per forward. A PURE MEMORY KNOB: gradients accumulate weighted by n/batch_size
     #: with one optimizer step per batch, and a test proves the accumulated gradient equals the
     #: full-batch one.
-    minibatch_size: int = 512
+    #:
+    #: 256 is the laptop's, and it is here rather than in ``laptop()`` because every default in
+    #: this tree is the laptop column; the larger profiles set their own. It was 512, chosen as
+    #: the largest that fits 4 GB, and it does not fit: measured on a 4 GB card, 512 reserved
+    #: 99% of it and the update took 180-233 s as the driver backed the overflow with host RAM,
+    #: where 256 held 48 s within 2.3%. The cliff belongs to the footprint against the card,
+    #: not to the number, which is why the workstation keeps 2048 (spec section 6).
+    minibatch_size: int = 256
     clip_range: float = 0.2
     #: For a negative advantage the standard minimum does not bound the loss below, and in a
     #: wide masked space a rarely-sampled action's ratio can be enormous.

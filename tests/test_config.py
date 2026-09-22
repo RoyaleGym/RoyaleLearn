@@ -6,12 +6,16 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
+from typing import Any
 
 import msgspec
 import pytest
 
 from royalelearn import config as C
 from royalelearn.errors import PreflightError
+
+EXAMPLE_CONFIGS = Path(__file__).resolve().parents[1] / "examples" / "configs"
 
 
 @pytest.mark.parametrize("name", sorted(C.PROFILES))
@@ -37,6 +41,54 @@ def test_every_profile_round_trips(name: str) -> None:
     text = C.dump_config(config)
     assert C.load_config(text) == config
     assert C.dump_config(C.load_config(text)) == text
+
+
+def _leaves(tree: Any, prefix: str = "") -> dict[str, Any]:
+    """A decoded config as ``{"ppo.minibatch_size": 256, ...}``, so a disagreement names the
+    field rather than printing two trees of two hundred leaves side by side. Lists are leaves:
+    the loader replaces a list whole, so a list is one setting."""
+    if isinstance(tree, dict):
+        leaves: dict[str, Any] = {}
+        for key, value in tree.items():
+            leaves.update(_leaves(value, f"{prefix}.{key}" if prefix else key))
+        return leaves
+    return {prefix: tree}
+
+
+def _disagreements(ours: dict[str, Any], theirs: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+    absent = "<absent>"
+    return {
+        key: (ours.get(key, absent), theirs.get(key, absent))
+        for key in sorted(set(ours) | set(theirs))
+        if ours.get(key, absent) != theirs.get(key, absent)
+    }
+
+
+@pytest.mark.parametrize("name", ["laptop", "workstation"])
+def test_the_shipped_example_is_its_profile_written_out_in_full(name: str) -> None:
+    """``examples/configs/<profile>.json`` and ``--profile <profile>`` are the same run.
+
+    They are two routes to one machine class and nothing forces them to agree: the file is what
+    ``train --config`` runs, the profile is what ``config``, ``doctor`` and ``bench`` use when no
+    file is given. They did drift -- the file carried the measured minibatch while the code kept
+    the one that spills past a 4 GB card -- so a doctor run without ``--config`` checked a
+    configuration nobody trains.
+
+    Two comparisons, because each is blind where the other sees. Loading the file overlays it on
+    the profile, so a field the file leaves out is filled from the code and the loaded tree cannot
+    notice the omission; the raw document can, and a field the file omits is a setting its reader
+    cannot see. No field is excluded: the run name is the default in both.
+    """
+    path = EXAMPLE_CONFIGS / f"{name}.json"
+    shipped = C.profile(name)
+    profile_leaves = _leaves(json.loads(C.dump_config(shipped)))
+
+    loaded = C.load_config(path)
+    assert _disagreements(profile_leaves, _leaves(json.loads(C.dump_config(loaded)))) == {}
+    assert loaded == shipped
+
+    written = _leaves(json.loads(path.read_text(encoding="utf-8")))
+    assert _disagreements(profile_leaves, written) == {}
 
 
 def test_the_dump_is_canonical_and_idempotent() -> None:
