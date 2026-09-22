@@ -166,8 +166,10 @@ Two more worth a glance, without a healthy range attached:
   bought nothing. That is one geometry on one machine and it is **not** the shipped laptop profile,
   which is 3 workers, 32 battles each and 32,768 timesteps an iteration.
 - `ladder/rating_above_v0`. How much stronger the bot is than its own first snapshot, in Elo
-  points (the chess-style rating scale). It is 0.0 until enough evaluation battles have been played
-  for a fit, so a short run shows 0.0 and that is not a bug.
+  points (the chess-style rating scale). The key is absent until the rating fit holds both the bot
+  and that first snapshot, which today means it is always absent, because the live bot is never
+  evaluated under its own id. An absent key is the harness saying it has nothing to report, which
+  is the honest answer. See `docs/ladder.md` for why.
 
 If you only ever look at two, look at `policy/cards_per_match` and `ppo/explained_variance`.
 

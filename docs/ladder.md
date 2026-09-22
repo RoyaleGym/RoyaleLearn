@@ -301,19 +301,26 @@ The rows that are worth your attention, built in `royalelearn/metrics/records.py
 | `ladder/gate_attempts`, `ladder/gate_passes` | How many gates ran, how many admitted |
 | `ladder/consecutive_gate_failures` | The plateau signal. 5 trips the `gate_starved` alarm |
 | `ladder/gate_failed_condition` | Which of the three conditions failed, or `none` |
-| `ladder/gate_observed_rate` | The candidate's raw score rate against the champion |
-| `ladder/gate_lower_bound` | The bottom of its interval, which is what the gate compares to 0.52 |
+| `ladder/gate_observed_rate` | The candidate's raw score rate against the champion. Appears once a gate decision carries its champion condition |
+| `ladder/gate_lower_bound` | The bottom of its interval, which is what the gate compares to 0.52. Same condition as the row above |
 | `ladder/rating/<member>` | One pool member's fitted rating, only after the first refit |
 | `ladder/rating_ci95_lo/<member>` and `..._hi/<member>` | That rating's interval. A wide one means you do not know yet |
-| `ladder/transitivity_residual` | Above 0.10, stop trusting the rating column |
-| `ladder/paired_rho` | How much the starting position decides, rather than the players |
+| `ladder/transitivity_residual` | Above 0.10, stop trusting the rating column. Appears once a rating fit exists |
+| `ladder/paired_rho` | How much the starting position decides, rather than the players. Appears once the paired-seed correlation has been computed |
 | `ladder/draw_rate_eval` | Draw rate in evaluation battles |
-| `ladder/gate_seconds_frac` | Share of wall clock spent gating rather than training |
-| `ladder/elo_readout` | The live dashboard Elo. Never a decision |
+| `ladder/gate_seconds_frac` | Share of wall clock spent gating rather than training. Appears on an iteration where a gate ran |
+| `ladder/elo_readout` | The live dashboard Elo. Never a decision. Appears once a training game has been scored this run |
 
 A row that is missing a key is not a bug. The harness uses absence to say "nothing to report"
-rather than publishing a zero that reads like a measurement. `royalelearn/metrics/schema.py`
-lists which keys are allowed to be absent, in `CONDITIONAL`.
+rather than publishing a zero that reads like a measurement. So do not read the first rows of a
+run and conclude the ladder is broken: most of the table above only starts once a gate has run or
+a rating has been fitted, which takes a while. `royalelearn/metrics/schema.py` lists every key
+that may be absent in `CONDITIONAL`, each with the condition that makes it appear. Print them for
+yourself:
+
+```
+python -c "from royalelearn.metrics import schema; [print(k, '->', v) for k, v in schema.CONDITIONAL.items()]"
+```
 
 ## Rows you should not trust today
 
@@ -331,14 +338,19 @@ written before the fix carry a flat 0.5, and every row written since omits the k
 reading an older run's file, ignore those two columns entirely. Making them real needs the live
 bot evaluated against the anchors, which is a new cost per iteration and has not been decided.
 
-**`ladder/rating_above_v0` is currently minus the first snapshot's rating.** This one is
-still broken. It is meant to be the live bot's rating above the run's first snapshot, but the
-live bot has no fitted rating, so the lookup returns 0.0 and the row reports `0 - rating[v0]`.
-Verified 2026-09-22: in all 7 rows in `runs/` that carry a fitted rating,
-`ladder/rating_above_v0` is exactly the negative of `ladder/rating/snap:v0`. Reproduce it:
+**`ladder/rating_above_v0` was minus the first snapshot's rating, and is now absent instead.**
+It is meant to be the live bot's rating above the run's first snapshot. The live bot has no
+fitted rating, because every evaluation game is a snapshot against something, so the lookup
+returned a default of 0.0 and the row published `0 - rating[v0]`. On one run that read -93.9,
+-146.2, -191.7 and -129.6, which looks exactly like a bot falling behind its own opening
+snapshot and is nothing of the kind. Since 2026-09-22 the key is published only when the fit
+holds both sides (`royalelearn/metrics/records.py`, the guard above
+`fields["ladder/rating_above_v0"]`), so it is simply absent until the live bot is evaluated
+under its own id. If you are reading a run's file from before that, ignore the column. To see
+the old shape for yourself:
 
 ```
-python -c "import json,glob; [print(r['ladder/rating_above_v0'], r['ladder/rating/snap:v0']) for p in glob.glob('runs/*/metrics.jsonl') for r in map(json.loads, open(p,encoding='utf-8')) if 'ladder/rating/snap:v0' in r]"
+python -c "import json,glob; [print(r.get('ladder/rating_above_v0'), r['ladder/rating/snap:v0']) for p in glob.glob('runs/*/metrics.jsonl') for r in map(json.loads, open(p,encoding='utf-8')) if 'ladder/rating/snap:v0' in r]"
 ```
 
 Read `ladder/rating/<member>` directly instead. Those columns are correct.
