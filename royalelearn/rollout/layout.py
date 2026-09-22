@@ -447,9 +447,13 @@ class BufferLayout:
                 )
 
     def obs_view(self, buffer: Any) -> np.ndarray:
-        """The rectangle as ``uint8[rows, row_bytes]``, sharing the segment's memory."""
+        """The rectangle as ``uint8[rows * n_slots, row_bytes]``, sharing the segment's memory.
+
+        One row per cell, in the order ``row_index`` computes, so a cell's packed observation is
+        a row and gathering a minibatch is a single take along axis zero.
+        """
         array = np.frombuffer(buffer, dtype=np.uint8, count=self.obs_bytes, offset=self.obs_offset)
-        return array.reshape(self.rows, self.row_bytes)
+        return array.reshape(self.rows * self.n_slots, self.row_bytes)
 
     def describe(self) -> dict[str, Any]:
         """The golden record: every number a second implementation has to agree on."""

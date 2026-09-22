@@ -136,16 +136,26 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         del viser
         from royalegym.env import EnvFactory
 
-        return EnvFactory(
-            engine=self.engine.recipe(extra_modules),
-            obs_builder=self.obs_builder.recipe(extra_modules),
-            action_parser=self.action_parser.recipe(extra_modules),
-            reward_fn=self.reward_fn.recipe(extra_modules),
-            state_mutator=self.state_mutator.recipe(extra_modules),
-            termination_cond=self._condition(self.termination, extra_modules),
-            truncation_cond=self._condition(self.truncation, extra_modules),
-            decision_ms=self.decision_ms,
-        )
+        recipe: dict[str, Any] = {
+            "engine": self.engine.recipe(extra_modules),
+            "obs_builder": self.obs_builder.recipe(extra_modules),
+            "action_parser": self.action_parser.recipe(extra_modules),
+            "reward_fn": self.reward_fn.recipe(extra_modules),
+            "state_mutator": self.state_mutator.recipe(extra_modules),
+            "decision_ms": self.decision_ms,
+        }
+        # A condition that is turned off is a key the factory is never given. ``EnvFactory``
+        # keeps every key it is handed and builds it, so a None would reach the component
+        # builder and be called -- which is how an evaluation env, whose truncation is empty by
+        # definition, would fail at construction rather than run without one.
+        for key, specs in (
+            ("termination_cond", self.termination),
+            ("truncation_cond", self.truncation),
+        ):
+            condition = self._condition(specs, extra_modules)
+            if condition is not None:
+                recipe[key] = condition
+        return EnvFactory(**recipe)
 
     def build_vec(
         self,
@@ -170,7 +180,8 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
         A single entry is passed through as itself; several are combined with ``AnyCondition``,
         which checks every child every step so that a child's counter keeps advancing. An empty
-        list is None, which is how a truncation is turned off.
+        list is None, and the caller leaves the key out of the recipe entirely, which is how a
+        truncation is turned off.
         """
         if not specs:
             return None

@@ -69,6 +69,29 @@ def test_public_name_resolves_or_names_what_it_needs(name: str) -> None:
     assert value is not None
 
 
+def test_every_learner_module_is_exported() -> None:
+    """``royalelearn.learn`` resolves its names lazily from one table, so the table has to hold
+    them all. A module missing from it is a module whose names raise ``AttributeError`` instead
+    of importing the way every other learner name does.
+    """
+    pytest.importorskip("torch")
+    import importlib
+
+    from royalelearn import learn
+
+    folder = REPO / "royalelearn" / "learn"
+    for path in sorted(folder.glob("*.py")):
+        if path.stem == "__init__":
+            continue
+        module = importlib.import_module(f"royalelearn.learn.{path.stem}")
+        exported = set(getattr(module, "__all__", ()))
+        assert exported, f"{path.name} declares no __all__"
+        missing = sorted(exported - set(learn.__all__))
+        assert not missing, f"royalelearn.learn does not export {missing} from {path.name}"
+        for name in sorted(exported):
+            assert getattr(learn, name) is getattr(module, name)
+
+
 def test_unknown_attribute_is_an_attribute_error() -> None:
     with pytest.raises(AttributeError):
         _ = royalelearn.NotAName

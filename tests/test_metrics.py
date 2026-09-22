@@ -1,0 +1,435 @@
+"""The schema and the code are asserted against each other in both directions.
+
+Every key a row carries has to be in ``metrics/schema.py``, and every key in the schema has to
+be produced by something -- either by one of the functions here, or by a part of the harness
+this file names. Without the second direction a metric can be documented and never emitted,
+which is the failure that makes a dashboard quietly wrong rather than loudly broken.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import msgspec
+import pytest
+
+from royalelearn.api.ladder import RatingTable
+from royalelearn.api.metrics import MetricsSink
+from royalelearn.api.rollout import EpisodeRecord
+from royalelearn.api.schedule import ScheduleState
+from royalelearn.api.update import UpdateResult
+from royalelearn.identity import EngineBuild, RunIdentity
+from royalelearn.ladder.pool import SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL, LadderPool
+from royalelearn.ladder.results import GameResult, ResultLog
+from royalelearn.metrics import schema
+from royalelearn.metrics.records import (
+    IterationMetrics,
+    episode_fields,
+    flatten,
+    ladder_fields,
+    schedule_fields,
+    unknown_keys,
+    update_fields,
+)
+from royalelearn.metrics.sinks import (
+    ALARMS_NAME,
+    EPISODES_NAME,
+    METRICS_NAME,
+    CompositeSink,
+    ConsoleSink,
+    JsonlSink,
+    build_sinks,
+)
+from royalelearn.metrics.wandb_sink import WandbSink
+
+#: Keys this file does not produce, with what does. The rollout workers reduce their own
+#: per-step counters and the coordinator times its own phases; naming them here is what keeps
+#: "every schema key is emitted" an assertion rather than a hope.
+PRODUCED_ELSEWHERE: dict[str, str] = {
+    # the coordinator's own bookkeeping
+    "run/cumulative_updates": "coordinator",
+    "run/wall_seconds": "coordinator",
+    "run/determinism_tier": "coordinator",
+    "run/resumed_with_drift": "coordinator",
+    "run/state_digest": "coordinator",
+    # the rollout farm's timing and the parent's own clock
+    **{key: "coordinator" for key in schema.METRICS if key.startswith("throughput/")},
+    **{key: "coordinator" for key in schema.METRICS if key.startswith("time/")},
+    **{key: "coordinator" for key in schema.METRICS if key.startswith("health/")},
+    # per-step counters, reduced in the worker where they are produced
+    "policy/noop_rate": "rollout worker",
+    "policy/legal_actions_mean": "rollout worker",
+    "policy/legal_actions_p05": "rollout worker",
+    "policy/legal_actions_p50": "rollout worker",
+    "policy/legal_actions_p95": "rollout worker",
+    "policy/forced_noop_frac": "rollout worker",
+    "policy/tile_entropy": "rollout worker",
+    "policy/tile_top1_share": "rollout worker",
+    "policy/card_tile_top10_share": "rollout worker",
+    "env/mean_elixir_at_decision": "rollout worker",
+    "env/frac_elixir_above_99": "rollout worker",
+    # the advantage estimator's own report
+    "ppo/advantage_std_pre_norm": "advantage estimator",
+    "ppo/return_running_mean": "advantage estimator",
+    "ppo/return_running_std": "advantage estimator",
+    "ppo/reward_clip_frac": "advantage estimator",
+}
+
+IDENTITY = RunIdentity(
+    format_version=1,
+    royalelearn_version="0.1.0",
+    royalelearn_git="unknown",
+    royalegym_version="0.1.0",
+    royalegym_git="unknown",
+    engine_build=EngineBuild(
+        engine_class="royalegym.mock_engine.MockEngine",
+        calibration_digest="c",
+        build_digest="b",
+        catalogue_sha256="a",
+        path_search=None,
+        stale_build_differences=[],
+    ),
+    env_spec_digest="e",
+    obs_digest="o",
+    action_digest="d",
+    frame_stack=1,
+    arch_digest="r",
+    codec_version=1,
+    codec_table_digest="t",
+    algo_digest="g",
+    rollout_digest="l",
+    ladder_digest="p",
+    master_seed=7,
+    determinism_tier="run_exact",
+    torch_version="none",
+    device_kind="cpu",
+)
+
+
+#: The outcome a seat reports, as the environment writes it: its own sign, not a code. The
+#: fixtures below are built on it so that what this file asserts is the contract
+#: ``tests/test_rollout_inline.py`` states, rather than whatever the arithmetic happens to read.
+WON, LOST, DREW = 1, -1, 0
+
+
+def _record(battle: int, seat: int, outcome: int, steps: int = 400) -> EpisodeRecord:
+    return EpisodeRecord(
+        slot=battle * 2 + seat,
+        worker=0,
+        shard=0,
+        battle=battle,
+        seat=seat,
+        ordinal=0,
+        episode_seed_path="env/worker/0/shard/0/gen/0",
+        policy_id="learner",
+        opponent_id="snap:v0",
+        bucket="pool",
+        episode_steps=steps,
+        episode_ticks=steps * 5,
+        own_crowns=1 if outcome > 0 else 0,
+        enemy_crowns=1 if outcome < 0 else 0,
+        own_tower_hp_frac=0.8,
+        enemy_tower_hp_frac=0.6,
+        elixir_leak_steps=steps // 10,
+        elixir_count_exact=True,
+        winner=-1 if outcome == 0 else (seat if outcome > 0 else 1 - seat),
+        outcome=outcome,
+        cards_played=22,
+        illegal_commands=0,
+        undiscounted_return=1.0,
+        reward_terms={"terminal": 1.0, "tower_damage": 0.25, "elixir": -0.1},
+    )
+
+
+def _episodes() -> list[EpisodeRecord]:
+    return [
+        _record(0, 0, WON),
+        _record(0, 1, LOST),
+        _record(1, 0, LOST, steps=600),
+        _record(2, 0, DREW, steps=600),
+        _record(3, 1, WON, steps=300),
+    ]
+
+
+def _update() -> UpdateResult:
+    return UpdateResult(
+        policy_loss=-0.02,
+        value_loss=0.31,
+        entropy=3.4,
+        noop_entropy=0.21,
+        entropy_normalised=0.55,
+        kl=0.008,
+        clip_fraction=0.12,
+        dual_clip_fraction=0.001,
+        explained_variance=0.72,
+        ratio_max_abs_dev=1e-7,
+        grad_norm_actor=0.3,
+        grad_norm_critic=0.28,
+        update_magnitude_actor=0.004,
+        update_magnitude_critic=0.006,
+        kl_by_epoch=[0.004, 0.011],
+        clip_fraction_by_epoch=[0.09, 0.15],
+        n_minibatches=96,
+        n_optimizer_steps=24,
+        n_samples=50_000,
+        samples_unused_frac=0.0,
+        seconds=12.5,
+    )
+
+
+def _pool(tmp_path) -> LadderPool:
+    pool = LadderPool(ResultLog(tmp_path / "ladder" / "games.jsonl"), context="ctx")
+    pool.add("snap:v0", step=0)
+    pool.promote("snap:v0")
+    pool.record(
+        [
+            GameResult(
+                a="learner",
+                b=opponent,
+                score_a=1.0,
+                seed_index=index,
+                side_a="blue",
+                context="ctx",
+                kind="eval",
+                run_id="run",
+                iteration=1,
+                wall="",
+            )
+            for opponent in ("snap:v0", SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL)
+            for index in range(40)
+        ]
+    )
+    pool.note_refit(
+        RatingTable(
+            rating={"learner": 180.0, "snap:v0": 60.0, SCRIPTED_NOOP: 0.0},
+            se={"learner": 21.7, "snap:v0": 18.0, SCRIPTED_NOOP: 0.0},
+            anchor=SCRIPTED_NOOP,
+            draw_nu=0.3,
+            n_games={"learner": 120, "snap:v0": 40, SCRIPTED_NOOP: 40},
+            transitivity_residual=0.02,
+            converged=True,
+            iterations=5,
+        )
+    )
+    return pool
+
+
+def _row(tmp_path) -> dict:
+    pool = _pool(tmp_path)
+    state = ScheduleState(
+        iteration=12,
+        cumulative_env_steps=4_000_000,
+        cumulative_timesteps=3_000_000,
+        gamma=0.997,
+        gae_lambda=0.95,
+        ent_coef=0.01,
+        ent_coef_noop=0.004,
+        lr_actor=3e-4,
+        lr_critic=3e-4,
+        lr_backoff_events=1,
+    )
+    metrics = IterationMetrics(
+        iteration=12,
+        run=schedule_fields(state, decision_ms=500),
+        ppo=update_fields(_update()),
+        env=episode_fields(_episodes(), truncation_steps=600).fields,
+        ladder=ladder_fields(pool, ratings=pool.ratings, elo=1240.0, paired_rho=0.31),
+    )
+    return metrics.row()
+
+
+# -- the schema --------------------------------------------------------------
+
+
+def test_every_key_a_row_carries_is_in_the_schema(tmp_path) -> None:
+    assert unknown_keys(_row(tmp_path)) == ()
+
+
+def test_every_schema_key_has_something_that_emits_it(tmp_path) -> None:
+    produced = set(_row(tmp_path))
+    documented = set(schema.METRICS)
+    assert documented - produced - set(PRODUCED_ELSEWHERE) == set()
+    assert set(PRODUCED_ELSEWHERE) <= documented
+    # And nothing is claimed by both sides.
+    assert produced & set(PRODUCED_ELSEWHERE) == set()
+
+
+def test_the_patterned_families_are_matched(tmp_path) -> None:
+    row = _row(tmp_path)
+    assert schema.is_known("ppo/kl_epoch0")
+    assert "ppo/kl_epoch1" in row
+    assert "env/reward_terms/tower_damage" in row
+    assert "ladder/rating/snap:v0" in row
+    assert "ladder/rating_ci95_lo/learner" in row
+
+
+# -- the arithmetic ----------------------------------------------------------
+
+
+def test_episode_statistics_count_battles_once_and_seats_once(tmp_path) -> None:
+    aggregate = episode_fields(_episodes(), truncation_steps=600)
+    assert aggregate.seats == 5
+    assert aggregate.battles == 4  # battle 0 reported by both of its seats
+    fields = aggregate.fields
+    assert fields["env/episodes_completed"] == 4
+    assert fields["env/draw_rate"] == pytest.approx(0.25)
+    # Blue won battle 0; battle 1 was a loss for blue and battle 3 a win for red.
+    assert fields["env/win_rate_by_seat"] == pytest.approx(1 / 3)
+    assert fields["env/episode_steps_at_cap_frac"] == pytest.approx(0.5)
+    assert fields["policy/cards_per_match"] == pytest.approx(22.0)
+    assert fields["env/elixir_leak_frac"] == pytest.approx(0.1)
+    assert fields["env/illegal_action_rate"] == 0.0
+    assert fields["env/reward_terminal_abs"] == pytest.approx(1.0)
+    assert fields["env/reward_shaping_abs"] == pytest.approx(0.35)
+    assert msgspec.json.decode(fields["env/episode_steps_hist"])["counts"]
+
+
+def test_a_truncated_episode_is_a_draw_and_reds_view_is_blues_negated() -> None:
+    """Both are the default case rather than an edge one.
+
+    Training truncates on the step limit, and a truncated episode has no winner, so under the
+    shipped environment most episodes carry a zero. And a battle whose blue seat an opponent
+    played is reported only by red, whose sign is the opposite of the one the metric is over.
+    """
+    drawn = episode_fields([_record(battle, 0, DREW) for battle in range(4)])
+    assert drawn.fields["env/draw_rate"] == pytest.approx(1.0)
+
+    red_only = episode_fields([_record(battle, 1, LOST) for battle in range(4)])
+    assert red_only.fields["env/draw_rate"] == 0.0
+    assert red_only.fields["env/win_rate_by_seat"] == pytest.approx(1.0)
+
+
+def test_an_iteration_with_no_episodes_still_says_so() -> None:
+    aggregate = episode_fields([])
+    assert aggregate.fields == {"env/episodes_completed": 0}
+
+
+def test_the_ladder_fields_read_the_fit_and_the_log(tmp_path) -> None:
+    pool = _pool(tmp_path)
+    fields = ladder_fields(pool, ratings=pool.ratings, elo=1240.0)
+    assert fields["ladder/rating_above_v0"] == pytest.approx(120.0)
+    assert fields["ladder/champion_id"] == "snap:v0"
+    assert fields["ladder/score_vs_noop"] == 1.0
+    assert fields["ladder/score_vs_random_legal"] == 1.0
+    assert fields["ladder/transitivity_residual"] == pytest.approx(0.02)
+    assert fields["ladder/rating_ci95_hi/learner"] > fields["ladder/rating/learner"]
+    assert fields["ladder/gate_failed_condition"] == "none"
+
+
+def test_nested_keys_flatten_to_one_level() -> None:
+    assert flatten({"ppo": {"kl": 0.01, "deep": {"er": 1}}, "run/iteration": 3}) == {
+        "ppo/kl": 0.01,
+        "ppo/deep/er": 1,
+        "run/iteration": 3,
+    }
+
+
+# -- the sinks ---------------------------------------------------------------
+
+
+def test_settings_beside_the_sink_list_reach_the_sink_the_list_names() -> None:
+    """Some of a sink's settings live on the config beside the list rather than inside a spec.
+
+    ``keep_episode_log_iterations`` is one: it is a field of ``MetricsConfig``, and the shipped
+    config names a jsonl sink with no options at all, so a default run would compact nothing if
+    the two were only joined on the path where the list does not mention jsonl.
+    """
+    from royalelearn.config import SinkSpec
+
+    composite = build_sinks(
+        [SinkSpec("jsonl")], jsonl={"keep_episode_log_iterations": 7}
+    )
+    jsonl = [sink for sink in composite.sinks if isinstance(sink, JsonlSink)]
+    assert len(jsonl) == 1
+    assert jsonl[0].keep_episode_log_iterations == 7
+
+    # And a spec that names the key itself wins over the default the caller passed.
+    named = build_sinks(
+        [SinkSpec("jsonl", options={"keep_episode_log_iterations": 3})],
+        jsonl={"keep_episode_log_iterations": 7},
+    )
+    assert next(iter(named.sinks)).keep_episode_log_iterations == 3
+
+
+def test_the_jsonl_sink_writes_the_run_and_its_rows(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    sink = JsonlSink()
+    sink.open(identity=IDENTITY, config_json='{"run_name": "test"}', run_dir=run_dir)
+    row = _row(tmp_path)
+    sink.write(row)
+    sink.write_episodes(_episodes())
+    sink.close()
+    assert msgspec.json.decode((run_dir / "identity.json").read_bytes())["master_seed"] == 7
+    assert (run_dir / "config.json").read_text(encoding="utf-8") == '{"run_name": "test"}'
+    lines = (run_dir / METRICS_NAME).read_bytes().splitlines()
+    assert len(lines) == 1
+    assert msgspec.json.decode(lines[0]) == row
+    assert len((run_dir / EPISODES_NAME).read_bytes().splitlines()) == len(_episodes())
+    assert not (run_dir / ALARMS_NAME).exists()
+
+
+def test_the_console_sink_prints_a_key_nobody_documented(tmp_path, capsys) -> None:
+    sink = ConsoleSink()
+    sink.open(identity=IDENTITY, config_json="{}", run_dir=tmp_path)
+    sink.write({"run/iteration": 4, "brand/new": 1.5, "ppo/kl": 0.004})
+    printed = capsys.readouterr().out
+    assert "iteration 4" in printed
+    assert "new" in printed and "1.5" in printed
+    assert "  ppo" in printed
+    sink.close()
+
+
+def test_the_wandb_sink_is_a_pure_pass_through_when_disabled(tmp_path) -> None:
+    class Recording(MetricsSink):
+        FORMAT_VERSION = 1
+
+        def __init__(self) -> None:
+            self.rows: list[dict] = []
+            self.opened = False
+            self.closed = False
+            self.saved: Path | None = None
+
+        def open(self, *, identity, config_json, run_dir) -> None:
+            self.opened = True
+
+        def write(self, row) -> None:
+            self.rows.append(dict(row))
+
+        def close(self) -> None:
+            self.closed = True
+
+        def save_checkpoint(self, folder: Path) -> None:
+            self.saved = folder
+            folder.mkdir(parents=True, exist_ok=True)
+
+        def load_checkpoint(self, folder: Path, *, strict: bool = True) -> None:
+            self.saved = folder
+
+    inner = Recording()
+    sink = WandbSink(inner, enable=False)
+    sink.open(identity=IDENTITY, config_json="{}", run_dir=tmp_path)
+    row = _row(tmp_path)
+    sink.write(row)
+    sink.close()
+    assert inner.opened and inner.closed
+    assert inner.rows == [row]
+    assert sink.run_id is None
+
+    folder = tmp_path / "metrics"
+    sink.save_checkpoint(folder)
+    assert msgspec.json.decode((folder / "wandb.json").read_bytes()) == {"run_id": None}
+    assert inner.saved == folder / "inner"
+    sink.load_checkpoint(folder, strict=True)
+
+
+def test_the_composite_fans_out_and_nests_its_checkpoints(tmp_path) -> None:
+    composite = CompositeSink([JsonlSink(), ConsoleSink()])
+    run_dir = tmp_path / "run"
+    composite.open(identity=IDENTITY, config_json="{}", run_dir=run_dir)
+    composite.write({"run/iteration": 1})
+    composite.close()
+    assert (run_dir / METRICS_NAME).exists()
+    folder = tmp_path / "ck"
+    composite.save_checkpoint(folder)
+    assert (folder / "0-JsonlSink" / "jsonl.json").exists()
+    composite.load_checkpoint(folder, strict=True)

@@ -23,11 +23,14 @@ import numpy as np
 __all__ = [
     "ACT_CYCLE",
     "ENV_SHARD",
+    "ENV_STAGGER",
     "EVAL_BOOTSTRAP",
     "EVAL_MATCH",
     "EVAL_SEED_SET",
     "MATCH_BATTLE",
     "PPO_MINIBATCH",
+    "PREFLIGHT_ENV",
+    "PREFLIGHT_SAMPLE",
     "SCRIPTED_SLOT",
     "STREAMS",
     "TORCH_CUDA",
@@ -78,6 +81,10 @@ class Stream(NamedTuple):
 
 #: The one ``ClashSelfPlayVecEnv.reset(seed=...)`` of a shard; ``generation`` counts respawns.
 ENV_SHARD = "env/worker/{worker}/shard/{shard}/gen/{generation}"
+#: How far each battle of a shard is advanced before the run starts, so that episodes end apart
+#: rather than in spikes. A stream of its own and not the shard's: drawing the warm-up from the
+#: env seed's own sequence would make the two move together for no reason.
+ENV_STAGGER = "env/stagger/worker/{worker}/shard/{shard}/gen/{generation}"
 #: The matchmaker's draw for one episode of one battle. Addressed by the battle and its reset
 #: ordinal rather than by the iteration and the slot, so an episode meets the same opponent
 #: however the iteration boundary happens to fall across it.
@@ -94,6 +101,10 @@ EVAL_SEED_SET = "eval/seed_set"
 EVAL_MATCH = "eval/match/{comparison}/{seed_index}/{side}"
 #: The bootstrap resampling of one comparison.
 EVAL_BOOTSTRAP = "eval/bootstrap/{comparison}"
+#: Preflight's own environment, built, read and closed before any worker exists.
+PREFLIGHT_ENV = "preflight/env"
+#: The random-legal play preflight draws its observation and state sample from.
+PREFLIGHT_SAMPLE = "preflight/sample"
 #: Network initialisation.
 TORCH_INIT = "torch/init"
 #: ``torch.manual_seed`` and ``torch.cuda.manual_seed_all`` at start-up.
@@ -104,6 +115,7 @@ TORCH_CUDA = "torch/cuda"
 #: from is here; a path that is not is a bug, and ``stream_path`` refuses one.
 STREAMS: tuple[Stream, ...] = (
     Stream(ENV_SHARD, "the vec env reset of one shard, once per respawn generation"),
+    Stream(ENV_STAGGER, "the warm-up that spreads one shard's episode boundaries"),
     Stream(MATCH_BATTLE, "the matchmaker's assignment for one episode of one battle"),
     Stream(ACT_CYCLE, "the uniforms that drive action sampling at one cycle"),
     Stream(SCRIPTED_SLOT, "one worker-side scripted opponent"),
@@ -111,6 +123,8 @@ STREAMS: tuple[Stream, ...] = (
     Stream(EVAL_SEED_SET, "the frozen evaluation seed set"),
     Stream(EVAL_MATCH, "one evaluation battle"),
     Stream(EVAL_BOOTSTRAP, "the bootstrap resampling of one comparison"),
+    Stream(PREFLIGHT_ENV, "the environment preflight builds and closes"),
+    Stream(PREFLIGHT_SAMPLE, "the play preflight samples observations and states from"),
     Stream(TORCH_INIT, "network initialisation"),
     Stream(TORCH_GLOBAL, "torch.manual_seed at start-up"),
     Stream(TORCH_CUDA, "torch.cuda.manual_seed_all at start-up"),

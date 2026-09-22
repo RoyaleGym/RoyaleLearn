@@ -246,7 +246,10 @@ class EpisodeRecord(msgspec.Struct, frozen=True):
     # bar it models, so the policy read an estimate in a slot documented as exact
     elixir_count_exact: bool
     # counted by the worker as the episode runs
+    #: The team the engine declared the winner, or -1 where it declared none.
     winner: int
+    #: This seat's own sign: +1 it won, -1 it lost, 0 a draw or a truncation. The two seats of
+    #: one battle report opposite signs, so either record scores the battle.
     outcome: int
     cards_played: int
     illegal_commands: int

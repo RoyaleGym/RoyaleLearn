@@ -22,8 +22,11 @@ dependencies = [
 
 [project.optional-dependencies]
 # The learner: networks, the update, inference, and everything that touches a device.
+# safetensors is what the snapshot archive and the checkpoint store weights in; nothing this
+# package writes is pickled, so it is a requirement of the learner and not an option under it.
 torch = [
     "torch>=2.4",
+    "safetensors>=0.4",
 ]
 # The optional metrics sink; the JSONL sink is always installed and is never optional.
 wandb = [

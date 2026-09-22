@@ -143,7 +143,7 @@ Open, which is the harness itself:
 Tests:
 
 ```
-cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 164 passed (2026-09-21)
+cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 478 passed, 9 slow (2026-09-22)
 ..\.venv\Scripts\ruff check .                              # All checks passed!
 ```
 

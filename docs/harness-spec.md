@@ -147,6 +147,26 @@ battles and alternates, so it is stepping one shard while the parent runs infere
 **cycle** is `shards_per_worker` consecutive shard-rounds, so that every slot advances exactly once;
 the shard interleaving is a scheduling detail of the parent and never appears in the buffer's index.
 
+What a second shard is worth follows from one measured fact: **environment time and inference time
+are additive, with no overlap of their own.** Standing a fixed 5 ms cost after every vec step adds
+5.1 to 5.7 ms to the step at every batch size, on both engines **[M]**. So the second shard hides
+`min(env, inference)` and nothing else, and its value is set by the ratio of the two per shard-round:
+
+| env ms per shard ÷ inference ms per round | what a second shard buys |
+|---|---|
+| well under 1 (few battles per worker, inference dominates) | close to double |
+| about 1 | most of the inference |
+| well over 1 (many battles per worker, the environment dominates) | little; at a ratio near 7, about 14% **[M]** |
+
+That inverts the obvious intuition: sharding is worth most where battles per worker is *small*,
+because a worker with many battles has already amortised inference by batching. At the laptop
+profile a shard is 16 battles against three batched forwards, which sits in the middle of that table.
+Two things keep the number honest rather than assumed: a fixed sleep releases the interpreter cleanly
+while a real forward competes for cores, so the table is the optimistic case; and `royalelearn bench`
+measures the ratio against the network actually configured and prints what a second shard is worth on
+that machine. If it prints under about 10%, set `shards_per_worker = 1` and spend the thread on a
+worker instead.
+
 The buffer row is `(T + obs.frame_stack) × R × row_bytes`: `T+1` cycles for the bootstrap row plus
 `frame_stack - 1` history cycles carried over from the previous iteration (section 9.1). At the laptop
 profile that is `229 × 192 × 13 443 B = 591 MB` **[A]**. The two larger profiles run
@@ -1010,7 +1030,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `source` | `"process"` | `"process"` / `"inline"` | inline is the semantic reference and runs every fast test |
 | `workers` | 3 | processes | 6-8 threads; the parent needs one for the CUDA driver and one for the loop, and the learner is the bottleneck so more workers buy little |
 | `games_per_worker` | 32 | battles | with `workers=3`, 96 battles and 192 slots |
-| `shards_per_worker` | 2 | vec envs | a worker steps one shard while the parent infers on the other; worth about 25% of round time and costs nothing |
+| `shards_per_worker` | 2 | vec envs | a worker steps one shard while the parent infers on the other. Worth `min(env, inference)` per round and no more, because the two are additive (section 2.2); `bench` prints what it is worth here, and 1 is the right value when that is under about 10% |
 | `spin_us` | 100 | microseconds | spin before blocking on the round events; a Windows Event round trip measures ~40-80 microseconds **[A]**, a spin about 2 |
 | `round_timeout_s` | 30.0 | seconds | **every** wait has a timeout; a timeout is a typed `WorkerFailure`, never a block |
 | `restart_failed_workers` | `true` | | |

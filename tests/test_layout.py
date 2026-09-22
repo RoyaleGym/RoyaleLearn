@@ -310,6 +310,21 @@ def test_the_layout_follows_the_spec_it_is_built_from(env_spec: object) -> None:
     assert built.rows == CYCLES + 3
 
 
+def test_the_rectangle_view_is_one_row_per_cell(buffer_layout: L.BufferLayout) -> None:
+    """``obs_view`` addresses what ``row_index`` computes: a cell is a row, not a cycle.
+
+    At one slot the two are the same shape and the difference cannot be seen, so this runs at
+    the fixture's several slots and checks the byte a row's first element lands on.
+    """
+    block = bytearray(buffer_layout.total_bytes)
+    view = buffer_layout.obs_view(block)
+    assert view.shape == (buffer_layout.rows * buffer_layout.n_slots, buffer_layout.row_bytes)
+    for cycle, slot in ((0, 0), (1, SLOTS - 1), (CYCLES - 1, 1)):
+        view[buffer_layout.row_index(cycle, slot), 0] = 0xAB
+        assert block[buffer_layout.cell_offset(cycle, slot)] == 0xAB
+        view[buffer_layout.row_index(cycle, slot), 0] = 0
+
+
 def test_a_zero_dimension_is_refused() -> None:
     with pytest.raises(ValueError, match="positive"):
         L.BufferLayout(run_id=RUN_ID, cycles=0, n_slots=SLOTS, row_bytes=1, codec_version=1)

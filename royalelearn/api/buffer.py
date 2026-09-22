@@ -26,7 +26,12 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from .policy import ObsBatch
     from .rollout import EnvSpec, RolloutRound, SlotPlan
 
-__all__ = ["CodecTable", "ExperienceBuffer", "ObsCodec"]
+__all__ = ["MIN_TABLE_STATES", "CodecTable", "ExperienceBuffer", "ObsCodec"]
+
+#: How many real observations a codec table may be decided from. Storage is decided per plane
+#: from what the sample contains, so the sample has to be large enough, and played rather than
+#: idle, to have reached the states in which a plane takes the values that decide it.
+MIN_TABLE_STATES = 1000
 
 
 class CodecTable(msgspec.Struct, frozen=True):
@@ -58,12 +63,22 @@ class ObsCodec(ABC):
     """
 
     @abstractmethod
-    def table(self, spec: EnvSpec, sample: Sequence[dict[str, np.ndarray]]) -> CodecTable:
+    def table(
+        self,
+        spec: EnvSpec,
+        sample: Sequence[dict[str, np.ndarray]],
+        *,
+        min_states: int = MIN_TABLE_STATES,
+    ) -> CodecTable:
         """Decide storage per key from the declared bounds and a sample of real observations.
 
         Storage is decided from a sample; EXISTENCE is decided from the declaration. A plane the
         layout does not declare static is stored even when it is constant across the sample,
         because the tower planes are constant in any sample in which no tower falls.
+
+        Implementers MUST refuse a sample of fewer than ``min_states`` observations. The row
+        size of the whole run follows from this one decision, and a sample too small or too
+        idle to have reached the states a plane varies in decides it wrongly and in silence.
         """
 
     @abstractmethod
