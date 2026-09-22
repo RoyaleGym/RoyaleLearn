@@ -107,7 +107,7 @@ def worker_main(
         WorkerConfig,
         build_codec,
     )
-    from .layout import STATE_OBS_READY
+    from .layout import STATE_IDLE, STATE_OBS_READY
     from .plan import SlotPlanner
 
     config = msgspec.msgpack.decode(payload, type=WorkerConfig)
@@ -180,7 +180,9 @@ def worker_main(
                 break
         for shard, runner in enumerate(shards):
             parity = runner.open_parity()
-            if not _wait_command(runner, parity, actions_ready[shard], spin_s, STATE_OBS_READY):
+            if not _wait_command(
+                runner, parity, actions_ready[shard], spin_s, STATE_OBS_READY, STATE_IDLE
+            ):
                 continue
             command, gamma = runner.read_command(parity)
             try:
@@ -218,25 +220,37 @@ def _failure_text(exc: BaseException) -> str:
 
 
 def _wait_command(
-    runner: Any, parity: int, semaphore: Semaphore, spin_s: float, published_state: int
+    runner: Any,
+    parity: int,
+    semaphore: Semaphore,
+    spin_s: float,
+    published_state: int,
+    idle_state: int,
 ) -> bool:
     """True once the parent has written a command into this shard's open control word.
 
     The shard published its own state into that word, so anything else in it is the parent's
-    answer. Spin first -- a round trip through the operating system is tens of microseconds and
-    a spin is about two -- and then sleep briefly on the semaphore rather than burning a core
-    while the parent is running inference.
+    answer -- except the one value that is nobody's answer. ``STATE_IDLE`` is what the cell
+    holds before either side has written it for this parity, and it differs from the published
+    state without being a command, so taking "different" as "answered" hands the dispatcher a
+    word of zero and it refuses it as a command it does not know. It is not an unknown command;
+    it is no command yet, and the two want opposite handling: an unknown word is a protocol
+    violation and should be loud, an idle cell means keep waiting.
+
+    Spin first -- a round trip through the operating system is tens of microseconds and a spin
+    is about two -- and then sleep briefly on the semaphore rather than burning a core while
+    the parent is running inference.
     """
     deadline = time.monotonic() + spin_s
     while True:
         state, _ = runner.read_command(parity)
-        if state != published_state:
+        if state not in (published_state, idle_state):
             return True
         if time.monotonic() >= deadline:
             break
     semaphore.acquire(timeout=0.001)
     state, _ = runner.read_command(parity)
-    return state != published_state
+    return state not in (published_state, idle_state)
 
 
 def _take(inbox: Queue, shard: int, pending: dict[int, list[bytes]]) -> bytes:

@@ -236,3 +236,38 @@ def test_a_worker_that_stops_answering_times_out() -> None:
     finally:
         source.close()
         buffer.close()
+
+
+def test_an_idle_control_word_is_not_read_as_a_command() -> None:
+    """``STATE_IDLE`` is what the cell holds before either side writes it for this parity.
+
+    It differs from the state the shard published, so a wait that takes "different" for
+    "answered" returns on it and hands the dispatcher a command word of zero -- which is not a
+    command it knows, and is refused as a protocol violation. It is not an unknown command; it
+    is no command yet, and those want opposite handling.
+    """
+    from royalelearn.rollout.layout import STATE_ACTIONS_READY, STATE_IDLE, STATE_OBS_READY
+    from royalelearn.rollout.worker import _wait_command
+
+    class Word:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+        def read_command(self, _parity: int) -> tuple[int, float]:
+            return self.value, 0.0
+
+    class NoWait:
+        @staticmethod
+        def acquire(timeout: float = 0.0) -> bool:
+            return False
+
+    idle = _wait_command(Word(STATE_IDLE), 0, NoWait(), 0.0, STATE_OBS_READY, STATE_IDLE)
+    assert idle is False, "an unwritten control cell is not the parent answering"
+
+    mine = _wait_command(Word(STATE_OBS_READY), 0, NoWait(), 0.0, STATE_OBS_READY, STATE_IDLE)
+    assert mine is False, "the shard's own published state is not a command either"
+
+    real = _wait_command(
+        Word(STATE_ACTIONS_READY), 0, NoWait(), 0.0, STATE_OBS_READY, STATE_IDLE
+    )
+    assert real is True, "a command the parent really wrote must still be taken"
