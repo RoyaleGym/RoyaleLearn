@@ -405,6 +405,12 @@ class DeterminismConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
     """Section 5.1. The tier is part of the run identity; the thread count is part of the tier."""
 
     tier: str = "run_exact"
+    #: One, and deliberately. A BLAS thread count changes the order floats are reduced in, so a
+    #: two-threaded update is not bit-reproducible against a one-threaded one and ``run_exact``
+    #: would stop meaning what it says. This is the price of the tier rather than an oversight,
+    #: and it is the first thing somebody meeting a single-threaded update on a many-core box
+    #: will reach for: raise it with ``tier = "throughput"``, which says in the run identity
+    #: that the run is no longer reproducible, rather than on its own.
     torch_threads: int = 1
 
 
