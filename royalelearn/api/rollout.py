@@ -354,5 +354,11 @@ class RolloutSource(ABC):
     def close(self) -> None: ...
 
     def stats(self) -> dict[str, float]:
-        """Per-round timing: env_ms, wait_ms, codec_ms, idle_frac, bytes_out. Default: {}."""
+        """Per-round timing: env_ms, wait_ms, codec_ms, parent_wait_frac, bytes_out.
+
+        ``parent_wait_frac`` is the PARENT's share: time it spent blocked on a round that had
+        not been published, over that plus the workers' own env time. It rises when the workers
+        cannot keep up, which is the opposite reading from a number about workers idling, and
+        the opposite action. An inline source reports zero because there is nobody to wait for.
+        Default: {}."""
         return {}

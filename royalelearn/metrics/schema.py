@@ -120,8 +120,13 @@ METRICS: dict[str, MetricSpec] = {
     "throughput/boundary_mb_per_second": _m(
         "MB/s", "Bytes crossing the worker boundary per second."
     ),
-    "throughput/worker_idle_frac": _m(
-        "fraction", "Share of a round a worker spends waiting for the parent.", low=0.0, high=0.3
+    "throughput/parent_wait_frac": _m(
+        "fraction",
+        "Share of a round the parent spends blocked on workers that have not published; it "
+        "rises when the workers cannot keep up. Zero for an inline source, which has nobody "
+        "to wait for.",
+        low=0.0,
+        high=0.3,
     ),
     "throughput/inference_ms_per_round": _m("ms", "Parent time per shard-round, all policies."),
     "throughput/discarded_rows_frac": _m(

@@ -511,7 +511,7 @@ class RolloutSource(ABC):
     @abstractmethod
     def close(self) -> None: ...
     def stats(self) -> dict[str, float]:
-        """Per-round timing: env_ms, wait_ms, codec_ms, idle_frac, bytes_out. Default: {}."""
+        """Per-round timing: env_ms, wait_ms, codec_ms, parent_wait_frac, bytes_out."""
         return {}
 ```
 
@@ -2548,7 +2548,8 @@ schema key is emitted, so the documentation and the code cannot drift.
 
 **`throughput/`** — `overall_steps_per_second`, `collected_steps_per_second`,
 `engine_ticks_per_second`, `rollout_capacity_ratio` (rollout timesteps/s over update timesteps/s; the
-invariant of section 2.3, warn under 1.5), `boundary_mb_per_second`, `worker_idle_frac`,
+invariant of section 2.3, warn under 1.5), `boundary_mb_per_second`, `parent_wait_frac` (the parent blocked on workers that have not
+published, which rises when the workers cannot keep up — not a number about workers idling),
 `inference_ms_per_round`, `discarded_rows_frac`, `gpu_util_frac`.
 
 **`time/`** — `iteration`, `collection`, `inference`, `env`, `codec`, `ipc`, `critic_pass`, `gae`,

@@ -1665,7 +1665,7 @@ class LearningCoordinator:
                 / 1e6
                 / collection_seconds
             ),
-            "throughput/worker_idle_frac": float(source_stats.get("idle_frac", 0.0)),
+            "throughput/parent_wait_frac": float(source_stats.get("parent_wait_frac", 0.0)),
             "throughput/inference_ms_per_round": (
                 1000.0 * inference_seconds / max(1, collection["rounds"])
             ),

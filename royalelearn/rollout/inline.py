@@ -933,7 +933,7 @@ class RolloutSourceBase(RolloutSource):
         return {
             "env_ms": env_ms,
             "wait_ms": wait_ms,
-            "idle_frac": wait_ms / max(env_ms + wait_ms, 1e-9),
+            "parent_wait_frac": wait_ms / max(env_ms + wait_ms, 1e-9),
             "bytes_out": float(self.row_bytes * self.geometry.n_slots),
         }
 
