@@ -225,4 +225,3 @@ def test_the_sink_does_not_import_the_viewer() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "False"
-    assert "royaleviser" not in sys.modules

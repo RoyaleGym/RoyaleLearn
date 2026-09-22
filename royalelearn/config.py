@@ -263,7 +263,7 @@ class PPOConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: rollout and update forwards are different batch shapes, cuDNN picks a kernel per shape,
     #: and bf16 carries three significant digits.
     ratio_atol: dict[str, float] = msgspec.field(
-        default_factory=lambda: {"fp32": 1e-4, "bfloat16": 2e-2}
+        default_factory=lambda: {"float32": 1e-4, "bfloat16": 2e-2}
     )
 
 

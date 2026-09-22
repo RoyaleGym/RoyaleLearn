@@ -2601,6 +2601,21 @@ holds for `patience` consecutive iterations. `severity="warn"` logs and writes a
 the process exits non-zero. Thresholds live in `config.alarms`, are recorded, and are excluded from the
 identity hash because an alarm can stop a run but never alter a number.
 
+**A halt is a clean stop, never a death, and it explains itself.** The checkpoint is written *before*
+the exception, so a halted run is always resumed rather than restarted; the bundle carries the last
+fifty metric rows beside it. The final console line, and a `halt.json` in the bundle, name the alarm,
+the threshold it crossed, the last five values of every metric the alarm reads, the checkpoint path
+and the resume command verbatim. The reason a halt states its own evidence is that the first question
+anyone asks on finding a stopped run is whether the stop was real, and a line reading only that a
+metric crossed a threshold costs the same morning as no run at all.
+
+This is also why no halting alarm has `patience = 1` on a *learning* quantity. The three that do —
+`illegal_actions`, `ratio_invariant`, `nonfinite`, `buffer_overflow` — are correctness assertions
+whose first occurrence is already a defect, and continuing past one wastes the compute that follows.
+Everything that measures how training is *going* waits several consecutive iterations, because a
+policy that is still near-random moves these quantities around for reasons that are not the failure
+being hunted, and a false halt costs everything the run was for.
+
 | alarm | predicate | patience | severity | what it means |
 |---|---|---|---|---|
 | `illegal_actions` | `env/illegal_action_rate > 0` | 1 | **halt** | a mask bug, an unmasked policy, or a wrong action encoding. With a correct mask it is exactly zero |
@@ -2956,3 +2971,31 @@ run with, and each is a number the harness already logs.
    halves the cost and loses the timing granularity that decides Clash fights, 250 costs four times as
    much. Ablate it in the second run, not the first, because it is the parameter most likely to be
    blamed for a plateau that is really something else.
+8. **The trunk's discrimination, against its input's.** If the harness ever alarms on representation
+   collapse — the encoder producing nearly the same embedding for boards that differ — the threshold
+   must be **relative, never absolute**, and it must be built to three rules that a naive version of
+   it breaks.
+
+   *Relative, because the observation is mostly constant.* Across eight boards differing in one
+   unit's position, a destroyed tower and the elixir, only 51 of the observation's numbers move —
+   0.4% — and the greatest pairwise cosine is 0.9998 with nothing wrong **[M]**. The rest is static
+   arena, standing towers and an unchanged hand. An embedding cosine of 0.99 on that input would mean
+   the trunk was *increasing* discrimination, not losing it.
+
+   *On the same states, not on a sample.* Because so few cells move, the input baseline is dominated
+   by which boards were chosen: pairs differing only in elixir barely move it, a pair with a tower
+   down moves it a great deal. Two people measuring one encoder against baselines drawn from
+   different state sets will disagree about that encoder and both will be right about what they
+   measured. The baseline is computed on the states the encoding was computed on, or the two numbers
+   are not a pair. `royalegym.measure_variability(builder, states, action_masks)` returns the input
+   side — cells, varying, fraction, raw cosine and varying-cell cosine — and excludes the action
+   mask, which is legality rather than representation.
+
+   *Report both cosines, raw and varying-cell.* Under a planted total collapse — the board removed
+   from the observation entirely — the raw cosine moves by less than 0.01 while the varying-cell
+   cosine goes to 1.0 **[M]**. The number a naive detector would watch is the number that does not
+   move.
+
+   One thing the measurement is not for: ranking two different observation builders against each
+   other. It compares a representation against itself, and across representations of different
+   sparsity it is not measuring the same property twice.
