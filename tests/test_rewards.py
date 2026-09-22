@@ -30,6 +30,7 @@ from royalegym.protocol import (
     TowerSlot,
     Winner,
 )
+from royalelearn.metrics.records import TERMINAL_REWARD_TERM
 from royalelearn.rewards import (
     CROWNS,
     CommittedElixirPotential,
@@ -339,6 +340,53 @@ def test_the_terminal_term_is_the_only_one_that_is_not_shaping(engine: Any) -> N
 
     assert reward.get_reward(0, previous, current, []) == 1.0
     assert reward.get_reward(1, previous, current, []) == -1.0
+
+
+def test_a_potential_is_zero_once_the_battle_is_over(engine: Any) -> None:
+    """The shaping over a whole episode has to telescope to nothing, and that needs Phi(end)=0.
+
+    A potential term pays ``gamma * Phi(s') - Phi(s)`` every step, so over an episode the sum
+    collapses to ``gamma^T * Phi(s_T) - Phi(s_0)``. Only the first and last terms survive, and
+    ``Phi(s_0)`` is the same for every policy. ``Phi(s_T)`` is not: read off the final state, the
+    crown potential of a 3-0 win is three times the crown potential of a 1-0 win, so the shaping
+    would pay for the margin and the objective would no longer be the objective. Ng, Harada and
+    Russell's invariance result takes the terminal state's potential to be zero, and it has to be
+    taken rather than computed, because a finished battle has no future to anticipate.
+
+    A truncation is the other case and it is not this one. The battle was cut rather than decided,
+    the position still has value, and the estimator bootstraps from it.
+    """
+    reward = default_potential_reward()
+    reward.bind(engine)
+    set_gamma(reward, GAMMA)
+    ahead = [player(0, crowns=2, towers=(0.0, 0.0, 1.0)), player(1, crowns=0)]
+    previous = state(ahead)
+    won = state(
+        [player(0, crowns=3, towers=(0.0, 0.0, 1.0)), player(1, crowns=0, towers=(0.0, 0.0, 0.0))],
+        game_over=True,
+        winner=Winner.BLUE,
+    )
+
+    blue = reward.terms_for(0)
+    reward.get_reward(0, previous, won, [])
+    blue = reward.terms_for(0)
+    # Only the objective is paid on the closing step, less whatever potential the position held.
+    crown = blue["PotentialCrownReward"]
+    assert crown == pytest.approx(0.2 * (0.0 - 2 / 3)), blue
+    assert blue[TERMINAL_REWARD_TERM] == pytest.approx(1.0)
+
+
+def test_a_truncated_battle_keeps_the_potential_of_the_position(engine: Any) -> None:
+    """A step limit is not an ending. The position still has value and the estimator uses it."""
+    reward = default_potential_reward()
+    reward.bind(engine)
+    set_gamma(reward, GAMMA)
+    ahead = [player(0, crowns=2), player(1, crowns=0)]
+    reward.get_reward(0, state(ahead), state(ahead), [])
+
+    assert reward.terms_for(0)["PotentialCrownReward"] == pytest.approx(
+        0.2 * (GAMMA * 2 / 3 - 2 / 3)
+    )
 
 
 # --------------------------------------------------------------------------

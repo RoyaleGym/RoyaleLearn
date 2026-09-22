@@ -107,7 +107,22 @@ class PotentialReward(RewardFunction):
         state: BattleState,
         results: Sequence[DeployResult],
     ) -> float:
-        return float(self._gamma * self.potential(state, team) - self.potential(prev, team))
+        """``gamma * Phi(s') - Phi(s)``, with ``Phi`` of a finished battle taken to be zero.
+
+        The zero is taken rather than computed, and it is what makes the shaping harmless. Summed
+        over an episode the term telescopes to ``gamma^T * Phi(s_T) - Phi(s_0)``; ``Phi(s_0)`` is
+        the same whatever the policy does, so if ``Phi(s_T)`` is zero as well the shaping adds a
+        constant and cannot move the optimum (Ng, Harada and Russell, 1999). Read off the final
+        state instead, ``Phi(s_T)`` is the margin -- a 3-0 win has three times the crown potential
+        of a 1-0 win -- and the shaping would quietly pay for the margin beside the objective,
+        which is the one thing these terms were chosen not to do.
+
+        A truncation is the other case and it is not this one: ``game_over`` is the engine saying
+        the battle was decided, while a step limit cuts a battle that still has a position worth
+        something, and the estimator bootstraps from that position's value.
+        """
+        after = Fraction(0) if state.game_over else self.potential(state, team)
+        return float(self._gamma * after - self.potential(prev, team))
 
 
 class PotentialCrownReward(PotentialReward):
