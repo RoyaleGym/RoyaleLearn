@@ -204,3 +204,23 @@ def test_a_key_from_an_older_run_still_resolves() -> None:
         assert schema.is_known(old), f"{old} was published once and no longer resolves"
         assert schema.lookup(old) is schema.METRICS[new]
     assert schema.current_name("ppo/kl") == "ppo/kl", "a key that never moved must not move"
+
+
+def test_every_key_the_viewer_panel_reads_is_a_key_the_schema_publishes() -> None:
+    """The sink is the one consumer of these names that lives inside this repository.
+
+    It maps a metric key to a row of the viewer's panel, and a key that no longer exists maps
+    to nothing at all: the row renders as an em dash, which is what the panel also shows when
+    no learner is attached. So a rename would take a number off the dashboard and look exactly
+    like a learner that was never there.
+    """
+    from royalelearn.metrics import viser_sink
+
+    sources = [key for _field, key in viser_sink.FIELD_SOURCES.items()]
+    sources += [key for _name, key in viser_sink.EXTRA_SOURCES if key]
+    unknown = sorted({key for key in sources if not schema.is_known(key)})
+    assert not unknown, (
+        f"the viewer panel reads {unknown}, which the schema does not publish. A panel row fed "
+        f"by a key that does not exist is an em dash, and an em dash is what the panel shows "
+        f"when no learner is attached at all."
+    )
