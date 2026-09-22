@@ -2655,6 +2655,29 @@ being hunted, and a false halt costs everything the run was for.
 | `gate_starved` | five consecutive gate failures | 1 | warn | the plateau signal, stated as an event |
 | `capacity_ratio` | `throughput/rollout_capacity_ratio < 1.5` | 3 | warn | the harness is becoming the bottleneck |
 
+**An alarm nobody has seen stay silent is unvalidated.** Watching one fire proves only that it
+can fire; what validates a threshold is a healthy iteration where the metric sits clearly on the
+right side of it with room to move. An alarm that holds on every healthy row is worse than no
+alarm, because a channel that always speaks teaches its reader to stop listening, and the event
+it was built for then arrives invisibly. That is not hypothetical here: `noop_entropy_floor` held
+on both iterations of the first real run and was read twice, by two people, as a policy warming
+up.
+
+Measured against those two iterations — the only healthy rows this harness has produced — four
+alarms held and two of them are a threshold problem rather than a finding:
+
+| alarm | held | reading |
+|---|---|---|
+| `noop_entropy_floor` | both rows | **the threshold was wrong**, and the metric is now conditioned on the rows that had a choice (section 18, item 8). The number those rows report is the unconditioned one |
+| `kl_dead` | both rows, at 4.8e-06 and 3.6e-07 | **unresolved.** Patience is 10 and the run reached 2, so it never fired — but it would have. The policy is barely moving because 93% of the batch cannot move it, which is a property of the environment rather than a dead update. The threshold was chosen for a batch whose rows can all carry a gradient, and what the right one is here is not known from two iterations |
+| `ev_negative` | first row only | healthy: the critic had seen one batch, and explained variance was +0.25 by the second. Patience is 50 |
+| `noop_collapse` | first row only | healthy: `cards_per_match` was 6.98 on a freshly initialised policy and 22.08 by the second row. Patience is 5 |
+
+So one alarm is fixed, one is known-suspect and named, and two behaved. The rule that produced
+that table is worth more than the table: before shipping a threshold, measure the quantity on the
+population it will really be averaged over, and if that population is mostly structural zeros,
+condition the metric rather than lowering the number.
+
 ### 13.4 The diagnostic bundle
 
 On any halt, `metrics/bundle.py::write_bundle` produces `<run>/bundles/<iteration>/` containing: the

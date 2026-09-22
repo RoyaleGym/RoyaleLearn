@@ -99,6 +99,14 @@ failures this design has actually had were both a region read in its unwritten s
 observation cell nobody had filled, and a control word still idle -- so these two deserve the
 same treatment as `valid`: a guard rather than an argument.
 
+**One alarm threshold is known-suspect.** `kl_dead` fires below a KL of 1e-5, and the first
+real run measured 4.8e-06 and 3.6e-07 on two healthy iterations — because 93% of the batch
+cannot move the policy, not because the update is dead. Its patience of ten meant it never
+fired in a two-iteration run, but it would have. The threshold was chosen for a batch whose
+rows can all carry a gradient, and what the right one is here is not known from two iterations;
+`harness-spec.md` section 13.3 records it beside the alarm that was already wrong for the same
+reason. Fixing it wants more iterations, not more arithmetic.
+
 **Three workers spin through the update.** Sampled during an iteration's update phase, each
 of three rollout workers burned 92% of a core waiting with nothing to do, against the one core
 the update itself was using -- for the phase that is 97.7% of an iteration. `_wait_command`'s
