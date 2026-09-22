@@ -149,6 +149,7 @@ PUBLISHED_KEYS = (
 
 PUBLISHED_PATTERNS = (
     'env/reward_terms/{term}',
+    'env/reward_terms_abs/{term}',
     'health/worker_failures/{kind}',
     'ladder/rating/{member}',
     'ladder/rating_ci95_hi/{member}',

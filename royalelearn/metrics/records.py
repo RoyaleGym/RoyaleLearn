@@ -167,6 +167,14 @@ def episode_fields(
         np.mean([record.cards_played for record in records])
     )
 
+    # Two numbers per term, because one of them is zero by construction. Every shipped reward is
+    # zero sum, and both seats of a battle are in this batch, so a term's signed mean is zero
+    # whatever the term did: red's tower damage is blue's negated. That mean is still worth
+    # publishing -- it is how a term that is NOT antisymmetric shows itself -- but the two shares
+    # the shaping_dominates alarm reads are magnitudes, so they take the absolute value on each
+    # seat's own number rather than on the mean. Taking it on the mean, as this did until
+    # 2026-09-22, made both shares exactly 0.0 in every row ever recorded, and an alarm that
+    # compares two structural zeroes cannot fire.
     terms: dict[str, list[float]] = {}
     for record in records:
         for name, value in record.reward_terms.items():
@@ -174,12 +182,13 @@ def episode_fields(
     shaping = 0.0
     terminal = 0.0
     for name, values in sorted(terms.items()):
-        mean = float(np.mean(values))
-        fields[f"env/reward_terms/{name}"] = mean
+        fields[f"env/reward_terms/{name}"] = float(np.mean(values))
+        magnitude = float(np.mean(np.abs(values)))
+        fields[f"env/reward_terms_abs/{name}"] = magnitude
         if name == terminal_term:
-            terminal += abs(mean)
+            terminal += magnitude
         else:
-            shaping += abs(mean)
+            shaping += magnitude
     fields["env/reward_shaping_abs"] = shaping
     fields["env/reward_terminal_abs"] = terminal
     return EpisodeAggregate(battles=len(battles), seats=len(records), fields=fields)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import msgspec
 import pytest
+from msgspec.structs import replace
 
 from royalelearn.api.ladder import RatingTable
 from royalelearn.api.metrics import MetricsSink
@@ -282,6 +283,26 @@ def test_episode_statistics_count_battles_once_and_seats_once(tmp_path) -> None:
     assert fields["env/reward_terminal_abs"] == pytest.approx(1.0)
     assert fields["env/reward_shaping_abs"] == pytest.approx(0.35)
     assert msgspec.json.decode(fields["env/episode_steps_hist"])["counts"]
+
+
+def test_the_reward_shares_survive_a_zero_sum_reward(tmp_path) -> None:
+    """Both seats of a battle report the same reward negated, and the shares must survive it.
+
+    Every shipped reward is zero sum: what one seat gains the other loses, so a term's mean over
+    a batch that holds both seats is zero whatever the term did. A share computed as the absolute
+    value of that mean is therefore zero for every run, and ``shaping_dominates`` -- the alarm
+    that watches for the shaping terms taking over the objective -- can never fire. The shares
+    are magnitudes, so the absolute value belongs on each seat's own number.
+    """
+    terms = {"terminal": 1.0, "tower_damage": 0.25, "elixir": -0.1}
+    blue = replace(_record(0, 0, WON), reward_terms=terms)
+    red = replace(_record(0, 1, LOST), reward_terms={k: -v for k, v in terms.items()})
+    fields = episode_fields([blue, red]).fields
+    assert fields["env/reward_terminal_abs"] == pytest.approx(1.0)
+    assert fields["env/reward_shaping_abs"] == pytest.approx(0.35)
+    # The signed mean is what it is -- zero, by antisymmetry -- and it stays published as that.
+    assert fields["env/reward_terms/tower_damage"] == pytest.approx(0.0)
+    assert fields["env/reward_terms_abs/tower_damage"] == pytest.approx(0.25)
 
 
 def test_a_truncated_episode_is_a_draw_and_reds_view_is_blues_negated() -> None:

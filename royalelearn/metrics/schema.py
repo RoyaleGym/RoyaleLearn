@@ -333,9 +333,13 @@ METRICS: dict[str, MetricSpec] = {
         high=0.0,
     ),
     "env/reward_shaping_abs": _m(
-        "units", "Sum of the absolute shaping terms per episode, for the shaping_dominates alarm."
+        "units",
+        "Sum over the shaping terms of each one's mean magnitude per episode, for the "
+        "shaping_dominates alarm.",
     ),
-    "env/reward_terminal_abs": _m("units", "Absolute terminal reward term per episode."),
+    "env/reward_terminal_abs": _m(
+        "units", "The terminal reward term's mean magnitude per episode."
+    ),
     # -- ladder ------------------------------------------------------------
     "ladder/rating_above_v0": _m(
         "Elo", "The learner's fitted rating above the run's first snapshot."
@@ -488,7 +492,11 @@ PATTERNS: tuple[MetricPattern, ...] = (
     ),
     _pattern(
         "env/reward_terms/{term}",
-        _m("units", "One weighted reward term's mean per episode."),
+        _m("units", "One weighted reward term's mean per episode, signed."),
+    ),
+    _pattern(
+        "env/reward_terms_abs/{term}",
+        _m("units", "One weighted reward term's mean magnitude per episode."),
     ),
     _pattern("ladder/rating/{member}", _m("Elo", "One pool member's fitted rating.")),
     _pattern("ladder/rating_se/{member}", _m("Elo", "The standard error of that rating.")),
