@@ -22,6 +22,7 @@ import numpy as np
 from ..api.ladder import GateDecision, RatingTable
 from ..api.metrics import MetricValue
 from ..api.rollout import EpisodeRecord
+from ..ladder.pool import LEARNER_ID
 from ..ladder.rating import Z95, wilson_interval
 from . import schema
 
@@ -132,7 +133,9 @@ def episode_fields(
     """The ``env/`` group and ``policy/cards_per_match``, from the episodes that finished."""
     battles = _battle_records(records)
     fields: dict[str, MetricValue] = {}
-    if not records:
+    if not records or not any(record.policy_id == LEARNER_ID for record in records):
+        # No seat of the learner's finished, so there is nothing to say about how it played. An
+        # iteration of opponents' episodes alone is not a zero.
         return EpisodeAggregate(battles=0, seats=0, fields={"env/episodes_completed": 0})
 
     steps = np.array([record.episode_steps for record in battles], dtype=np.float64)
@@ -165,27 +168,38 @@ def episode_fields(
     fields["env/win_rate_by_seat_ci95_lo"] = lo
     fields["env/win_rate_by_seat_ci95_hi"] = hi
 
-    seat_steps = float(sum(record.episode_steps for record in records))
-    fields["env/crowns_for"] = float(np.mean([record.own_crowns for record in records]))
-    fields["env/crowns_against"] = float(np.mean([record.enemy_crowns for record in records]))
+    # The seat-level numbers are the LEARNER's, over the seats it actually played. A battle that
+    # is not a mirror has an opponent in its other seat, and that opponent's crowns, towers,
+    # elixir and card play are not the policy's behaviour: averaging them in means every one of
+    # these reads as a blend of the learner and whatever it happened to be drawn against, and the
+    # blend moves as the mixture and the pool move. `random_legal` plays a card whenever it can,
+    # so it would hold `cards_per_match` up while the thing the no-op-collapse alarm watches for
+    # was happening to the learner. A mirror battle has the learner in both seats and both count.
+    own = [record for record in records if record.policy_id == LEARNER_ID]
+    seat_steps = float(sum(record.episode_steps for record in own))
+    fields["env/crowns_for"] = float(np.mean([record.own_crowns for record in own]))
+    fields["env/crowns_against"] = float(np.mean([record.enemy_crowns for record in own]))
     fields["env/crown_diff"] = fields["env/crowns_for"] - fields["env/crowns_against"]
     fields["env/tower_hp_frac_end_own"] = float(
-        np.mean([record.own_tower_hp_frac for record in records])
+        np.mean([record.own_tower_hp_frac for record in own])
     )
     fields["env/tower_hp_frac_end_enemy"] = float(
-        np.mean([record.enemy_tower_hp_frac for record in records])
+        np.mean([record.enemy_tower_hp_frac for record in own])
     )
     fields["env/elixir_leak_frac"] = (
-        sum(record.elixir_leak_steps for record in records) / seat_steps if seat_steps else 0.0
+        sum(record.elixir_leak_steps for record in own) / seat_steps if seat_steps else 0.0
     )
     fields["env/elixir_count_exact_frac"] = float(
         np.mean([1.0 if record.elixir_count_exact else 0.0 for record in records])
     )
+    # Every seat, because a refused command is the mask's fault whoever sent it, and a scripted
+    # opponent draws from the same mask.
+    all_steps = float(sum(record.episode_steps for record in records))
     fields["env/illegal_action_rate"] = (
-        sum(record.illegal_commands for record in records) / seat_steps if seat_steps else 0.0
+        sum(record.illegal_commands for record in records) / all_steps if all_steps else 0.0
     )
     fields["policy/cards_per_match"] = float(
-        np.mean([record.cards_played for record in records])
+        np.mean([record.cards_played for record in own])
     )
     # The same count over the decisions it had to spend, because the count alone is a length
     # measurement wearing a policy's name. Iteration 1 can only finish the episodes that end
@@ -195,10 +209,9 @@ def episode_fields(
     # run their length. Per decision the two iterations are 0.041 and 0.068, which is a real
     # move and a much smaller one. Both are published: the count is what a reader of a battle
     # recognises, and the rate is what two iterations can be compared on.
-    decisions = float(sum(record.episode_steps for record in records))
     fields["policy/cards_per_100_decisions"] = (
-        100.0 * float(sum(record.cards_played for record in records)) / decisions
-        if decisions
+        100.0 * float(sum(record.cards_played for record in own)) / seat_steps
+        if seat_steps
         else 0.0
     )
 

@@ -337,6 +337,50 @@ def test_an_unrecognised_objective_is_absent_rather_than_zero() -> None:
     assert fields["env/reward_shaping_abs"] == pytest.approx(1.3)
 
 
+def test_the_seat_numbers_are_the_learners_and_not_its_opponents() -> None:
+    """A battle that is not a mirror has somebody else in its other seat.
+
+    Averaging both seats makes every one of these a blend of the learner and whatever it was drawn
+    against, and the blend moves with the mixture and the pool rather than with the policy.
+    ``random_legal`` plays a card whenever it can afford one, so it would hold ``cards_per_match``
+    up while the collapse its alarm watches for was happening to the learner.
+    """
+    learner = replace(
+        _record(0, 0, WON, steps=200),
+        cards_played=4,
+        own_crowns=1,
+        enemy_crowns=0,
+        elixir_leak_steps=0,
+    )
+    opponent = replace(
+        _record(0, 1, LOST, steps=200),
+        policy_id="scripted:random_legal",
+        opponent_id="learner",
+        cards_played=40,
+        own_crowns=0,
+        enemy_crowns=1,
+        elixir_leak_steps=100,
+    )
+    fields = episode_fields([learner, opponent]).fields
+    assert fields["policy/cards_per_match"] == pytest.approx(4.0)
+    assert fields["policy/cards_per_100_decisions"] == pytest.approx(2.0)
+    assert fields["env/crowns_for"] == pytest.approx(1.0)
+    assert fields["env/crowns_against"] == pytest.approx(0.0)
+    assert fields["env/elixir_leak_frac"] == pytest.approx(0.0)
+    # A mirror battle is the other case: both seats are the learner and both count.
+    mirror = [
+        replace(_record(1, 0, WON, steps=200), cards_played=4),
+        replace(_record(1, 1, LOST, steps=200), cards_played=10),
+    ]
+    assert episode_fields(mirror).fields["policy/cards_per_match"] == pytest.approx(7.0)
+
+
+def test_an_iteration_of_only_opponent_episodes_says_nothing_about_the_learner() -> None:
+    opponent = replace(_record(0, 1, LOST), policy_id="scripted:noop", opponent_id="snap:v0")
+    fields = episode_fields([opponent]).fields
+    assert fields == {"env/episodes_completed": 0}
+
+
 def test_cards_per_match_is_a_count_and_its_companion_is_a_rate() -> None:
     """The count rises with episode length; the rate is what two iterations compare on.
 
