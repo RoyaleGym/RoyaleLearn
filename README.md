@@ -31,10 +31,19 @@ And read `smoke.json` for what it is. It runs on `MockEngine`, the pure-Python s
 with a limit of 96 timesteps. It proves the loop closes and it is not a training run. The run
 above finished at iteration 3 and left a checkpoint carrying the network, the advantage scaler
 and the ladder's pool. `laptop.json` and `workstation.json` are the real thing, on the Rust
-engine with a limit of 100,000,000 timesteps, and **nobody has run one of those to the end**.
-So there is no honest figure yet for how long a useful run takes or whether the bot comes out
-any good. The harness logs `run/cumulative_timesteps` beside the rating, so the first real run
-measures it.
+engine with a limit of 100,000,000 timesteps, and **the real profile does not currently run**.
+It clears every start-up gate, then stops in the first collection round:
+
+```
+stopping after AssertionError: mask[NOOP] must be True on every row
+(royalegym.action.GridActionParser.action_mask sets it unconditionally)
+```
+
+That is a known open defect and it is being bisected. So the honest state today is that the
+self-test runs end to end and the real configuration has a bug in front of it. There is no
+figure for how long a useful run takes because no useful run has been possible. The harness
+logs `run/cumulative_timesteps` beside the rating, so the first one to get through will
+measure it.
 
 Everything else is here and tested, and runs today. The configuration tree, the run identity,
 the networks, the observation codec, the rollout workers, the ladder, the metrics sinks and the
