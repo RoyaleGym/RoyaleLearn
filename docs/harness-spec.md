@@ -137,7 +137,7 @@ One config block per machine class; only numbers change.
 | cycles T = ceil(ts / learner rows) | 228 | 114 | 114 |
 | `net.channels` C / `net.blocks` N | 64 / 4 | 96 / 8 | 128 / 12 |
 | `ppo.batch_size` | 4 096 | 16 384 | 32 768 |
-| `ppo.minibatch_size` | 512 | 2 048 | 8 192 |
+| `ppo.minibatch_size` | 256 | 2 048 | 8 192 |
 | buffer bytes (observations) | 623 MB | 5.0 GB | 10.0 GB |
 | `rollout.overlap` | false | true | true |
 | `ladder.candidate_every_env_steps` | 4 000 000 | 2 000 000 | 2 000 000 |
@@ -1083,7 +1083,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `n_epochs` | 3 | | the family disagrees by three orders of magnitude (1, 10, about 1000 gradient steps per 50 k), so none of them is evidence; 3 balances reuse against the update being the wall-clock bottleneck. Watch clip fraction across epochs |
 | `timesteps_per_iteration` | 32 768 | timesteps | the compute budget and the episode arithmetic land on the same number independently |
 | `batch_size` | 4 096 | samples per optimizer step | 24 optimizer steps per iteration; about nine episodes' worth of terminal signal per step, so the advantage mean is not dominated by one battle |
-| `minibatch_size` | 512 | samples per forward | the largest that fits 4 GB under bf16 with cuDNN workspace. A **pure memory knob**: gradients accumulate weighted by `n/batch_size` with one `optimizer.step()` per batch, and a test proves the accumulated gradient equals the full-batch one |
+| `minibatch_size` | 256 | samples per forward | a **pure memory knob**: gradients accumulate weighted by `n/batch_size` with one `optimizer.step()` per batch, and a test proves the accumulated gradient equals the full-batch one. It was 512, chosen as "the largest that fits 4 GB", and **512 does not fit** — see below |
 | `clip_range` | 0.2 | | the PPO paper; all three references |
 | `dual_clip_c` | 3.0 | | for a negative advantage the standard minimum does not bound the loss below, and in a 2305-way masked space a rarely-sampled action's ratio can be enormous |
 | `vf_coef` | 1.0 | | separate networks and separate optimizers, so it only scales the critic's effective learning rate |
@@ -1181,6 +1181,38 @@ is what proves the two agree.
 Only classes on an allow-list (`royalegym.*`, `royalelearn.*`, plus anything named in
 `config.extra_component_modules`) may be instantiated. A spec is data that arrives from a config file
 and later from a checkpoint, and `importlib` on an arbitrary string is a code-execution surface.
+
+#### Why the laptop profile's `minibatch_size` is 256 **[M]**
+
+Measured 2026-09-22 on the RTX 3050 Laptop (4294 MB), interleaved 512, 256, 512, 256 in one
+window so the arms cannot drift apart:
+
+| `minibatch_size` | `time/update` over four runs | `vram_reserved_mb` | driver free |
+|---|---|---|---|
+| 512 | 233, 226, 180, 217 s — **spread 29%** | 4243 MB (0.99x the card) | 0 MB |
+| 256 | 47.7, 48.4, 47.4, 48.5 s — **spread 2.3%** | 2198 MB (0.51x) | 1176 MB |
+
+**Read the decomposition, not the ratio.** 256 is stable at 48 s; 512 takes 180–233 s depending on
+what else is resident on the card. Dividing those gives 4.46x, but the spread is a real
+distribution rather than measurement error, and the ratio invites a reader to expect 4.46x on a
+24 GB card where there is probably no difference at all — because there is no cliff to be on.
+
+The mechanism, confirmed rather than inferred. At 512 the allocator reserves 4243 MB against a
+4294 MB card. On Windows the driver does not refuse an oversubscribed allocation, it backs it with
+host RAM over PCIe, so the update streams tensors across the bus instead of computing from VRAM.
+Three things establish it: reserved reaches 1.24x the physical card when cuDNN benchmarking is
+also allowed to allocate; `set_per_process_memory_fraction(0.95)` turns the slow run into an
+immediate `OutOfMemoryError`, so the memory was coming from beyond the card; and the 29% spread
+sits **entirely** on the 512 arm while 256 holds 2.3% in the same window — machine noise, thermal
+throttling and scheduler jitter all predict both arms vary, and only one does.
+
+Two things this measurement should not be read as saying. It is one card on one platform, and the
+cliff is a property of the footprint against the device rather than of 512 as a number: the
+workstation profiles' larger minibatches are correct for their larger cards. And `num_alloc_retries`
+reads 0 throughout, which is **not** evidence the allocator is innocent — it counts the
+allocation-failure path, and on this platform the allocation never fails. It went to 2 the moment
+the memory fraction made failure possible. An instrument that cannot fire here is indistinguishable
+from one with nothing to report.
 
 ---
 
