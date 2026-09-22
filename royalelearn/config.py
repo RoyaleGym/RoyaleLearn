@@ -455,12 +455,18 @@ def default_env_spec(engine: str = RUST_ENGINE, *, max_steps: int = 480) -> EnvF
     buffer counts; 480 of them is a full regulation match plus overtime at the default decision
     granularity, and it is the cap the episode-length histogram spikes at when two policies
     settle into the turtle equilibrium.
+
+    The reward is this package's potential composition rather than RoyaleGym's
+    ``default_reward``, whose elixir-trade term pays a player who never commits a card and whose
+    tower term is one discount short of a potential (``rewards.py`` says why each matters). The
+    reward is part of the environment spec and so of the context digest: runs trained against
+    the other one are a different objective and do not share a context with these.
     """
     return EnvFactorySpec(
         engine=ComponentSpec(engine),
         obs_builder=ComponentSpec("royalegym.obs.SpatialObsBuilder"),
         action_parser=ComponentSpec("royalegym.action.TileActionParser"),
-        reward_fn=ComponentSpec("royalegym.reward.default_reward"),
+        reward_fn=ComponentSpec("royalelearn.rewards.default_potential_reward"),
         state_mutator=ComponentSpec("royalegym.state_mutator.DefaultStateMutator"),
         termination=[ComponentSpec("royalegym.done_condition.GameOverCondition")],
         truncation=[

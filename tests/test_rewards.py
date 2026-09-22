@@ -14,6 +14,7 @@ reward is zero-sum" into a tolerance nobody can choose.
 from __future__ import annotations
 
 from fractions import Fraction
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -32,7 +33,9 @@ from royalegym.protocol import (
 from royalelearn.rewards import (
     CROWNS,
     CommittedElixirPotential,
+    PotentialCombinedReward,
     PotentialCrownReward,
+    PotentialReward,
     PotentialTowerHPReward,
     default_potential_reward,
     set_gamma,
@@ -423,3 +426,167 @@ def test_the_discount_is_not_part_of_the_environment_s_configuration() -> None:
     reward.set_gamma(0.9)
 
     assert reward.config() == before
+
+
+class ConstantPotential(PotentialReward):
+    """``Phi = 1`` in every state, so a step pays exactly ``gamma - 1``: the discount the term
+    was last given, readable straight off the reward the environment returns."""
+
+    def potential(self, state: BattleState, team: int) -> Fraction:
+        return Fraction(1)
+
+
+def discount_probe() -> PotentialCombinedReward:
+    """The shipped composition's class around a term whose reward IS its discount.
+
+    Built by name in a worker process like any reward a config names, so the discount has to
+    reach it the way it reaches the shipped terms: through the ``Step`` command and the
+    composition's own ``set_gamma``.
+    """
+    return PotentialCombinedReward([(ConstantPotential(), 1.0)])
+
+
+#: Dyadic, so ``gamma - 1`` is exact in float32 and a reward can equal it rather than
+#: approximate it.
+FIRST_GAMMA, SECOND_GAMMA = 0.9921875, 0.984375
+
+
+@pytest.mark.parametrize("source", ["inline", pytest.param("process", marks=pytest.mark.slow)])
+def test_the_schedule_s_discount_reaches_the_reward_during_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """The discount a worker's reward is computed with is the one the learner bootstraps with,
+    in a real collection, and it follows the schedule when the schedule moves.
+
+    The tests above call ``set_gamma`` by hand; this one leaves it to the run. The coordinator
+    evaluates the schedule once per iteration, the value rides every ``Step`` to the worker, and
+    the worker hands it to whatever reward its environment holds. The schedule here steps from
+    one discount to another at exactly the second iteration's first environment step, so a
+    worker that kept the first value, or never received one, pays a different number.
+
+    It reads each round as the source hands it over, rather than the buffer the rounds are
+    filed into, so that it asks only whether the discount arrived. A round at cycle zero is the
+    iteration's opening publication, which follows no step; every later one, the trailing round
+    included, carries the reward of a step this iteration's command made.
+    """
+    pytest.importorskip("torch")
+    pytest.importorskip("safetensors")
+    import msgspec
+    import numpy as np
+
+    from royalelearn import config as C
+    from royalelearn.rollout.envspec import ComponentSpec
+    from test_coordinator import coordinator, tiny_config
+
+    base = tiny_config(tmp_path)
+    geometry = C.geometry(base)
+    env_steps_per_iteration = geometry.cycles * geometry.n_battles
+    config = tiny_config(
+        tmp_path,
+        env=msgspec.structs.replace(
+            base.env, reward_fn=ComponentSpec(f"{__name__}.discount_probe")
+        ),
+        extra_component_modules=[__name__],
+        rollout=msgspec.structs.replace(base.rollout, source=source),
+        advantage=msgspec.structs.replace(
+            base.advantage,
+            gamma=C.PiecewiseConstantSpec(
+                [(0, FIRST_GAMMA), (env_steps_per_iteration, SECOND_GAMMA)]
+            ),
+        ),
+    )
+
+    with coordinator(config) as run:
+        rounds: list[tuple[int, np.ndarray]] = []
+
+        def keep(round_: Any) -> Any:
+            rounds.append((int(round_.cycle), np.array(round_.reward[round_.valid], copy=True)))
+            return round_
+
+        next_round, finish_iteration = run.source.next_round, run.source.finish_iteration
+        monkeypatch.setattr(run.source, "next_round", lambda *a, **k: keep(next_round(*a, **k)))
+        monkeypatch.setattr(
+            run.source,
+            "finish_iteration",
+            lambda *a, **k: [keep(round_) for round_ in finish_iteration(*a, **k)],
+        )
+
+        for gamma in (FIRST_GAMMA, SECOND_GAMMA):
+            rounds.clear()
+            run.iterate()
+            assert run.rows[-1]["run/gamma"] == gamma
+
+            stepped = [(cycle, paid) for cycle, paid in rounds if cycle > 0]
+            assert sorted({cycle for cycle, _ in stepped}) == list(range(1, geometry.cycles + 1))
+            paid = np.concatenate([paid for _, paid in stepped])
+            assert paid.size == geometry.cycles * geometry.n_slots
+            assert set(paid.tolist()) == {float(np.float32(gamma - 1.0))}
+
+
+# --------------------------------------------------------------------------
+# What ships
+# --------------------------------------------------------------------------
+
+#: The composition this module exists to provide, as a config names it.
+SHIPPED_REWARD = "royalelearn.rewards.default_potential_reward"
+EXAMPLE_CONFIGS = Path(__file__).resolve().parents[1] / "examples" / "configs"
+#: Named rather than globbed: the folder also holds configs written for particular runs, which
+#: answer to those runs rather than to what ships.
+EXAMPLE_FILES = ("laptop.json", "smoke.json", "workstation.json")
+
+
+def _shipped_configs() -> list[Any]:
+    """Every config a user can start a run from without writing one: each profile, and each
+    example file, which is what ``train --config`` is shown with."""
+    from royalelearn import config as C
+
+    shipped = [
+        pytest.param(lambda n=name: C.profile(n), id=f"profile:{name}") for name in C.PROFILES
+    ]
+    for name in EXAMPLE_FILES:
+        path = EXAMPLE_CONFIGS / name
+        shipped.append(pytest.param(lambda p=path: C.load_config(p), id=f"file:{name}"))
+    return shipped
+
+
+@pytest.mark.parametrize("build", _shipped_configs())
+def test_every_shipped_config_trains_against_the_potential_reward(build: Any) -> None:
+    """A run started from anything shipped trains against this composition, not RoyaleGym's
+    ``default_reward``.
+
+    The difference is the objective rather than a detail of it: RoyaleGym's elixir-trade term is
+    not a potential and pays a player who never commits a card, and its tower term is one
+    discount away from policy-invariant. A config that names the other one is a run optimising
+    something the harness's own reward was written to stop it optimising.
+    """
+    config = build()
+
+    assert config.env.reward_fn.cls == SHIPPED_REWARD
+    assert config.env.reward_fn.kwargs == {}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "metrics/records.py looks for a term named 'terminal', and CombinedReward files every "
+        "term under its class name, so the objective arrives as 'WinLossReward' and is counted "
+        "as shaping"
+    ),
+)
+def test_the_terminal_term_is_filed_where_the_shaping_alarm_looks_for_it(engine: Any) -> None:
+    """The ``shaping_dominates`` alarm compares the shaping terms with the terminal one, and it
+    finds the terminal one by name. That name has to be one the shipped reward emits.
+
+    The metrics fixtures file a term called ``terminal`` because they were written against the
+    constant rather than against a reward; this asks the reward. A level battle that ends in a
+    win pays the objective and nothing else, so the whole of it must arrive under that name.
+    """
+    from royalelearn.metrics.records import TERMINAL_REWARD_TERM
+
+    reward = default_potential_reward()
+    reward.bind(engine)
+    set_gamma(reward, GAMMA)
+    level = [player(0, elixir=5.0), player(1, elixir=5.0)]
+    reward.get_reward(0, state(level), state(level, game_over=True, winner=Winner.BLUE), [])
+
+    assert reward.terms_for(0).get(TERMINAL_REWARD_TERM) == 1.0

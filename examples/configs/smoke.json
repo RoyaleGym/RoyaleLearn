@@ -19,7 +19,7 @@
       "kwargs": {}
     },
     "reward_fn": {
-      "cls": "royalegym.reward.default_reward",
+      "cls": "royalelearn.rewards.default_potential_reward",
       "kwargs": {}
     },
     "state_mutator": {
