@@ -32,13 +32,21 @@ with a limit of 96 timesteps. It proves the loop closes and it is not a training
 above finished at iteration 3 and left a checkpoint carrying the network, the advantage scaler
 and the ladder's pool. `laptop.json` and `workstation.json` are the real thing, on the Rust
 engine with a limit of 100,000,000 timesteps. **The real profile runs, and nobody has trained
-a bot with it.** A collection round on this machine:
+a bot with it.** The first two collection rounds of one run on this machine:
 
 ```
-collected     228 cycles, 32832 timesteps in 178.8s (245 env steps/s); updating
+collected     228 cycles, 32832 timesteps in 46.0s (951 env steps/s); updating
+collected     228 cycles, 32832 timesteps in 19.0s (2305 env steps/s); updating
 ```
 
-An iteration at that geometry takes about nine minutes here, and a useful run is many hours.
+The first round of a run is always the slow one, because the workers are spawning and nothing
+is warm. Do not size a run off it. Across three runs on this laptop the first round came in at
+46, 79 and 179 seconds depending on what else was running, and later rounds at 13 to 19
+seconds.
+
+A complete iteration was measured at 518 and 544 seconds, so about nine minutes. That is a best
+case: the same config on the same machine took over forty minutes for one iteration with other
+work resident. A useful run is many hours.
 Two complete iterations have happened, which is a loop that works rather than a result about
 learning. Nobody knows yet whether a bot trained this way is any good, and the harness logs
 `run/cumulative_timesteps` beside the rating so the first real run measures what it costs.
