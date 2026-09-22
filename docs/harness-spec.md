@@ -2971,7 +2971,29 @@ run with, and each is a number the harness already logs.
    halves the cost and loses the timing granularity that decides Clash fights, 250 costs four times as
    much. Ablate it in the second run, not the first, because it is the parameter most likely to be
    blamed for a plateau that is really something else.
-8. **The trunk's discrimination, against its input's.** If the harness ever alarms on representation
+8. **How much of a batch can carry a gradient at all — measured, and it is 6%.** The first two
+   real iterations on the laptop profile reported `policy/forced_noop_frac` at **0.937 and
+   0.924** **[M]**, exactly equal to `policy/noop_rate` in both, with
+   `policy/legal_actions_mean` at 29 of 2305. So in 93% of collected decisions the mask leaves
+   exactly one action — the no-op — because the elixir bar cannot afford anything. Those rows
+   are not a policy choosing to wait; they are a policy with nothing to choose, and they
+   contribute exactly zero policy gradient while occupying a full row of the rectangle, a full
+   share of the boundary's bandwidth and a full share of every epoch.
+
+   It is visible in everything downstream and explains all of it: `ppo/kl` at 4.8e-06 then
+   3.6e-07, `ppo/clip_fraction` at 1e-04 then exactly 0, `ppo/grad_norm_actor` at 0.003,
+   `ppo/entropy_normalised` at 0.07 against a healthy band of 0.3-0.8 — an average over rows
+   whose legal set has one member and whose entropy is therefore zero. A reader who saw only
+   the KL would conclude the update was broken. The update is fine; the batch is 94% padding.
+
+   This is a measurement and not yet a decision, and the decision it feeds is the one to make
+   deliberately: whether a forced row should be collected at all, whether it should be stored
+   but excluded from the policy loss while still feeding the critic and the reward chain that
+   GAE walks, or whether `decision_ms` should rise until a decision is usually a decision. The
+   three differ in what they do to the value function and to the credit horizon, which is why
+   none of them is the obvious answer, and why `forced_noop_frac` is in the metric list rather
+   than a constant in the code.
+9. **The trunk's discrimination, against its input's.** If the harness ever alarms on representation
    collapse — the encoder producing nearly the same embedding for boards that differ — the threshold
    must be **relative, never absolute**, and it must be built to three rules that a naive version of
    it breaks.

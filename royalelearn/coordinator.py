@@ -1432,9 +1432,22 @@ class LearningCoordinator:
         self.failures_by_kind = getattr(self, "failures_by_kind", {})
         for failure in failures:
             self.failures_by_kind[failure.kind] = self.failures_by_kind.get(failure.kind, 0) + 1
+            # What is lost is the worker, not the shard that raised. A child that fails
+            # anywhere closes every shard it holds and exits, because a protocol error means
+            # the bytes it was reading cannot be trusted and the other shard reads the same
+            # segment. Naming only the shard understates the blast radius by half, and the
+            # first place that shows is a short iteration nobody can account for.
+            geo = self.geometry
             self.printer(
-                f"worker {failure.worker} shard {failure.shard} failed at cycle "
-                f"{failure.cycle} ({failure.kind}): {failure.message.splitlines()[-1:]}"
+                f"worker {failure.worker} failed at cycle {failure.cycle} ({failure.kind}) "
+                f"in shard {failure.shard}: {failure.message.splitlines()[-1:]}"
+            )
+            self.printer(
+                f"              it held {geo.shards_per_worker} shards and "
+                f"{geo.games_per_worker} battles; all of them are out until it restarts, "
+                f"which is about "
+                f"{100 * geo.games_per_worker / max(1, geo.n_battles):.0f}% of this iteration's "
+                f"rows for the cycles it misses"
             )
             if self.config.rollout.restart_failed_workers:
                 self.source.restart(failure.worker)
