@@ -71,3 +71,31 @@ landed. It was never a foundation: its modules are bound to Rocket League's acti
 and the decisions worth keeping from them are recorded with their reasons in
 `docs/harness-spec.md`, where they are named beside the ones that were not kept. `rlgym_ppo`
 is not a dependency of this package and will not become one.
+
+## What is open
+
+The harness runs: `royalelearn train` collects rollouts, updates, rates, checkpoints, and
+`royalelearn resume` continues a run from what it wrote. What is not settled is written here
+rather than left to be rediscovered.
+
+**The forced-row decision, which is the one that changes what the next version is.** In the
+first real iterations, 93% of collected decisions had exactly one legal action: the elixir bar
+could afford nothing, so the mask left only the no-op. Those rows carry no policy gradient, and
+the update that chews through them three times is 97.7% of the iteration's wall clock.
+`docs/harness-spec.md` section 18 records the measurement and the three responses -- drop the
+rows at collection, keep them for the critic but exclude them from the policy loss, or raise
+`decision_ms` -- with what each does to the value function and to the wall clock. None is
+obviously right and the evidence for choosing is two iterations.
+
+**Two regions guarded by their ordering rather than by a flag.** A worker's actions region and
+the parent's finals region are both written before the control word that announces them, which
+is what makes the word the guard. That reasoning is sound and it is not checked. The two
+failures this design has actually had were both a region read in its unwritten state -- an
+observation cell nobody had filled, and a control word still idle -- so these two deserve the
+same treatment as `valid`: a guard rather than an argument.
+
+**Four behaviours that work but are not pinned by a test.** A resume that reproduces the
+original's metric rows byte for byte, the ratio invariant under a deliberately corrupted mask,
+an episode replayed from its shard seed against `royalegym.replay.verify_trace`, and the smoke
+configuration as a test rather than as a command somebody runs. All four have been driven by
+hand and all four passed, which is not the same thing.
