@@ -428,6 +428,28 @@ METRICS: dict[str, MetricSpec] = {
         high=0.0,
     ),
     "health/vram_peak_mb": _m("MB", "Peak device memory this iteration."),
+    # The three that separate the memory regimes, plus the retry counter. An update that slows
+    # down across iterations on a fixed configuration -- measured 2026-09-22, +16.7% and +15.7%
+    # on two replications of the same run -- has four candidate explanations and these tell them
+    # apart without an argument: reservation growth squeezing the workspace (reserved grows,
+    # inactive_split flat, driver free shrinks), fragmentation inside a fixed reservation
+    # (reserved flat, inactive_split grows), something outside the caching allocator holding
+    # memory (all flat but driver free shrinking), or no memory mechanism at all (all three
+    # flat). The last is the one worth being able to rule out: without it a plausible story
+    # about fragmentation can be refined indefinitely against data that never supported it.
+    "health/vram_reserved_mb": _m("MB", "Device memory the caching allocator holds."),
+    "health/vram_inactive_split_mb": _m(
+        "MB", "Non-releasable memory inside the allocator's blocks: fragmentation."
+    ),
+    "health/vram_driver_free_mb": _m(
+        "MB", "Free device memory the driver reports, which is what bounds a cuDNN workspace."
+    ),
+    "health/vram_alloc_retries": _m(
+        "count",
+        "Times the allocator freed its cache and retried. A retry is a synchronising stall; "
+        "zero does not mean the allocator is innocent, only that this path was not taken.",
+        dtype="int",
+    ),
     "health/rss_peak_mb": _m("MB", "Peak resident memory of the parent this iteration."),
     "health/buffer_fill_frac": _m(
         "fraction", "Share of the rectangle's cells written this iteration.", high=0.98
@@ -532,6 +554,14 @@ CONDITIONAL: dict[str, str] = {
     # pair's 0.5 made "never played" indistinguishable from "even contest".
     "ladder/score_vs_noop": "the learner-vs-anchor pair has games",
     "ladder/score_vs_random_legal": "the learner-vs-anchor pair has games",
+    # Absent without a device rather than zero. A zero here would read as "no fragmentation"
+    # and "no free memory" on a machine that simply has no GPU to report either about, which is
+    # the same sentinel this file exists to stop. ``vram_peak_mb`` predates the rule and still
+    # returns 0.0.
+    "health/vram_reserved_mb": "a CUDA device is present",
+    "health/vram_inactive_split_mb": "a CUDA device is present",
+    "health/vram_driver_free_mb": "a CUDA device is present",
+    "health/vram_alloc_retries": "a CUDA device is present",
 }
 
 

@@ -1753,6 +1753,7 @@ class LearningCoordinator:
             "health/samples_unused_frac": float(result.samples_unused_frac),
             "health/nan_guard_trips": _nan_guard_trips(result),
             "health/vram_peak_mb": _vram_peak_mb(),
+            **_vram_regime(),
             "health/rss_peak_mb": _rss_peak_mb(),
             "health/buffer_fill_frac": _fill_frac(buffer, collection["rounds"], geo),
         }
@@ -2074,6 +2075,33 @@ def _gpu_util() -> float:  # pragma: no cover - there is no GPU in the suite
         return float(torch.cuda.utilization()) / 100.0
     except Exception:
         return 0.0
+
+
+def _vram_regime() -> dict[str, MetricValue]:
+    """The three numbers that say which memory regime a slowing update is in, plus retries.
+
+    Read together at the end of an iteration they separate reservation growth, fragmentation
+    inside a fixed reservation, an outside holder, and no memory mechanism at all. Reported as
+    zeros without a device, like every other health figure here, because a gap is better than a
+    guess and the doctor projects a run from these.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return {}
+        stats = torch.cuda.memory_stats()  # pragma: no cover - no GPU in the suite
+        free, _total = torch.cuda.mem_get_info()  # pragma: no cover
+        return {  # pragma: no cover
+            "health/vram_reserved_mb": float(stats.get("reserved_bytes.all.current", 0)) / 1e6,
+            "health/vram_inactive_split_mb": (
+                float(stats.get("inactive_split_bytes.all.current", 0)) / 1e6
+            ),
+            "health/vram_driver_free_mb": float(free) / 1e6,
+            "health/vram_alloc_retries": int(stats.get("num_alloc_retries", 0)),
+        }
+    except Exception:  # pragma: no cover - torch is optional for everything but a run
+        return {}
 
 
 def _vram_peak_mb() -> float:
