@@ -262,7 +262,15 @@ def ladder_fields(
         "ladder/gate_passes": pool.state.gate_passes,
         "ladder/consecutive_gate_failures": pool.state.consecutive_gate_failures,
         "ladder/evictions": pool.state.evictions,
-        "ladder/eval_games_total": pool.state.eval_games,
+        # Counted from the log rather than from ``pool.state.eval_games``. That counter lives in
+        # ``LadderPool.record`` (pool.py:226) and is keyed on KIND_EVAL correctly, but the only
+        # caller of ``record`` in the package is ``record_training_results``, which hardcodes
+        # kind=KIND_TRAIN -- so the sum it takes is always zero. The evaluation runner writes
+        # around the pool, appending straight to the shared ResultLog (evaluate.py:250), which
+        # is why a run could fit ``ladder/rating/snap:v0`` off 24 real eval battles while this
+        # key read 0. Measured 2026-09-22: 0 in all 124 metric rows on disk, at every run
+        # length, which is what "structurally unreachable" looks like from the outside.
+        "ladder/eval_games_total": len(pool.eval_view()),
         "ladder/elo_readout": float(elo) if elo is not None else 0.0,
         "ladder/paired_rho": float(paired_rho) if paired_rho is not None else 0.0,
         "ladder/gate_seconds_frac": (
@@ -270,10 +278,28 @@ def ladder_fields(
         ),
     }
     view = pool.eval_view()
-    fields["ladder/score_vs_noop"] = view.record(learner_id, SCRIPTED_NOOP).score_a
-    fields["ladder/score_vs_random_legal"] = view.record(
-        learner_id, SCRIPTED_RANDOM_LEGAL
-    ).score_a
+    # Emitted only when the pair was actually played. ``PairRecord.score_a`` answers 0.5 for a
+    # pair with no games (results.py), and 0.5 is also what a genuine draw looks like -- so an
+    # unplayed pair published as a number is indistinguishable from an even contest. Measured
+    # 2026-09-22: exactly 0.5 in all 124 metric rows on disk, including one run that had played
+    # 24 real evaluation battles, because the learner is never evaluated under its own id. Every
+    # eval game is snapshot-against-something (the gate hands ``snap:v{n}`` to the runner), so
+    # the ("learner", anchor) pair the reader asks for is one the evaluator cannot write.
+    #
+    # Keying the lookup to the latest snapshot instead is TEMPTING AND WRONG: it would report
+    # the most recently gated candidate rather than the live policy, and those diverge by the
+    # gate cadence -- 4,000,000 env steps on the shipped laptop profile. A number that silently
+    # lags the policy by that much is worse than an absent one, because the absence is visible.
+    # Making these real needs the live learner evaluated against the anchors, which is a new
+    # pairing and a cost per iteration rather than a rename; until that is decided, the honest
+    # row carries no score at all. ``alarms.py`` already guarantees a missing key never fires.
+    for key, anchor in (
+        ("ladder/score_vs_noop", SCRIPTED_NOOP),
+        ("ladder/score_vs_random_legal", SCRIPTED_RANDOM_LEGAL),
+    ):
+        pair = view.record(learner_id, anchor)
+        if pair.games:
+            fields[key] = pair.score_a
     fields["ladder/draw_rate_eval"] = (
         float(draw_rate_eval) if draw_rate_eval is not None else view.draw_rate()
     )
