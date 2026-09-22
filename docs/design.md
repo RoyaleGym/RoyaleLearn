@@ -59,7 +59,12 @@ The conventions the harness is held to are the family's, and will be familiar fr
   this repo.
 - **Determinism is preserved end to end.** The engine is deterministic and seedable, and a
   trace recorded from an env re-verifies bit for bit (`royalegym.replay`). Seeds go into
-  checkpoints, so a run can be replayed rather than approximated.
+  checkpoints, so a run can be replayed rather than approximated. What that buys today is
+  exact: two runs of one identity agree row for row, and a checkpoint restores the whole
+  learner byte for byte in a fresh process. What it does not yet buy is a resumed run
+  reproducing the original's *environment*, because the vectorised env autoresets without a
+  seed and a battle's generator cannot be rewound without replaying it; `docs/harness-spec.md`
+  section 12.4 states the gap and a test measures it.
 - **Layering.** This repo imports `royalegym` and nothing from `royalesim` directly, and it
   never touches calibration data. The direction is `RoyaleLearn -> RoyaleGym -> RoyaleSim`.
 

@@ -975,8 +975,21 @@ After loading a checkpoint written at the end of iteration `k`:
 3. Schedule positions are restored: current `gamma`, `ent_coef`, `ent_coef_noop`, both learning
    rates, the lr-backoff counter, `cumulative_env_steps`, `cumulative_timesteps`, `iteration`,
    `cumulative_updates`.
-4. Iteration `k+1` produces a byte-identical metric row and a byte-identical `state_digest` to the
-   original run's iteration `k+1`.
+4. The learner is byte-identical to what the checkpoint recorded: the `state_digest` reported on
+   load equals the one written at iteration `k`. That is the weights, both optimizers' moments,
+   the return scaler and the schedule positions, so it is the whole learner rather than a curve
+   that resembles one.
+
+**What a resume does not restore, measured rather than assumed.** Iteration `k+1` of a resumed
+run does **not** reproduce the original's metric row, and the reason is one level below this
+repository. `ClashSelfPlayVecEnv` autoresets without a seed, so a battle's generator has advanced
+once for every episode it has played, and a worker starting fresh cannot arrive at that state
+without replaying every episode before it. The learner resumes exactly and the battles do not, so
+the rows diverge in the environment's numbers — `env/*` and `policy/*` — while every learner byte
+matches. `tests/test_resume.py` asserts the three clauses above and measures the fourth as a gap,
+with a test written to fail the day it closes. It closes when `ClashSelfPlayVecEnv` gains the
+seeded autoreset of section 16, which makes an episode addressable by name rather than by how
+many came before it; nothing in this repository can close it alone.
 
 `state_digest`, defined once in `royalelearn/checkpoint.py`, is a sha256 over, in this fixed order:
 the actor `state_dict` tensors (name-sorted, `.cpu().numpy()` bytes), the critic `state_dict`, each

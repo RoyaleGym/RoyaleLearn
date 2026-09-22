@@ -349,6 +349,12 @@ class _RolloutComponent:
             worker = int(entry["worker"])
             self.source.generation[worker] = int(entry["generation"])
             self.source.restarts[worker] = int(entry.get("restarts", 0))
+        # The ordinals are the half of this file that decides which battles get played: each
+        # one addresses the stream its episode's seed comes from. Writing them and not reading
+        # them back leaves every battle on episode zero, so a resumed run replays the opening
+        # battles under weights that have moved on -- a divergence that shows in the
+        # environment's numbers while every learner digest still matches.
+        self.matchmaker.restore_ordinals(payload.get("ordinals", {}))
 
 
 class _GroupComponent:

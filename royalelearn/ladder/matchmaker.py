@@ -16,7 +16,7 @@ episode boundary, so a partially controlled trajectory cannot occur.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -123,8 +123,19 @@ class MixMatchmaker(Matchmaker):
         return 1.0 - self.expected_learner_row_fraction
 
     def ordinal(self, battle: int) -> int:
-        """The episode ``battle`` is about to play. Counts from zero and survives a resume."""
+        """The episode ``battle`` is about to play. Counts from zero."""
         return self._ordinal.get(battle, 0)
+
+    def restore_ordinals(self, ordinals: Mapping[int, int]) -> None:
+        """Put every battle back on the episode it was about to play.
+
+        An ordinal is not bookkeeping: it addresses the stream an episode's seed comes from
+        (``match/battle/{b}/ordinal/{k}``), so a resume that left these at zero would draw the
+        run's opening battles again under weights that have moved on, and the environment side
+        of the run would diverge from the one being continued while the learner side matched
+        perfectly.
+        """
+        self._ordinal.update({int(battle): int(value) for battle, value in ordinals.items()})
 
     def on_episode(self, record: EpisodeRecord) -> None:
         """Advance a battle's ordinal past the episode that just finished.
