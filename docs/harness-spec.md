@@ -2986,13 +2986,26 @@ run with, and each is a number the harness already logs.
    whose legal set has one member and whose entropy is therefore zero. A reader who saw only
    the KL would conclude the update was broken. The update is fine; the batch is 94% padding.
 
+   **And the padding is where the wall clock goes.** The same iteration measured
+   `time/collection` at 12.6 s against `time/update` at 531.1 s — **97.7% of the iteration is
+   the update** **[M]**, three epochs over a batch that is 93% rows the policy cannot learn
+   from. (The first iteration reads 84% because it pays for cuDNN's first look at each shape:
+   `time/inference` 76.6 s then 10.2 s.)
+
    This is a measurement and not yet a decision, and the decision it feeds is the one to make
    deliberately: whether a forced row should be collected at all, whether it should be stored
    but excluded from the policy loss while still feeding the critic and the reward chain that
-   GAE walks, or whether `decision_ms` should rise until a decision is usually a decision. The
-   three differ in what they do to the value function and to the credit horizon, which is why
-   none of them is the obvious answer, and why `forced_noop_frac` is in the metric list rather
-   than a constant in the code.
+   GAE walks, or whether `decision_ms` should rise until a decision is usually a decision.
+   The three differ on two axes and not one. On the value function: dropping a row removes it
+   from the critic's targets as well as the policy's, and removes a link from the chain GAE
+   walks backwards. On the wall clock: dropping at collection saves almost the whole update,
+   because the rows never reach the trunk; excluding them from the policy loss alone saves
+   nothing, because they still go through it; and raising `decision_ms` saves both while being
+   the only one of the three that changes what the agent *is* rather than what the learner does
+   with it. Choosing between the first two on value-function grounds alone would be choosing
+   between "several times faster" and "no faster" without knowing it. That is why
+   `forced_noop_frac` and the `time/` group are in the metric list rather than constants in the
+   code.
 9. **The trunk's discrimination, against its input's.** If the harness ever alarms on representation
    collapse — the encoder producing nearly the same embedding for boards that differ — the threshold
    must be **relative, never absolute**, and it must be built to three rules that a naive version of
