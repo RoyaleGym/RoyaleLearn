@@ -304,8 +304,8 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
             patience=3,
             meaning=(
                 "the observation's opponent-elixir slot is documented exact and was an estimate "
-                "on some episodes; near zero rather than just under one, read "
-                "run/engine_build_digest first"
+                "on some episodes; near zero rather than just under one, read the run's "
+                "identity.json engine_build first"
             ),
         ),
         MetricAlarm(

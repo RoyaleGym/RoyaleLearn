@@ -188,6 +188,26 @@ def test_the_spill_alarms_bar_is_the_best_of_the_run_not_its_first_iteration() -
     assert _spill_rows(alarms, 95.0, 0.0, start=5) == ["vram_spilling"]
 
 
+def test_an_alarm_that_names_a_metric_key_names_one_that_exists() -> None:
+    """An alarm's message is read by somebody in a hurry, and it should not send them hunting.
+
+    ``elixir_count_inexact`` told the reader to read ``run/engine_build_digest`` first. No such key
+    is in the schema or in any row: the engine build is in the run's identity.json, and the only
+    digest a row carries is the learner's weights. Found by the docs session while writing the page
+    that lists one section per alarm.
+    """
+    known = set(schema.METRICS)
+    for alarm in default_alarms(AlarmConfig()):
+        for word in alarm.meaning.replace(",", " ").replace(";", " ").split():
+            token = word.strip("`'\".()").rstrip(".")
+            if "/" in token and token.split("/")[0] in {
+                "run", "env", "ppo", "policy", "ladder", "health", "time", "throughput"
+            }:
+                assert token in known or schema.is_known(token), (
+                    f"{alarm.name} names {token}, which no row carries"
+                )
+
+
 def test_every_alarm_reads_keys_the_schema_knows() -> None:
     for alarm in default_alarms(AlarmConfig()):
         for key in alarm.keys:
