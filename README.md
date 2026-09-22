@@ -275,9 +275,8 @@ What works:
 
 What is open:
 
-- The PPO update.
-- The coordinator that orders the phases of an iteration and turns them into a loop. Until it
-  lands, nothing starts a run.
+- A bot. Nothing has been trained past a couple of iterations, so there is no evidence yet
+  about whether a policy trained here is any good.
 - Rollout workers are Python today, and move to Rust when Python becomes the slow part. Here is why
   that order. A tick is 50 ms of game time, and the engine does roughly 25,000 of them a second. A
   Python observation builder measured in 2026-09 capped out at about 520 env steps a second, so
