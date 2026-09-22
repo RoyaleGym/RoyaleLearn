@@ -16,6 +16,7 @@ directory and what to do in it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import subprocess
 import sys
 import time
@@ -138,8 +139,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _line_buffer_output() -> None:
+    """Print a line when it is written, even when nobody is looking at a terminal.
+
+    Python block-buffers stdout when it is a pipe or a file, so a command redirected to a log
+    writes nothing for as long as it takes to fill four kilobytes. Every command here is slow
+    and talkative -- preflight alone takes a minute against the real engine -- and a slow
+    command that prints nothing is indistinguishable from one that has hung, which is how a
+    run gets killed by the person watching it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:  # pragma: no branch - both are TextIOWrapper in practice
+            with contextlib.suppress(ValueError, OSError):
+                reconfigure(line_buffering=True)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse, dispatch, and turn a refusal into a message rather than a traceback."""
+    _line_buffer_output()
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:
