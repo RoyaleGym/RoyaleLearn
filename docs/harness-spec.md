@@ -2669,14 +2669,28 @@ alarms held and two of them are a threshold problem rather than a finding:
 | alarm | held | reading |
 |---|---|---|
 | `noop_entropy_floor` | both rows | **the threshold was wrong**, and the metric is now conditioned on the rows that had a choice (section 18, item 8). The number those rows report is the unconditioned one |
-| `kl_dead` | both rows, at 4.8e-06 and 3.6e-07 | **unresolved.** Patience is 10 and the run reached 2, so it never fired — but it would have. The policy is barely moving because 93% of the batch cannot move it, which is a property of the environment rather than a dead update. The threshold was chosen for a batch whose rows can all carry a gradient, and what the right one is here is not known from two iterations |
+| `kl_dead` | both rows, at 4.8e-06 and 3.6e-07 | **the same fault, and the same repair.** A forced row's ratio is exactly one — the distribution is a point mass at the same action before and after the update — so it contributes zero KL structurally. `ppo/kl`, `ppo/clip_fraction` and `ppo/dual_clip_fraction` are now means over the rows that had a choice, and the threshold stands. This reached past the dashboard: `lr_backoff` reads this KL, so a diluted one put the brake that stops a blow-up out of reach by the same factor |
 | `ev_negative` | first row only | healthy: the critic had seen one batch, and explained variance was +0.25 by the second. Patience is 50 |
 | `noop_collapse` | first row only | healthy: `cards_per_match` was 6.98 on a freshly initialised policy and 22.08 by the second row. Patience is 5 |
 
-So one alarm is fixed, one is known-suspect and named, and two behaved. The rule that produced
+So two alarms are fixed and two behaved. The rule that produced
 that table is worth more than the table: before shipping a threshold, measure the quantity on the
 population it will really be averaged over, and if that population is mostly structural zeros,
-condition the metric rather than lowering the number.
+**condition the metric rather than
+lowering the number** — because the share of rows that are structural zeros is itself a property
+of the game rather than of the learner. Here it is the elixir economy, and it moves as the policy
+learns to hold elixir, as the deck changes, and in overtime at double rate. A threshold re-tuned
+against today's share is a number with an expiry date nobody will notice passing.
+
+What a validated threshold looks like, from the two that behaved: held on the first iteration,
+cleared by the second, with patience long enough to absorb the start. A new alarm can be checked
+against that shape in a minute.
+
+The other alarms have been checked against two iterations of one profile, which by the rule above
+is not validation. A metric's row population belongs in its identity rather than in its
+implementation — `ppo/kl@choice` against `@all`, declared in the schema — so a threshold cannot
+be set against the wrong population by accident and a reviewer sees the fault without running
+anything. That is the systemic form of both repairs, and it is not built.
 
 ### 13.4 The diagnostic bundle
 

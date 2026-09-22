@@ -707,3 +707,56 @@ def test_the_play_wait_entropy_ignores_rows_that_had_no_choice(rect: Fixture) ->
     assert out.noop_entropy == pytest.approx(0.6, abs=1e-6), (
         "the play/wait entropy averaged over rows that had no play to choose"
     )
+
+
+def test_every_ratio_diagnostic_ignores_rows_that_could_not_move(rect: Fixture) -> None:
+    """A forced row's ratio is exactly one: the distribution is a point mass, before and after.
+
+    So it contributes zero KL and zero clipping structurally, and an unconditioned mean is the
+    choice-bearing mean times a fraction the elixir economy sets. That fraction moves as the
+    policy learns to hold elixir and again in overtime, so a threshold against it is wrong in a
+    way no re-tuning fixes. It reaches past the dashboard: the learning-rate backoff reads this
+    KL, and a diluted one puts the brake out of reach by the same factor.
+    """
+    import torch
+
+    from royalelearn.learn.ppo import _Diagnostics
+
+    device = torch.device("cpu")
+    diagnostics = _Diagnostics(1, device)
+    count = 20
+    # Four rows had a choice and moved; sixteen could only wait, and their ratio is one.
+    chose = [True] * 4 + [False] * 16
+    ratio = torch.tensor([1.5] * 4 + [1.0] * 16)
+    result = SimpleNamespace(
+        log_probs=torch.zeros(count),
+        entropy=torch.zeros(count),
+        noop_entropy=torch.zeros(count),
+        values=torch.zeros(count),
+        n_legal=torch.tensor([40 if c else 1 for c in chose]),
+    )
+    diagnostics.minibatch(
+        epoch=0,
+        n=count,
+        ratio=ratio,
+        advantages=torch.zeros(count),
+        surr=torch.zeros(count),
+        dual=torch.zeros(count),
+        result=result,
+        value_loss=torch.zeros(()),
+        clip_range=0.2,
+        dual_clip_c=3.0,
+    )
+    out = diagnostics.result(
+        n_samples=count, epochs=1, explained=0.0, update_actor=0.0, update_critic=0.0, seconds=0.0
+    )
+
+    from royalelearn.learn.ppo import approx_kl
+
+    expected_kl = float(approx_kl(torch.tensor([1.5])).item())
+    assert out.kl == pytest.approx(expected_kl, rel=1e-5), (
+        "the KL was averaged over rows whose ratio is one by construction"
+    )
+    assert out.clip_fraction == pytest.approx(1.0, abs=1e-6), (
+        "every row that could move was outside the clip band, so the fraction is one"
+    )

@@ -688,8 +688,22 @@ class _Diagnostics:
         clip_range: float,
         dual_clip_c: float,
     ) -> None:
-        kl = approx_kl(ratio).mean()
-        clip = clipped_fraction(ratio, clip_range).mean()
+        # Every quantity derived from the ratio is conditioned on the rows that had a choice,
+        # for one structural reason: where the mask leaves a single action the distribution is
+        # a point mass at it before and after the update, so the ratio is exactly one and the
+        # row contributes exactly zero KL and zero clipping. It is not a policy that did not
+        # move, it is a policy that could not. On this environment nine rows in ten are that
+        # one, so an unconditioned mean is the choice-bearing mean times a fraction set by the
+        # elixir economy -- a fraction that moves as the policy learns to hold elixir, as the
+        # deck changes, and in overtime at double rate. A threshold against it is therefore
+        # wrong in a way that re-tuning cannot fix, because the baseline is not stationary.
+        # This matters past the dashboard: `lr_backoff` reads this KL, so a diluted one makes
+        # the brake that stops a blow-up unreachable by the same factor.
+        chose = (result.n_legal > 1).to(ratio.dtype)
+        chose_n = chose.sum()
+        denominator = chose_n.clamp_min(1.0)
+        kl = (approx_kl(ratio) * chose).sum() / denominator
+        clip = (clipped_fraction(ratio, clip_range) * chose).sum() / denominator
         # The normaliser is the entropy of a uniform policy over this row's legal set, so a
         # policy that has learnt to wait -- and therefore sees fewer legal actions -- is not
         # read as one that has collapsed.
@@ -700,8 +714,6 @@ class _Diagnostics:
         # not by anything the policy did. Averaging over all rows measures the elixir curve:
         # it reads near zero on a healthy run, so a floor set on it fires permanently, and a
         # gate that really had collapsed would move it by a fraction of what it moves here.
-        chose = (result.n_legal > 1).to(ratio.dtype)
-        chose_n = chose.sum()
         self.samples += n
         self.minibatches += 1
         self._chose += chose_n
@@ -711,15 +723,15 @@ class _Diagnostics:
         self._sums["noop_entropy"] += (result.noop_entropy * chose).sum()
         self._sums["forced_rows"] += (n - chose_n)
         self._sums["entropy_normalised"] += (result.entropy / legal).mean() * n
-        self._sums["kl"] += kl * n
-        self._sums["clip_fraction"] += clip * n
+        self._sums["kl"] += kl * chose_n
+        self._sums["clip_fraction"] += clip * chose_n
         self._sums["dual_clip_fraction"] += (
-            dual_clipped_fraction(advantages, surr, dual_clip_c=dual_clip_c).mean() * n
-        )
+            dual_clipped_fraction(advantages, surr, dual_clip_c=dual_clip_c) * chose
+        ).sum() / denominator * chose_n
         index = min(epoch, self.epochs - 1)
-        self._epoch_kl[index] += kl * n
-        self._epoch_clip[index] += clip * n
-        self._epoch_n[index] += n
+        self._epoch_kl[index] += kl * chose_n
+        self._epoch_clip[index] += clip * chose_n
+        self._epoch_n[index] += float(chose_n.item())
 
     def gradients(self, actor: Tensor, critic: Tensor) -> None:
         self._grad_actor.append(actor.detach())
@@ -741,9 +753,9 @@ class _Diagnostics:
         # Two of them are not means over every row. The play/wait entropy is summed over the
         # rows that had a choice and is divided by those; the forced-row count is a count.
         chose = float(self._chose.item())
-        means["noop_entropy"] = (
-            float((self._sums["noop_entropy"] / max(chose, 1.0)).item()) if chose else 0.0
-        )
+        divisor = max(chose, 1.0)
+        for name in ("noop_entropy", "kl", "clip_fraction", "dual_clip_fraction"):
+            means[name] = float((self._sums[name] / divisor).item()) if chose else 0.0
         means["forced_rows"] = float(self._sums["forced_rows"].item())
         if self.ratio_deviation is not None:
             self.ratio_value = float(self.ratio_deviation.item())
