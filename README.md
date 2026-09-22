@@ -13,7 +13,7 @@ piece of Python that scores what just happened in a battle. The bot plays itself
 keeps what wins. A ladder of its own older versions decides whether the new bot is actually better
 than the last one.
 
-**You can start a run, as of 2026-09-22.** The loop closed tonight, in commit 5685cad. One
+**You can start a run.** The training loop has worked since 2026-09-22 (commit 5685cad). One
 command trains:
 
 ```
@@ -32,7 +32,8 @@ with a limit of 96 timesteps. It proves the loop closes and it is not a training
 above finished at iteration 3 and left a checkpoint carrying the network, the advantage scaler
 and the ladder's pool. `laptop.json` and `workstation.json` are the real thing, on the Rust
 engine with a limit of 100,000,000 timesteps. **The real profile runs, and nobody has trained
-a bot with it.** The first two collection rounds of one run on this machine:
+a bot with it.** Of those two files, only `laptop.json` has been run. The first two collection
+rounds of one run on the maintainer's laptop:
 
 ```
 collected     228 cycles, 32832 timesteps in 46.0s (951 env steps/s); updating
@@ -41,7 +42,7 @@ collected     228 cycles, 32832 timesteps in 19.0s (2305 env steps/s); updating
 
 The first round of a run is always the slow one, because the workers are spawning and nothing
 is warm. That is the variable to know about, more than your hardware. Across six measurements
-on this laptop the first round came in at 46, 79 and 179 seconds, a spread of 3.9x, while every
+on that laptop the first round came in at 46, 79 and 179 seconds, a spread of 3.9x, while every
 round after it came in at 12.6, 13 and 19 seconds, a spread of 1.5x. Once a run is warm it is
 fairly steady even on a busy machine. Wait for the second round before you believe any timing.
 
@@ -63,24 +64,24 @@ viewer draws a battle in its own window while it is being played.
 
 ## What you get
 
-Six pictures. Five of them run today.
+Six pieces, and all six run today.
 
 <table>
   <tr>
     <td width="33%" align="center"><img src="docs/media/self-play-env.png" width="100%" alt="RoyaleViser attached live to a batched self-play environment stepping under a random policy: tick 2130, 13 units, 30 frames a second"><br><b>The environment it trains on</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>A self-play environment under a random policy, watched live in RoyaleViser at 30 frames a second.</sub></td>
     <td width="33%" align="center"><img src="docs/media/rollout-workers.svg" width="100%" alt="Image placeholder: N battles stepping as one batch of 2N player slots, steps per second rising as workers are added"><br><b>Rollout workers</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>N battles step as one batch of 2N players, so one bot collects both sides' experience.</sub></td>
-    <td width="33%" align="center"><img src="docs/media/ppo-learner.png" width="100%" alt="One real decision: the four cards in hand over the 18 by 32 tile grid, with the illegal tiles dark. 683 of the 2305 moves are legal, and the Giant has none because the elixir bar is at 3.1"><br><b>One masked head over 2305 actions</b><br><img alt="The mask runs today, the head does not" src="https://img.shields.io/badge/mask%20runs%20today-3fb950?style=flat-square"><br><sub>No-op, or one of 4 hand cards on one of 18 x 32 tiles; moves the game would refuse are masked out.</sub></td>
+    <td width="33%" align="center"><img src="docs/media/ppo-learner.png" width="100%" alt="One real decision: the four cards in hand over the 18 by 32 tile grid, with the illegal tiles dark. 683 of the 2305 moves are legal, and the Giant has none because the elixir bar is at 3.1"><br><b>One masked head over 2305 actions</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>No-op, or one of 4 hand cards on one of 18 x 32 tiles; moves the game would refuse are masked out.</sub></td>
   </tr>
   <tr>
     <td width="33%" align="center"><img src="docs/media/frozen-pool-ladder.svg" width="100%" alt="Image placeholder: every pool snapshot's Elo with its confidence bar and the win-rate gate a snapshot must clear"><br><b>A ladder of frozen opponents</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>Past policies form a pool the learner is rated against; a snapshot joins when its win rate clears the gate.</sub></td>
-    <td width="33%" align="center"><img src="docs/media/checkpoints.svg" width="100%" alt="Image placeholder: a checkpoint's contents and a resumed run's curve lying exactly on the original's"><br><b>Checkpoints that reproduce</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>Policy, critic, optimizer, pool and seeds in one file, so a resumed run lies on the original's curve.</sub></td>
-    <td width="33%" align="center"><img src="docs/media/metrics-sink.svg" width="100%" alt="Image placeholder: one Weights &amp; Biases run with environment and learner metrics side by side"><br><b>Metrics from both sides</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>One Weights &amp; Biases run: steps per second and crowns from the environment, loss and Elo from the learner.</sub></td>
+    <td width="33%" align="center"><img src="docs/media/checkpoints.svg" width="100%" alt="Image placeholder: a checkpoint's contents and a resumed run's curve lying exactly on the original's"><br><b>Checkpoints that reproduce</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>Policy, critic, optimizer, pool and seeds in one file, so a resumed run picks up where the original stopped.</sub></td>
+    <td width="33%" align="center"><img src="docs/media/metrics-sink.svg" width="100%" alt="Image placeholder: one run's metrics file, with environment and learner numbers side by side"><br><b>Metrics from both sides</b><br><img alt="Runs today" src="https://img.shields.io/badge/runs%20today-3fb950?style=flat-square"><br><sub>Steps per second and crowns from the environment, loss and rating from the learner, one row per iteration. They go to a file in your run folder and to the console. Weights and Biases is an optional extra and is off in every shipped config.</sub></td>
   </tr>
 </table>
 
-The one marked amber is the masked head. Its network and its action layout are built, and the
-PPO update that trains it landed tonight. What is amber about it now is evidence rather than
-code: it has run for three iterations and nothing has been trained with it.
+Running is not the same as trained. The masked head and the PPO update that trains it work end
+to end, but nobody has trained a bot with them yet. So there is no evidence yet that they
+produce a good one.
 
 In plain words, for anyone who has not trained a bot before:
 
@@ -98,16 +99,17 @@ In plain words, for anyone who has not trained a bot before:
   beats the pool often enough.
 - **A checkpoint** is one file holding everything needed to carry on: the bot, the critic that
   estimates how well it is doing, the optimizer, the pool and the random seeds. Resume from it and
-  the run continues on the same curve instead of a near-enough one.
+  all of that comes back exactly. The one thing not restored is a battle that was half played
+  when the file was written. It is not finished, and the next battle starts in its place.
 
 Each of these is a base class with a default implementation, and you can replace any of them with
 your own without editing the training loop. If you want a different rating scheme, a different way
-of picking opponents, or your numbers sent somewhere other than Weights & Biases, you write your
-version and name it in the config.
+of picking opponents, or your numbers sent somewhere new, you write your version and name it in
+the config.
 
 ## What you can run today
 
-The loop is missing, but the surface it is built against is here and works. After the install below
+You can see exactly what the training loop learns from, without torch. After the install below
 (`royalegym` with the engine built), this prints the batch of players a rollout worker consumes:
 
 ```python
@@ -161,8 +163,9 @@ $ python -c "import royalelearn, sys; print(royalelearn.RunConfig, 'torch' in sy
 <class 'royalelearn.config.RunConfig'> False
 ```
 
-Anything that does need torch pulls it in only when you ask for that name, and if torch is missing
-you get an `ImportError` that tells you what to install.
+Anything that does need torch pulls it in only when you ask for that name. If torch is missing
+you get Python's own `ModuleNotFoundError: No module named 'torch'`, and the fix is the torch
+line of the install below.
 
 ## What you type
 
@@ -171,35 +174,43 @@ All four of these work. `train` needs the torch extra; so do `doctor` and `bench
 ```
 python -m royalelearn train --config examples/configs/laptop.json
 python -m royalelearn config --profile laptop -o run.json      # writes a config to edit
-python -m royalelearn doctor --config F                        # first-run checks
+python -m royalelearn doctor --config run.json                 # first-run checks
 python -m royalelearn bench                                    # this machine's throughput
 ```
 
 Start with the last two, not the first. `doctor` builds one environment, prints the engine build
 digest and the observation shapes, checks the placement mask against the engine exhaustively,
-prints the memory projection and refuses a run that will not fit. `bench` measures your own
-machine's throughput instead of quoting someone else's. Between them they catch most first-run
-failures in seconds.
+prints the memory projection and refuses a run that will not fit. It takes seconds and catches
+most first-run failures. `bench` measures your own machine's throughput instead of quoting
+someone else's. It runs at least one whole training iteration, so on a real profile it takes as
+long as one iteration does.
 
-The config profiles are laptop, workstation and many-core.
+The config profiles are `laptop`, `workstation` and `many_core`. The first two also ship as files
+in `examples/configs/`. `workstation.json` has not been run yet. Its minibatch, the number of
+decisions the graphics card works through at once, is 2048, and nobody has measured it. If that
+does not fit on your card, `train` stops at start-up and names a smaller value to use.
 
-If you would rather edit Python than a command line, there will be `examples/train_1v1.py`, about
-fifteen lines: load a config, set a couple of fields, then
-`with LearningCoordinator(cfg) as run: run.learn()`. The command line and the script go through the
-same object. Neither is a wrapper around the other.
+If you would rather edit Python than a command line, start from `examples/train_1v1.py`. It is a
+short script: it loads `laptop.json`, changes a few fields such as the run name, then calls
+`run.learn()` inside `with LearningCoordinator(config) as run:`. The command line and the script
+go through the same object. Neither is a wrapper around the other.
 
 On memory: the design budgets a laptop run at about 3.3 GB on a 7.8 GB machine. That figure is
-arithmetic on paper, not a measurement of a running loop. That is why `doctor` will print the
-real ledger for your machine, and refuse a run whose projection goes over its memory budget,
-6500 MB by default.
+arithmetic on paper, not a measurement of a running loop. `doctor` prints the same arithmetic
+for your settings, next to how much memory is free right now. It refuses a run whose projection
+goes over its memory budget, 6500 MB by default. The per-process figures inside the projection
+come from the design, not from a measured run, so treat its total as an estimate.
 
 ### The reward function
 
 This is the part you actually write. It lives in `royalelearn/rewards.py` and is composed in
 `default_potential_reward()`. To change it you subclass `RewardFunction`, which is RoyaleGym's base
 class, and name your class in the config's `env` block, so it is recorded in the checkpoint and in
-the ladder's context like every other component. `examples/custom_reward.py` will show exactly
-that. It is the other main thing a bot creator changes.
+the ladder's context like every other component. `examples/custom_reward.py` does exactly that.
+It writes one new term, which scores having your units on the opponent's side of the river, adds
+it to the others and names the result in the config. It also lists its own module in
+`extra_component_modules`. Without that line the run refuses to load your code, and the error
+says which setting to add it to. The reward is the other main thing a bot creator changes.
 
 One warning, because it is the mistake a newcomer is most likely to make. Do not re-tune the
 shipped weights. Every shaping term here is a difference of potentials, and that form is what makes
@@ -211,8 +222,8 @@ behaviour is standing in for a term that is missing. Write the missing term inst
 <p align="center"><img src="docs/media/family.svg" width="100%" alt="The five Royale repos: RoyaleLearn trains on RoyaleGym, which steps RoyaleSim; RoyaleViser draws traces and streams; RoyaleLive's recordings calibrate RoyaleSim"></p>
 
 You need four repos to train a bot, and all four are public, under the GitHub organisation
-[RoyaleGym](https://github.com/RoyaleGym). RoyaleLearn is the top layer of five sibling repos, and
-it is one of the five. This one imports `royalegym` and never reaches into the engine itself.
+[RoyaleGym](https://github.com/RoyaleGym). RoyaleLearn is the top layer. It imports `royalegym`
+and never reaches into the engine itself.
 Dependencies run one way, from RoyaleLearn to RoyaleGym to RoyaleSim. If you know RLGym, RocketSim
 and RLGym-PPO, this is the same split with the same names.
 
@@ -222,7 +233,7 @@ and RLGym-PPO, this is the same split with the same names.
 | [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) | the environment API: observations, actions, rewards; Gymnasium, PettingZoo and self-play envs | the environments the workers step, the legality mask the learner applies, and the opponent-pool bookkeeping the ladder drives (`royalegym.selfplay.OpponentPool`: snapshots, uniform / latest / prioritised sampling, Elo, head-to-head records, save and load) |
 | **RoyaleLearn** (this repo) | the training harness: self-play rollouts, PPO, a ladder of frozen opponents, checkpoints | the harness |
 | [RoyaleViser](https://github.com/RoyaleGym/RoyaleViser) | the viewer: recordings, engine traces and running environments in its own window | a training run streams to it like any environment (`ROYALEVISER=host:port`, handled by `royalegym`), never through this repo |
-| RoyaleLive | private, and it holds recordings of real matches | nothing directly: its recordings calibrate the engine, and a bot trained here is judged by the matches it wins, not by how closely it agrees with the engine |
+| RoyaleLive | the client instrument that records ground-truth traces from the real game. It is private, and so are its recordings | nothing directly: its traces calibrate the engine, and a bot trained here is judged by the matches it wins, not by how closely it agrees with the engine |
 
 What comes in: environments from RoyaleGym, with the engine build under them. What goes out: bot
 snapshots and checkpoints, in formats that are not fixed yet, a stream of numbers you can plot, and
@@ -253,31 +264,33 @@ dependency and pip takes it from your venv, never from PyPI. If you want torch a
 ## Status (2026-09-22)
 
 <p align="center">
-  <img alt="Fast suite: 375 passed" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
+  <img alt="Fast suite: 616 passed on 2026-09-22" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
   <img alt="Ruff: all checks passed" src="https://img.shields.io/badge/ruff-all%20checks%20passed-3fb950?style=flat-square">
   <img alt="Torch is optional" src="https://img.shields.io/badge/torch-optional-555?style=flat-square">
-  <img alt="Harness: two pieces left" src="https://img.shields.io/badge/harness-two%20pieces%20left-d29922?style=flat-square">
+  <img alt="Bot: not trained yet" src="https://img.shields.io/badge/bot-not%20trained%20yet-d29922?style=flat-square">
 </p>
 
 What works:
 
 - The configuration tree with its three machine profiles, the seed tree every random draw comes
   from, and the run identity a resume is checked against.
+- The training loop: the `train` command, the coordinator that collects, updates, rates and
+  saves, and the PPO update itself.
 - The networks, the observation codec, the experience buffer and GAE.
 - The rollout workers: an in-process reference, and a farm of worker processes held byte for byte
   identical to it.
 - The ladder, the metrics sinks and the checkpoint store.
 - The swappable base classes in `royalelearn/api/`, the environment description read off a running
   environment, the shared-memory layout the workers and the learner meet in, and the metric schema.
-- The package imports in the workspace venv without torch, and pulls torch in only for the names
-  that need it. Shown above.
+- The package imports without torch, and pulls torch in only for the parts that need it. Shown
+  above.
 - Everything below this repo. The environments, the mask, the same-step autoreset, seeding from end
   to end, the opponent-pool bookkeeping and the viewer stream.
 
 What is open:
 
-- A bot. Nothing has been trained past a couple of iterations, so there is no evidence yet
-  about whether a policy trained here is any good.
+- A bot. Every run so far has been a short test rather than real training, so there is no
+  evidence yet about whether a policy trained here is any good.
 - Rollout workers are Python today, and move to Rust when Python becomes the slow part. Here is why
   that order. A tick is 50 ms of game time, and the engine does roughly 25,000 of them a second. A
   Python observation builder measured in 2026-09 capped out at about 520 env steps a second, so
@@ -290,18 +303,19 @@ What is open:
 Tests:
 
 ```
-cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 375 passed, 68 skipped, 9 deselected     # without torch, on 2026-09-22
+cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 616 passed, 20 deselected, with torch installed, on 2026-09-22
 ..\.venv\Scripts\ruff check .                              # All checks passed!
 ```
 
-The 68 that skip are the ones needing torch, which this venv does not have. The 9 deselected are
-the slow ones, left out so the default run stays short: it took 14.2 seconds here. Adding `-m ""`
-to the pytest line runs the slow ones too, and gets 384 passed and 68 skipped in 97.6 seconds.
+That run took 136 seconds on a laptop. The 20 deselected tests are left out by default so the
+run stays short. They are the slow ones and the ones that need an engine build matching
+RoyaleSim's data files. Adding `-m ""` to the pytest line runs them too. Without torch, the tests
+that need it are skipped rather than failed, and everything else still runs.
 
-They cover every piece listed above, across 35 test files: the import contract, the config tree
-and its refusal of typos, the seed tree's pinned values, the identity hash field by field, the
-byte layout against a stored golden record, the experience buffer and its scoring, the checkpoint
-store, the ladder and its gate, the metrics, and the networks.
+They cover every piece listed above: the import contract, the config tree and its refusal of
+typos, the seed tree's pinned values, the identity hash field by field, the byte layout against a
+stored golden record, the experience buffer and its scoring, the checkpoint store and resume, the
+ladder and its gate, the metrics, the networks and the PPO update.
 
 One of them is worth singling out. The environment description is read off a running
 `ClashSelfPlayVecEnv` on two card catalogues of different widths. The two catalogues are the
