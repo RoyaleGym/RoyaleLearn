@@ -127,6 +127,25 @@ def test_an_iteration_produces_a_row_the_schema_knows_in_full(run: Any) -> None:
         assert np.isfinite(float(value)), f"{key} is {value}"
 
 
+def test_the_vram_gate_names_the_one_legal_minibatch_below(run: Any) -> None:
+    """The refusal has to say what to change it to, and there is usually one answer.
+
+    A minibatch must divide ``batch_size`` or it stops being a pure memory knob, and at the
+    shipped 4096 there is no divisor between 256 and 512 -- so "lower it" means 256 and nothing
+    else. A reader should not have to discover that by trying 384 and being refused, which is
+    exactly what happened to the measurement this gate came out of.
+    """
+    cases = {(4096, 512): 256, (4096, 256): 128, (4096, 1): None, (3072, 384): 256}
+    for (batch, minibatch), expected in cases.items():
+        run.config = msgspec.structs.replace(
+            run.config,
+            ppo=msgspec.structs.replace(
+                run.config.ppo, batch_size=batch, minibatch_size=minibatch
+            ),
+        )
+        assert run._next_legal_minibatch() == expected, (batch, minibatch)
+
+
 def test_the_counters_advance_by_what_the_rectangle_holds(run: Any) -> None:
     geometry = run.geometry
     run.iterate()

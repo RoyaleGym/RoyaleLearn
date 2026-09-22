@@ -421,6 +421,24 @@ class DoctorConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     ram_budget_mb: int = 6500
     #: Exhaustive over every non-no-op action, both teams.
     run_mask_disagreement_gate: bool = True
+    #: Device memory that must remain free after one minibatch's measured peak, or the run does
+    #: not start. Zero disables the gate.
+    #:
+    #: It is a measurement rather than a projection, and it is compared against what the DRIVER
+    #: reports free rather than against the card's capacity, because those differ by whatever
+    #: else is resident and that term is the one that decides the outcome. Measured 2026-09-22:
+    #: minibatch 512 reserved 4243 MB against a 4294 MB card and ran 4.5x slow rather than
+    #: failing, because Windows backs an oversubscribed allocation with host RAM over PCIe
+    #: instead of refusing it. A cap on the card's own total would have PASSED that
+    #: configuration -- 4243 is under 4294 -- and it spilled anyway, on the other processes'
+    #: share. Only free-at-startup sees the term that matters.
+    #:
+    #: The margin exists because free memory is not a promise: another process can take it
+    #: later. That is the argument for failing here rather than for a hard allocation cap, which
+    #: would convert this into an out-of-memory error at an unpredictable hour of a long run --
+    #: strictly worse than the slow run it replaced, because a legible penalty becomes an
+    #: illegible late crash.
+    vram_headroom_mb: int = 256
 
 
 def default_env_spec(engine: str = RUST_ENGINE, *, max_steps: int = 480) -> EnvFactorySpec:

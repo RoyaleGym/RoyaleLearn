@@ -44,7 +44,7 @@ from .api.rollout import (
 from .api.schedule import ScheduleState
 from .checkpoint import CHECKPOINT_FORMAT_VERSION, DirCheckpointStore, check_resume
 from .config import RunConfig, config_hash, dump_config, geometry, validate
-from .errors import RoyaleLearnError
+from .errors import PreflightError, RoyaleLearnError
 from .identity import RunIdentity, compute_identity, describe_device
 from .identity import run_id as run_id_of
 from .ladder.evaluate import EvalRunner, SeedSet, eval_seed_set
@@ -877,6 +877,8 @@ class LearningCoordinator:
         self.arch_digest = self.factory.arch_digest(self.spec, config.net)
         self.model = self.factory.build(self.spec, config.net, device=self.device)
 
+        self._vram_gate(torch)
+
         self.identity = compute_identity(
             config,
             env_spec=self.spec,
@@ -1200,6 +1202,80 @@ class LearningCoordinator:
             vector=tensor(np.asarray(obs["vector"], dtype=np.float32), torch.float32),
             mask=tensor(mask, torch.bool),
         )
+
+    def _next_legal_minibatch(self) -> int | None:
+        """The largest legal ``minibatch_size`` below the configured one, or None.
+
+        Legal means it divides ``batch_size``, which is the invariant that keeps a minibatch a
+        pure memory knob. It matters that this is computed rather than suggested: at the shipped
+        ``batch_size`` of 4096 there is no divisor between 256 and 512, so "lower it" has exactly
+        one answer and a reader should not have to find that out by trying.
+        """
+        ppo = self.config.ppo
+        below = [n for n in range(1, ppo.minibatch_size) if ppo.batch_size % n == 0]
+        return max(below) if below else None
+
+    def _vram_gate(self, torch: Any) -> None:
+        """Measure one minibatch's device peak and refuse a run that will not fit beside it.
+
+        A projection would be a guess, and a guess about this is what put ``minibatch_size`` at
+        512 in the first place. So the gate runs the real backward pass the update runs, at the
+        real minibatch size, and reads what it cost.
+        """
+        headroom = self.config.doctor.vram_headroom_mb
+        if not headroom or not torch.cuda.is_available():
+            return
+        free_before, _total = torch.cuda.mem_get_info()  # pragma: no cover - no GPU in the suite
+        torch.cuda.reset_peak_memory_stats()  # pragma: no cover
+        try:  # pragma: no cover
+            self._probe_backward(torch)
+        except Exception:  # pragma: no cover - a failure here is the update's to report
+            return
+        peak = torch.cuda.max_memory_reserved()  # pragma: no cover
+        torch.cuda.reset_peak_memory_stats()  # pragma: no cover
+        margin = headroom * 1_000_000  # pragma: no cover
+        if peak + margin <= free_before:  # pragma: no cover
+            return
+        lower = self._next_legal_minibatch()  # pragma: no cover
+        advice = (  # pragma: no cover
+            f"lower ppo.minibatch_size to {lower} -- the next legal value, since it must divide "
+            f"ppo.batch_size {self.config.ppo.batch_size}"
+            if lower
+            else "lower ppo.batch_size, or run on a larger device"
+        )
+        raise PreflightError(  # pragma: no cover
+            f"one minibatch of {self.config.ppo.minibatch_size} peaked at "
+            f"{peak / 1e6:.0f} MB of device memory and only {free_before / 1e6:.0f} MB was free, "
+            f"leaving less than the {headroom} MB doctor.vram_headroom_mb requires.\n"
+            f"  This platform does not refuse an oversubscribed allocation -- it backs it with "
+            f"host memory over PCIe -- so the run would not fail here, it would be several times "
+            f"slower for its whole life and nothing would say so.\n"
+            f"  {advice}, or set doctor.vram_headroom_mb to 0 to run anyway."
+        )
+
+    def _probe_backward(self, torch: Any) -> None:
+        """One forward and backward at the update's minibatch size, on zeros.
+
+        Zeros are the right input: the question is what the SHAPES cost, and a mask of zeros
+        would make the softmax degenerate, so the no-op column is set legal the way a real row's
+        always is.
+        """
+        from .api.policy import ObsBatch
+
+        spec, rows = self.spec, self.config.ppo.minibatch_size
+        planes = spec.obs_space["mask_planes"].shape
+        mask = torch.zeros((rows, spec.n_actions), dtype=torch.bool, device=self.device)
+        mask[:, 0] = True
+        batch = ObsBatch(
+            spatial=torch.zeros((rows, *spec.spatial_shape), device=self.device),
+            mask_planes=torch.zeros((rows, *planes), device=self.device),
+            vector=torch.zeros((rows, spec.vector_size), device=self.device),
+            mask=mask,
+        )
+        actions = torch.zeros((rows,), dtype=torch.int64, device=self.device)
+        result = self.model.backprop(batch, actions)
+        result.log_probs.sum().backward()
+        self.model.zero_grad(set_to_none=True)
 
     def _components(self) -> CheckpointComponents:
         """Every piece of the run that goes into a checkpoint, under its own folder name."""
