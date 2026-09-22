@@ -1,59 +1,41 @@
 # RoyaleLearn
 
-Training for Clash Royale bots: self-play rollouts over
-[RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) environments, a PPO learner for the
-game's discrete card-and-tile action space, and a frozen-pool ladder that decides whether a
-new policy is actually stronger than the one before it.
+**Training for Clash Royale bots**: self-play rollouts over
+[RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) environments, a PPO learner for the game's
+card-and-tile action space, and a ladder of frozen opponents that decides whether a new policy is
+really stronger than the one before it. For people who train agents.
 
-> **Status: the design is settled, the harness is not written.** The package imports and its
-> 9 tests pass, and it carries six seed modules that do not run. There is no rollout worker,
-> no learner wired to an environment, no ladder, no checkpoint format and no metrics sink.
-> What this repo offers today is the design below, written against interfaces that do exist —
-> a specification a contributor can implement against.
+<p align="center"><img src="docs/media/training-run.svg" width="100%" alt="Video placeholder: a training run watched live, the learner's rating against the frozen pool beside loss, entropy and steps per second"></p>
 
-## What the harness will be
+RoyaleLearn is the top of the Royale stack, the part that turns the environments into a trained
+bot. Its design is settled and written down; the harness itself is not written yet. Everything it
+will sit on runs today: a Rust battle engine that plays a whole match in under a second,
+environments that hand a policy the exact set of legal moves, and a viewer that watches a training
+run as it happens. This page shows what the harness will be, what runs now, and where the two meet.
 
-Five pieces. Each is an ABC with a default implementation and none of the defaults is
-special, so a rating scheme, a sampler or a sink can be swapped without forking the loop.
+## What it will do
 
-1. **Rollout workers** over `royalegym`'s self-play vectorised env (`ClashSelfPlayVecEnv`),
-   with the Rust-backed default observations and actions so Python stays off the per-tick
-   path. Measured 2026-09: a Python observation builder capped throughput at roughly 520
-   env-steps/s against the engine's ~25 000 ticks/s. The workers are Python first and move to
-   Rust when they become the bottleneck, as the engine's tick loop already did.
-2. **A PPO learner** in torch over `Discrete(2305)` — a masked categorical head, one policy
-   for both seats — replacing the seed modules' Rocket League policies.
-3. **A frozen-pool ladder**: periodic policy snapshots, Elo with confidence intervals against
-   the pool, and the win rate that gates a snapshot into it. The pool bookkeeping already
-   exists one layer down (`royalegym.selfplay.OpponentPool`: snapshots, uniform / latest /
-   PFSP sampling, Elo, head-to-head records, save and load); this repo drives it, runs the
-   evaluation matches and owns the gate (`ladder.py`).
-4. **Checkpoints** holding the policy, the critic, the optimizer, the pool index, and the env
-   configuration and seeds that produced them — enough to resume a run or reproduce a result
-   rather than approximate it. The engine is deterministic and seedable and a recorded trace
-   re-verifies bit for bit (`royalegym.replay`), so "reproduce" can mean exactly that.
-5. **A metrics sink** fed from both sides: the simulator (ticks/s, env-steps/s, episode
-   length, crown and tower statistics, illegal-action rate) and the learner (loss, KL,
-   entropy, Elo against the pool), streamed to Weights & Biases.
+<table>
+  <tr>
+    <td width="33%" align="center"><img src="docs/media/self-play-env.png" width="100%" alt="RoyaleViser attached live to a batched self-play environment stepping under a random policy: tick 2130, 13 units, 30 frames a second"><br><b>The environment it trains on, running today</b><br><sub>A self-play environment under a random policy, watched live in RoyaleViser at 30 frames a second.</sub></td>
+    <td width="33%" align="center"><img src="docs/media/rollout-workers.svg" width="100%" alt="Image placeholder: N battles stepping as one batch of 2N player slots, steps per second rising as workers are added"><br><b>Rollout workers</b><br><sub>N battles step as one batch of 2N players, so one policy collects both sides' experience.</sub></td>
+    <td width="33%" align="center"><img src="docs/media/ppo-learner.svg" width="100%" alt="Image placeholder: the 2305 logits of one decision drawn as 4 hand cards over an 18 x 32 tile grid, illegal tiles blanked"><br><b>One masked head over 2305 actions</b><br><sub>No-op, or one of 4 hand cards on one of 18 x 32 tiles; moves the game would refuse are masked out.</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><img src="docs/media/frozen-pool-ladder.svg" width="100%" alt="Image placeholder: every pool snapshot's Elo with its confidence bar and the win-rate gate a snapshot must clear"><br><b>A ladder of frozen opponents</b><br><sub>Past policies form a pool the learner is rated against; a snapshot joins when its win rate clears the gate.</sub></td>
+    <td width="33%" align="center"><img src="docs/media/checkpoints.svg" width="100%" alt="Image placeholder: a checkpoint's contents and a resumed run's curve lying exactly on the original's"><br><b>Checkpoints that reproduce</b><br><sub>Policy, critic, optimizer, pool and seeds in one file, so a resumed run lies on the original's curve.</sub></td>
+    <td width="33%" align="center"><img src="docs/media/metrics-sink.svg" width="100%" alt="Image placeholder: one Weights &amp; Biases run with environment and learner metrics side by side"><br><b>Metrics from both sides</b><br><sub>One Weights &amp; Biases run: steps per second and crowns from the environment, loss and Elo from the learner.</sub></td>
+  </tr>
+</table>
 
-**The metric.** A bot is judged on its ranking against the frozen pool, with confidence
-intervals, and that ranking is the release gate. Agreement with the simulator is not the
-metric — that is RoyaleSim's concern, measured against recordings of the real game and
-tracked in that repo's calibration ledger. A bot that exploited a simulator artefact would
-score well on parity and badly on the thing anyone cares about.
+Five of the six tiles are planned, not built. Each of those five pieces will be an abstract base
+class with a default implementation, so a rating scheme, a sampler or a metrics sink can be swapped
+without forking the training loop.
 
-**Built once, completely.** There is deliberately no baseline learner, no throwaway trainer
-and no "simple version first". The layers below are already finished to that standard, and a
-learner that is 80% right produces a bot that loses for reasons nobody can attribute: a wrong
-ladder makes a good policy look bad, a wrong checkpoint makes a good run unreproducible, a
-rollout worker that quietly drops episodes shows up as a plateau rather than as an error.
-Each costs more to diagnose later than to design now, so a partial harness is not a
-milestone. `docs/design.md` carries the reasoning and the conventions the harness is held to.
+## Try it
 
-## The surface it is built against
-
-Everything below this repo runs today, so the shapes the learner has to handle are not
-hypothetical:
+The harness is not written, but the surface it is built against is. After the install below
+(`royalegym` with the engine built) this shows the batch a rollout worker will consume:
 
 ```python
 from royalegym import ClashParallelEnv, ClashSelfPlayVecEnv
@@ -62,82 +44,51 @@ from royalegym.rust_engine import RustEngine
 venv = ClashSelfPlayVecEnv(num_games=4, env_fn=lambda: ClashParallelEnv(RustEngine()))
 obs, info = venv.reset(seed=0)
 
-venv.num_envs             # 8  -- both seats of 4 games in one batch
-venv.single_action_space  # Discrete(2305)
-{k: v.shape for k, v in obs.items()}
-# {'action_mask': (8, 2305), 'spatial': (8, 21, 32, 18), 'vector': (8, 355)}
+print(venv.num_envs)                            # both players of 4 battles, one batch
+print(venv.single_action_space)
+print({k: v.shape for k, v in obs.items()})
 ```
 
-What that implies for the learner:
+```
+8
+Discrete(2305)
+{'action_mask': (8, 2305), 'spatial': (8, 21, 32, 18), 'vector': (8, 355)}
+```
 
-- **One head serves both players.** Observations and actions are in the acting player's own
-  frame, so blue and red feed a single batch and a single policy.
-- **Action 0 is no-op; the other 2304 are (hand slot, tile)** — 4 slots over an 18 x 32 tile
-  grid. `action_mask` is per *pair*, not per factor: elixir is per card and the legal
-  territory depends on the card, so the mask says "Giant here, not Fireball" exactly. The
-  learner is expected to apply it to the logits, and illegal-action rate is a tracked metric.
-- **One step is one decision**, 500 ms of game time by default (`decision_ms`); timing is
-  expressed by choosing no-op on a step rather than by a separate sub-action.
-- **Autoreset is same-step**: when a game ends the returned observation is already the next
-  game's first, with the final observation and info in `infos["final_obs"]` /
-  `infos["final_info"]`. The rollout worker has to split episodes on that, not on the
-  observation.
-- **Runs are seedable end to end**, which is what makes checkpoint-level reproduction
-  meaningful.
+Eight rows: two players per battle, both feeding one policy, each seeing its own king at the bottom.
+`action_mask` marks each row's legal card-and-tile moves, 691 of 2305 on the first step. One step is
+one decision, half a second of game time by default (`decision_ms`); waiting is the no-op. When a
+battle ends its last observation goes to `infos["final_obs"]` and `infos["final_info"]`; its row
+already holds the next one's first. With `ROYALEVISER=127.0.0.1:9870` set, another terminal's
+`python -m royaleviser --stream 127.0.0.1:9870` watches the batch step; that made the still above.
 
-A viewer can attach to any of it out of process (`ROYALEVISER=host:port`, handled by
-`royalegym`), never through this repo.
+The package itself imports without torch, and says so when asked for a piece that needs it:
 
-## What is in the repo today
+```
+$ python -c "import royalelearn; royalelearn.PPOLearner"
+ImportError: royalelearn.PPOLearner lives in the vendored rlgym_ppo seed royalelearn/ppo_learner.py, which needs 'torch' (not installed). The seed is not wired to RoyaleGym; see README.md.
+```
 
-- `royalelearn/__init__.py` — the package, importable in the workspace venv without torch or
-  `rlgym_ppo`. It names the seed classes (`royalelearn.SEED_CLASSES`) and resolves them
-  lazily, so a missing dependency is a clear error rather than an import failure at startup:
+## With the rest of the stack
 
-  ```
-  $ python -c "import royalelearn; royalelearn.PPOLearner"
-  ImportError: royalelearn.PPOLearner lives in the vendored rlgym_ppo seed
-  royalelearn/ppo_learner.py, which needs 'torch' (not installed).
-  The seed is not wired to RoyaleGym; see README.md.
-  ```
+<p align="center"><img src="docs/media/family.svg" width="100%" alt="The five Royale repos: RoyaleLearn trains on RoyaleGym, which steps RoyaleSim; RoyaleViser draws traces and streams; RoyaleLive's recordings calibrate RoyaleSim"></p>
 
-- `royalelearn/continuous_policy.py`, `discrete_policy.py`, `multi_discrete_policy.py`,
-  `value_estimator.py`, `experience_buffer.py`, `ppo_learner.py` — six modules taken as a
-  seed: copied verbatim and unmodified from
-  [rlgym-ppo](https://github.com/AechPro/rlgym-ppo) (Copyright Matthew Allen, Apache License
-  2.0; see `NOTICE` and `LICENSE-APACHE-2.0`). They import `torch` and `rlgym_ppo`, are bound
-  to Rocket League's action layout (`MultiDiscreteFF` hardcodes its 8 bins) and do not run
-  here. They are a reference for what a working PPO harness looks like, not a foundation:
-  they are excluded from ruff (`pyproject.toml`) and will be replaced, not cleaned.
-- `tests/test_package.py` — the import contract above, and that both layers below
-  (`royalegym`, `royalesim`) import from the workspace venv.
+RoyaleLearn is the top layer of five sibling repos, four of them public under the GitHub
+organisation [RoyaleGym](https://github.com/RoyaleGym). It imports `royalegym` and nothing from the
+engine directly, and dependencies run one way, RoyaleLearn to RoyaleGym to RoyaleSim. If you know
+RLGym, RocketSim and RLGym-PPO, this is that split with the same names.
 
-Nothing is wired to an environment yet.
-
-## Where this fits
-
-The five repos are siblings in one workspace sharing one venv; four are public under the
-GitHub organization [RoyaleGym](https://github.com/RoyaleGym).
-
-| Repo | What it does | Package |
+| Repo | What it is | To this repo |
 |---|---|---|
-| [RoyaleSim](https://github.com/RoyaleGym/RoyaleSim) | deterministic integer-tick battle engine (Rust + PyO3): pathfinding, targeting, combat, spells, elixir, win conditions | `royalesim` |
-| [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) | environment API over the engine: observations, actions and masks, rewards, state mutators, done conditions; Gymnasium, PettingZoo and self-play vec envs | `royalegym` |
-| **RoyaleLearn** | this repo: the training harness | `royalelearn` |
-| [RoyaleViser](https://github.com/RoyaleGym/RoyaleViser) | out-of-process viewer for traces, captures and a running env | `royaleviser` |
-| RoyaleLive (private) | the client instrument that records ground-truth traces from the real game | scripts |
+| [RoyaleSim](https://github.com/RoyaleGym/RoyaleSim) | the battle engine: deterministic, integer-only Rust, its movement rules measured against recordings of real battles | the battle every rollout runs, reached only through RoyaleGym |
+| [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) | the environment API: observations, actions, rewards; Gymnasium, PettingZoo and self-play envs | the environments the workers step, the legality mask the learner applies, and the opponent-pool bookkeeping the ladder will drive (`royalegym.selfplay.OpponentPool`: snapshots, uniform / latest / prioritised sampling, Elo, head-to-head records, save and load) |
+| **RoyaleLearn** (this repo) | the training harness: self-play rollouts, PPO, a ladder of frozen opponents, checkpoints | the harness |
+| [RoyaleViser](https://github.com/RoyaleGym/RoyaleViser) | the viewer: recordings, engine traces and running environments in its own window | a training run streams to it like any environment (`ROYALEVISER=host:port`, handled by `royalegym`), never through this repo |
+| RoyaleLive | the private client instrument that records real battles | nothing directly: its recordings calibrate the engine, and a bot trained here is judged by its wins, not by its agreement with the engine |
 
-Dependency direction is strictly `RoyaleLearn -> RoyaleGym -> RoyaleSim`. This repo imports
-`royalegym` (environments, the viser publisher) and nothing from RoyaleSim directly, and it
-never touches calibration data.
-
-The layering will look familiar if you know RLGym and RocketSim — environment API over
-engine, learner on top, viewer out of process — which is good prior art for a project shape.
-
-## Workspace setup
-
-The repos are cloned as siblings into one folder and share one venv at that folder's root
-(Python 3.12; Rust 1.80+ with cargo for the engine):
+What flows in: environments from RoyaleGym, with the engine build under them. What flows out:
+policy snapshots and checkpoints (formats not fixed yet), a metrics stream, and one frame per env
+step for a viewer that is listening.
 
 ```
 mkdir Royale && cd Royale
@@ -145,33 +96,61 @@ git clone https://github.com/RoyaleGym/RoyaleSim.git
 git clone https://github.com/RoyaleGym/RoyaleGym.git
 git clone https://github.com/RoyaleGym/RoyaleViser.git
 git clone https://github.com/RoyaleGym/RoyaleLearn.git
-python -m venv .venv
+python -m venv .venv                                                    # Python 3.12
 .venv\Scripts\python -m pip install maturin pytest hypothesis ruff
-cd RoyaleSim && ..\.venv\Scripts\python tools\extract_arena.py && ..\.venv\Scripts\python tools\extract_cards.py && ..\.venv\Scripts\python tools\extract_globals.py && cd ..   # RoyaleSim/data/derived/ (gitignored; the crate compiles arena.json in)
-cd RoyaleSim   && ..\.venv\Scripts\maturin develop --release && cd ..   # royalesim into the venv (~1 min, ~1.5 GB RAM)
-.venv\Scripts\python -m pip install -e RoyaleGym                          # numpy, gymnasium, pettingzoo, msgspec
-.venv\Scripts\python -m pip install -e RoyaleViser                        # pygame
-.venv\Scripts\python -m pip install -e RoyaleLearn                        # this repo; add [torch] for the seed modules
-                                                                          # RoyaleLive (private): not needed for anything here
+cd RoyaleSim && ..\.venv\Scripts\python tools\extract_arena.py && ..\.venv\Scripts\python tools\extract_cards.py && ..\.venv\Scripts\python tools\extract_globals.py && cd ..   # generates RoyaleSim/data/derived/
+cd RoyaleSim && ..\.venv\Scripts\maturin develop --release && cd ..     # builds the engine into the venv (~1 min, ~1.5 GB RAM)
+.venv\Scripts\python -m pip install -e RoyaleGym
+.venv\Scripts\python -m pip install -e RoyaleViser
+.venv\Scripts\python -m pip install -e RoyaleLearn
 ```
 
-The order matters: `royalelearn` declares `royalegym` as a dependency and pip resolves it
-from the venv, never from PyPI. `pip install -e "RoyaleLearn[torch]"` adds torch; the seed
-modules additionally need `rlgym_ppo`, which is not a dependency and will not become one.
+This repo needs the whole block, in that order: `royalelearn` declares `royalegym` as a dependency
+and pip resolves it from the venv, never from PyPI. `pip install -e "RoyaleLearn[torch]"` adds
+torch; the seed modules below additionally need `rlgym_ppo`, which is not a dependency and will not
+become one.
 
-## Tests
+## Status (2026-09-21)
+
+Working:
+
+- The package imports in the workspace venv without torch or `rlgym_ppo`; `royalelearn.SEED_CLASSES`
+  names the seed classes, and asking for one raises an `ImportError` that names the missing package
+  (above).
+- Six seed modules, `continuous_policy.py`, `discrete_policy.py`, `multi_discrete_policy.py`,
+  `value_estimator.py`, `experience_buffer.py` and `ppo_learner.py`, copied verbatim from
+  [rlgym-ppo](https://github.com/AechPro/rlgym-ppo) (Copyright Matthew Allen, Apache License 2.0;
+  see `NOTICE` and `LICENSE-APACHE-2.0`). They import `torch` and `rlgym_ppo`, are bound to Rocket
+  League's action layout and do not run here. They are a reference for what a working PPO harness
+  looks like, not a foundation: ruff excludes them and they will be replaced, not cleaned.
+- Everything below this repo: the environments, the mask, the same-step autoreset, seeding end to
+  end, the opponent-pool bookkeeping and the viewer stream.
+
+Open, which is the harness itself:
+
+- Rollout workers over `ClashSelfPlayVecEnv`, Python first and Rust when they become the
+  bottleneck. A Python observation builder measured in 2026-09 capped at about 520 env steps per
+  second against roughly 25 000 engine ticks per second (a tick is the game's 50 ms step), so
+  RoyaleGym's move of the default observation into the engine comes first.
+- The PPO learner over `Discrete(2305)` with the mask on the logits; the ladder and its gate; the
+  checkpoint format; the metrics sink. Nothing is wired to an environment yet.
+- Deliberately no baseline learner, no throwaway trainer and no "simple version first": the layers
+  below are finished to that standard, and a partial harness is not a milestone.
+  [`docs/design.md`](docs/design.md) carries the reasoning and the conventions the harness is held to.
+
+Tests:
 
 ```
-cd RoyaleLearn
-..\.venv\Scripts\python -m pytest -q      # 9 passed
-..\.venv\Scripts\ruff check .             # All checks passed!  (the six seed files are excluded)
+cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 9 passed (2026-09-21)
+..\.venv\Scripts\ruff check .                              # All checks passed!  (the six seed files are excluded)
 ```
 
-## Licence
+The tests are the import contract above, and that both layers below (`royalegym`, `royalesim`)
+import from the workspace venv.
 
-MIT (`LICENSE`), except the six files listed in `NOTICE`, which are copied verbatim
-from [rlgym-ppo](https://github.com/AechPro/rlgym-ppo) (Copyright Matthew Allen) and
-remain under the Apache License 2.0 (`LICENSE-APACHE-2.0`).
+Read next: [`docs/design.md`](docs/design.md) (the five pieces, the metric, the conventions), then
+the [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) README for the environments and the
+[RoyaleSim](https://github.com/RoyaleGym/RoyaleSim) README for the engine.
 
 ## Community
 
@@ -179,3 +158,9 @@ Training runs, ladder results and harness design are discussed in the project's 
 [**https://discord.gg/4D2BS5JBHP**](https://discord.gg/4D2BS5JBHP)
 
 Issues and pull requests on this repo are welcome too.
+
+## Licence
+
+MIT (`LICENSE`), except the six files listed in `NOTICE`, which are copied verbatim
+from [rlgym-ppo](https://github.com/AechPro/rlgym-ppo) (Copyright Matthew Allen) and
+remain under the Apache License 2.0 (`LICENSE-APACHE-2.0`).
