@@ -1308,6 +1308,24 @@ class LearningCoordinator:
             self._checkpoint()
         return command
 
+    def _say_collected(self, started: float) -> None:
+        """Say that collection is done and the update has it, before the long quiet part.
+
+        An iteration prints nothing until its metrics row, and at the shipped laptop profile
+        that row is minutes away -- almost all of it inside one call to the update, which
+        collects no rounds and answers no control letter. A run silent for that long is
+        indistinguishable from one that has stopped, and the person watching kills it, which
+        has happened twice on this project for two unrelated reasons. One line, naming which
+        phase the silence belongs to, is the difference between waiting and killing it.
+        """
+        elapsed = time.perf_counter() - started
+        geo = self.geometry
+        self.printer(
+            f"collected     {geo.cycles} cycles, {geo.cycles * geo.learner_rows} timesteps in "
+            f"{elapsed:.1f}s ({geo.cycles * geo.n_slots / max(elapsed, 1e-9):.0f} env steps/s); "
+            f"updating"
+        )
+
     def _collect(self, plan: SlotPlan, sched: ScheduleState) -> dict[str, Any]:
         """The rectangle, one shard-round at a time.
 
@@ -1371,6 +1389,7 @@ class LearningCoordinator:
                 self.matchmaker.on_episode(record)
             episodes.extend(round_.episodes)
         self._handle_failures()
+        self._say_collected(started)
         return {
             "episodes": episodes,
             "rounds": rounds,

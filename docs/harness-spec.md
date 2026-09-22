@@ -2621,7 +2621,7 @@ being hunted, and a false halt costs everything the run was for.
 | `illegal_actions` | `env/illegal_action_rate > 0` | 1 | **halt** | a mask bug, an unmasked policy, or a wrong action encoding. With a correct mask it is exactly zero |
 | `ratio_invariant` | `ppo/ratio_max_abs_dev > 5 * ratio_atol` | 1 | **halt** | a mask, codec or weight-version mismatch (section 9.6). The multiple of the configured tolerance is what keeps the alarm meaningful in fp32 and under bf16 alike; all three failures it is aimed at produce a deviation of order one |
 | `nonfinite` | any loss, gradient or logit non-finite | 1 | **halt** | |
-| `buffer_overflow` | `health/buffer_fill_frac > 0.98` | 1 | **halt** | an invariant is broken |
+| `buffer_overflow` | `health/buffer_fill_frac > 1.0` | 1 | **halt** | an invariant is broken. A healthy rectangle reads **exactly one**: every cell is written once per iteration, so anything under one is a cell nobody filled and anything over it is impossible. The threshold is above one and not below it for that reason — a bound of 0.98 would halt every healthy run on its first iteration |
 | `worker_failures` | `health/worker_restarts` rose | 1 | warn | |
 | `worker_failures_persistent` | rose on three consecutive iterations | 3 | **halt** | |
 | `clip_pinned` | `ppo/clip_fraction > 0.5` | 3 | **halt** | mask disagreement, or a learning rate far too high |
