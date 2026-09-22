@@ -131,8 +131,9 @@ Discrete(2305)
 Eight rows, because four battles have two players each and both feed one bot. Each row sees its own
 king tower at the bottom, so the bot never has to learn the board twice.
 
-`action_mask` marks the legal card-and-tile moves for that row. On the first step, 691 of the 2305
-are legal.
+`action_mask` marks the legal card-and-tile moves for that row. How many are legal depends on
+the deck and on what is in hand, and it differs between the two seats when their decks do: on
+the first step with randomly dealt decks it was 691 for one seat and 1259 for the other.
 
 One step is one decision, and a decision is half a second of game time by default. That is the
 `decision_ms` setting. Waiting is a legal choice, and it is the no-op.
@@ -237,7 +238,7 @@ git clone https://github.com/RoyaleGym/RoyaleViser.git
 git clone https://github.com/RoyaleGym/RoyaleLearn.git
 python -m venv .venv                                                    # Python 3.12
 .venv\Scripts\python -m pip install maturin pytest hypothesis ruff
-cd RoyaleSim && ..\.venv\Scripts\python tools\extract_arena.py && ..\.venv\Scripts\python tools\extract_cards.py && ..\.venv\Scripts\python tools\extract_globals.py && cd ..   # generates RoyaleSim/data/derived/
+cd RoyaleSim && ..\.venv\Scripts\python tools\extract_arena.py && ..\.venv\Scripts\python tools\extract_cards.py --vintage 2018 && ..\.venv\Scripts\python tools\extract_cards.py --vintage 2018 --out data\derived\cards.json && ..\.venv\Scripts\python tools\extract_globals.py && cd ..   # generates RoyaleSim/data/derived/
 cd RoyaleSim && ..\.venv\Scripts\maturin develop --release && cd ..     # builds the engine into the venv. Give it a few minutes and some free memory.
 .venv\Scripts\python -m pip install -e RoyaleGym
 .venv\Scripts\python -m pip install -e RoyaleViser
