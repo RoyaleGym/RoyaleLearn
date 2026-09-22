@@ -46,12 +46,17 @@ def observations(mock_env_spec: Any) -> list[dict[str, np.ndarray]]:
 
 
 def _play(built: Fixture, *, ticks: int = 1) -> Any:
-    """Fill every cell, open an iteration and record a clean round at every cycle."""
+    """Fill every cell, open an iteration and record a clean round at every cycle.
+
+    The trailing round at cycle ``T`` is one of them: it has no row of its own, but it is what
+    completes row ``T - 1``, and a row nothing completed is not a row the update gathers.
+    """
     built.fill()
     buffer = built.buffer
     buffer.begin_iteration(plan_for(SLOTS), CYCLES)
     slots = np.arange(SLOTS, dtype=np.int64)
-    for cycle in range(CYCLES):
+    for cycle in range(CYCLES + 1):
+        trailing = cycle == CYCLES
         buffer.record_round(
             round_for(
                 cycle,
@@ -59,8 +64,8 @@ def _play(built: Fixture, *, ticks: int = 1) -> Any:
                 rows=slots,
                 tick=np.full(SLOTS, cycle * ticks, dtype=np.int32),
             ),
-            actions=np.zeros(SLOTS, dtype=np.int16),
-            log_probs=np.zeros(SLOTS, dtype=np.float32),
+            actions=None if trailing else np.zeros(SLOTS, dtype=np.int16),
+            log_probs=None if trailing else np.zeros(SLOTS, dtype=np.float32),
         )
     return buffer
 

@@ -88,17 +88,47 @@ The harness runs: `royalelearn train` collects rollouts, updates, rates, checkpo
 `royalelearn resume` continues a run from what it wrote. What is not settled is written here
 rather than left to be rediscovered.
 
-**Rewards reach the buffer one cycle late.** A worker publishes the result of stepping cycle `c`
-as cycle `c + 1`, and `RectBuffer.record_round` files the reward and the terminated and truncated
-flags at the cycle the round carries: beside the next action, not the one that earned them. GAE
-reads row `t` as the result of action `t`. So each action is credited with the previous step's
-reward and sees its own only through the lambda-weighted carry; an episode's last reward and end
-flag land on the first row of the episode after it; and the reward of every iteration's last step
-is dropped, because `record_round` skips the trailing round as the bootstrap cycle. Seen
-directly on `MockEngine`: a probe reward that pays exactly `gamma - 1` on every step reads 0.0 in
-row 0 of every iteration and `gamma - 1` in every other row. The fix is to file those scalars, and
-the final observations, one cycle earlier, the trailing round included. It changes what every run
-so far has optimised, so it comes before any training result is read.
+**Every run recorded before this batch optimised a different objective, because the rewards
+reached the buffer one cycle late.** A worker publishes the result of stepping cycle `c` as cycle
+`c + 1`, and `RectBuffer.record_round` filed the reward and the two done flags at the cycle the
+round carried: beside the next action, not the one that earned them. GAE reads row `t` as the
+result of action `t`. So each action was credited with the previous step's reward and saw its own
+only through the lambda-weighted carry; an episode's last reward and its end flag landed on the
+first row of the episode after it, which cut the trajectory a step late and told the opening row
+of each episode it had no future; and the reward of every iteration's last step was dropped
+entirely, because `record_round` skipped the trailing round as the bootstrap cycle. The same
+off-by-one moved the frame-stack boundary: a stacked cell asked `episode_end` of the row below
+it, so the second row of every episode was shown a zero history and the first row of every
+episode was shown the tail of the battle before it.
+
+The rectangle now stores one timestep per row. A round's arriving scalars -- reward, terminated,
+truncated, deploy status, episode end, and the validity of the publication that carries them --
+are written at `cycle - 1`, beside the action that produced them; its own observation, tick,
+group and action stay at `cycle`; and the trailing round, which has no row of its own, is what
+supplies row `T - 1`. The final observation a truncation is bootstrapped from is recorded against
+the truncated row rather than the round that reported it. `tests/test_rollout_alignment.py` drives
+the reference rollout with a reward that names the tick each step ended at and checks every row
+against its own observation's clock, against the environment's own episode totals, and through to
+the advantage the estimator produces.
+
+What it means for earlier runs: their metric rows and checkpoints describe a different objective
+and cannot be compared with anything collected after the fix, and resuming one continues a run
+whose old rows were computed the other way. The environment spec is unchanged, so the run identity
+and the ladder's context digest do NOT separate them -- unlike the reward change at 23d971c, this
+one is invisible to the identity, and the commit is the only boundary.
+
+**A truncated row's bootstrap observation is stacked with frames one decision too old, at a frame
+stack above one.** `PPOUpdate.critic_on_final_obs` asks `RectGather.observations` for the
+truncated cell and has it replace frame zero with the observation the episode was cut off in. The
+frames behind it should be that row's own observation and the ones before it; they are the rows
+below it instead, because `current` replaces a frame rather than being prepended to one. Every
+shipped config sets `obs.frame_stack` to 1, where a stack has no history frames and the value is
+exactly right, so nothing measured so far is affected. The fix belongs in `learn/inference.py`
+and `learn/ppo.py`: the gather needs a way to say "the stack that continues past this row", which
+the rectangle can answer and the caller currently cannot ask. The same bound applies to a
+checkpoint written before the alignment fix: its carried `history_episode_end` column is in the
+old convention, so the first iteration after such a resume mis-stacks one row per slot, again
+only above a frame stack of one.
 
 **The forced-row decision, which is the one that changes what the next version is.** In the
 first real iterations, 93% of collected decisions had exactly one legal action: the elixir bar

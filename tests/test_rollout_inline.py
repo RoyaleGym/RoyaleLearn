@@ -255,10 +255,17 @@ def test_a_battle_changes_hands_only_where_an_episode_ended(ran: Ran) -> None:
 
     It is what makes "one policy for one whole episode" checkable: a partially controlled
     trajectory would have a group column that changes with no end beside it.
+
+    The Drive's columns are indexed by the cycle each round was published at, which is where
+    the invariant's inputs differ: the group is the round's own and the episode end is the step
+    that arrived at it, so the ends are read from one row up, exactly as the rectangle stores
+    them.
     """
-    assignments_constant_within_episodes(ran.out.group, ran.out.episode_end)
+    ends = ran.out.episode_end[1:]
+    assignments_constant_within_episodes(ran.out.group[:-1], ends)
     changed = (ran.out.group[1:] != ran.out.group[:-1]).any()
     assert changed, "no battle ever changed hands, so the invariant proved nothing"
+    assert (ends != EPISODE_END_NONE).any(), "no episode ended, so nothing was allowed"
 
 
 def test_scripted_seats_are_played_by_the_worker(ran: Ran) -> None:

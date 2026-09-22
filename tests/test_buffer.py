@@ -18,6 +18,9 @@ import numpy as np
 import pytest
 
 from royalelearn.api.rollout import (
+    EPISODE_END_LOSS,
+    EPISODE_END_NONE,
+    EPISODE_END_WIN,
     GROUP_DEAD,
     GROUP_LEARNER,
     ROLE_MIRROR,
@@ -89,6 +92,7 @@ def round_for(
     valid: bool = True,
     episode_end: np.ndarray | None = None,
     tick: np.ndarray | None = None,
+    deploy_status: int = -1,
 ) -> RolloutRound:
     count = slots.size
     zeros = np.zeros(count, dtype=bool)
@@ -102,12 +106,28 @@ def round_for(
         terminated=terminated if terminated is not None else zeros,
         truncated=truncated if truncated is not None else zeros,
         valid=np.full(count, valid, dtype=bool),
-        deploy_status=np.full(count, -1, dtype=np.int8),
+        deploy_status=np.full(count, deploy_status, dtype=np.int8),
         tick=tick if tick is not None else np.full(count, cycle, dtype=np.int32),
         episode_end=episode_end
         if episode_end is not None
         else np.zeros(count, dtype=np.int8),
     )
+
+
+def record_clean_iteration(buffer: RectBuffer, slots: np.ndarray, cycles: int = CYCLES) -> None:
+    """Every round of an iteration that ended no episode and lost no worker.
+
+    The trailing round at cycle ``T`` is one of them. It has no row of its own, so it is handed
+    no action, but it is where row ``T - 1``'s reward and validity come from and a rectangle
+    filled without it has a last row nothing completed.
+    """
+    for cycle in range(cycles + 1):
+        trailing = cycle == cycles
+        buffer.record_round(
+            round_for(cycle, slots, rows=slots),
+            actions=None if trailing else np.zeros(slots.size, dtype=np.int16),
+            log_probs=None if trailing else np.zeros(slots.size, dtype=np.float32),
+        )
 
 
 class Fixture:
@@ -231,32 +251,156 @@ def test_record_round_writes_exactly_the_cells_it_was_given(rect: Fixture) -> No
         actions=np.array([3, 0, 7], dtype=np.int16),
         log_probs=np.array([-1.0, -2.0, -3.0], dtype=np.float32),
     )
-    assert np.array_equal(buffer.reward[2, slots], rewards)
-    assert np.array_equal(buffer.terminated[2, slots], terminated)
+    # The step this round reports finished at cycle 2 and began at cycle 1, so its reward and
+    # its flag belong beside the action that earned them, one row down.
+    assert np.array_equal(buffer.reward[1, slots], rewards)
+    assert np.array_equal(buffer.terminated[1, slots], terminated)
+    assert buffer.valid[1, slots].all()
     assert np.array_equal(buffer.action[2, slots], np.array([3, 0, 7]))
-    assert buffer.valid[2, slots].all()
     untouched = np.setdiff1d(np.arange(SLOTS), slots)
-    assert not buffer.valid[2, untouched].any()
-    assert not buffer.valid[np.arange(CYCLES) != 2].any()
+    assert not buffer.valid[1, untouched].any()
+    assert not buffer.valid[np.arange(CYCLES) != 1].any()
     assert np.array_equal(buffer.group[2, untouched], np.full(untouched.size, GROUP_DEAD))
 
 
-def test_the_bootstrap_cycle_carries_observations_and_no_scalars(rect: Fixture) -> None:
+def test_every_scalar_of_a_round_lands_on_the_row_it_describes(rect: Fixture) -> None:
+    """Each of a round's columns, and which side of the boundary it is on.
+
+    A round carries a state and the step that arrived at it, and those are two timesteps. The
+    observation, the tick that dates it, the group holding the seat and the action taken there
+    are the round's own cycle. The reward, the two done flags, the deploy status, the episode
+    end and the validity of the publication all describe the step, which began one cycle
+    earlier and is the step the row below acted.
+
+    Every quantity names the cycle it came from, so a column stored one row out reads as
+    another cycle's number rather than as a plausible one.
+    """
+    buffer = rect.buffer
+    buffer.begin_iteration(plan_for(SLOTS), CYCLES)
+    slots = np.arange(SLOTS, dtype=np.int64)
+    #: The round at this cycle reports an ended episode, and nothing else does.
+    won, lost, dead = 3, 5, 2
+    for cycle in range(CYCLES + 1):
+        ends = np.zeros(SLOTS, dtype=np.int8)
+        if cycle == won:
+            ends[:] = EPISODE_END_WIN
+        elif cycle == lost:
+            ends[:] = EPISODE_END_LOSS
+        buffer.record_round(
+            round_for(
+                cycle,
+                slots,
+                rows=np.array([buffer.layout.row_index(cycle, int(s)) for s in slots]),
+                group=GROUP_LEARNER if cycle <= won else 0,
+                reward=np.full(SLOTS, 100.0 + cycle, dtype=np.float32),
+                terminated=np.full(SLOTS, cycle == won),
+                truncated=np.full(SLOTS, cycle == lost),
+                valid=cycle != dead,
+                episode_end=ends,
+                tick=np.full(SLOTS, 10 * cycle, dtype=np.int32),
+                deploy_status=cycle,
+            ),
+            actions=np.full(SLOTS, 20 + cycle, dtype=np.int16),
+            log_probs=np.full(SLOTS, -1.0 * cycle, dtype=np.float32),
+        )
+    rows = np.arange(CYCLES)
+    # Arriving: the row that acted is one below the cycle that reported.
+    assert np.array_equal(buffer.reward[:CYCLES, 0], 100.0 + rows + 1)
+    assert np.array_equal(buffer.deploy_status[:CYCLES, 0], rows + 1)
+    assert np.array_equal(np.flatnonzero(buffer.terminated[:CYCLES, 0]), [won - 1])
+    assert np.array_equal(np.flatnonzero(buffer.truncated[:CYCLES, 0]), [lost - 1])
+    assert buffer.episode_end[won - 1, 0] == EPISODE_END_WIN
+    assert buffer.episode_end[lost - 1, 0] == EPISODE_END_LOSS
+    assert np.array_equal(
+        np.flatnonzero(buffer.episode_end[:, 0] != EPISODE_END_NONE), [won - 1, lost - 1]
+    )
+    assert np.array_equal(np.flatnonzero(~buffer.valid[:CYCLES, 0]), [dead - 1])
+    # Own: the state the round published, and what was done in it.
+    assert np.array_equal(buffer.tick[:CYCLES, 0], 10 * rows)
+    assert np.array_equal(buffer.action[:CYCLES, 0], 20 + rows)
+    assert np.array_equal(buffer.log_prob[:CYCLES, 0], -1.0 * rows)
+    assert np.array_equal(buffer.group[:CYCLES, 0] == GROUP_LEARNER, rows <= won)
+
+
+def test_the_trailing_round_is_the_only_source_of_the_last_rows_scalars(
+    rect: Fixture,
+) -> None:
+    """Cycle ``T`` carries the bootstrap observation and the reward of the step before it.
+
+    Dropping it costs every iteration its last transition, which is a reward the environment
+    gave and the objective then never sees.
+    """
     buffer = rect.buffer
     buffer.begin_iteration(plan_for(SLOTS), CYCLES)
     slots = np.arange(SLOTS, dtype=np.int64)
     buffer.record_round(
-        round_for(CYCLES, slots, rows=slots),
-        actions=np.zeros(SLOTS, dtype=np.int16),
-        log_probs=np.zeros(SLOTS, dtype=np.float32),
+        round_for(CYCLES, slots, rows=slots, reward=np.full(SLOTS, 9.0, dtype=np.float32)),
+        actions=None,
+        log_probs=None,
     )
-    assert not buffer.valid.any()
+    assert np.array_equal(buffer.reward[CYCLES - 1], np.full(SLOTS, 9.0))
+    assert buffer.valid[CYCLES - 1].all()
+    assert not buffer.valid[: CYCLES - 1].any()
+    # It has no row of its own, so nothing it says about its own cycle is stored.
+    assert not buffer.action.any()
+    assert not buffer.tick.any()
     with pytest.raises(IndexError):
         buffer.record_round(
             round_for(CYCLES + 1, slots, rows=slots),
             actions=np.zeros(SLOTS, dtype=np.int16),
             log_probs=np.zeros(SLOTS, dtype=np.float32),
         )
+
+
+def test_the_advantage_of_a_terminated_row_is_its_own_reward_against_its_own_value(
+    rect: Fixture,
+) -> None:
+    """``A = r - V(s)`` on the row a termination ended, with rewards and values it can name.
+
+    A terminated cell bootstraps from zero and the recursion breaks there, so its advantage is
+    exactly one reward less one value. Both are distinct per cycle, so the equality holds only
+    if the reward the estimator was handed and the value beside it are the same timestep's --
+    which is the pairing the whole rectangle exists to get right.
+    """
+    from royalelearn.learn.gae import gae_recursion
+
+    buffer = rect.buffer
+    buffer.begin_iteration(plan_for(SLOTS), CYCLES)
+    slots = np.arange(SLOTS, dtype=np.int64)
+    ended = 3
+    for cycle in range(CYCLES + 1):
+        ends = np.full(SLOTS, EPISODE_END_WIN if cycle == ended + 1 else EPISODE_END_NONE, np.int8)
+        buffer.record_round(
+            round_for(
+                cycle,
+                slots,
+                rows=slots,
+                reward=np.full(SLOTS, float(cycle), dtype=np.float32),
+                terminated=np.full(SLOTS, cycle == ended + 1),
+                episode_end=ends,
+            ),
+            actions=None if cycle == CYCLES else np.zeros(SLOTS, dtype=np.int16),
+            log_probs=None if cycle == CYCLES else np.zeros(SLOTS, dtype=np.float32),
+        )
+    values = 100.0 + torch.arange((CYCLES + 1) * SLOTS, dtype=torch.float32).reshape(
+        CYCLES + 1, SLOTS
+    )
+    buffer.set_values(values)
+    inputs = buffer.advantage_inputs()
+    advantages, _ = gae_recursion(
+        rewards=inputs.rewards,
+        values=inputs.values,
+        final_values=inputs.final_values,
+        terminated=inputs.terminated,
+        truncated=inputs.truncated,
+        gamma=0.9,
+        lam=0.95,
+    )
+    for slot in range(SLOTS):
+        reward = float(ended + 1)
+        assert float(buffer.reward[ended, slot]) == reward
+        expected = reward - float(values[ended, slot])
+        assert advantages[ended, slot].item() == pytest.approx(expected, abs=1e-4)
 
 
 def test_an_iteration_clears_what_the_last_one_wrote(rect: Fixture) -> None:
@@ -281,7 +425,15 @@ def test_an_iteration_clears_what_the_last_one_wrote(rect: Fixture) -> None:
 
 
 def fill_iteration(rect: Fixture, *, opponent_slots: tuple[int, ...] = (), dead_from: int = -1):
-    """Collect a whole iteration: every slot every cycle, some of them an opponent's."""
+    """Collect a whole iteration: every slot every cycle, some of them an opponent's.
+
+    Every round of the iteration, the trailing one at cycle ``T`` included: it is where row
+    ``T - 1``'s reward and validity come from, so a rectangle filled without it has a last row
+    nothing ever completed.
+
+    ``dead_from`` is the first ROW that is not collected. The round that would have completed
+    it is the one at the cycle above, so that is the round this stops publishing at.
+    """
     buffer = rect.buffer
     rect.fill()
     buffer.begin_iteration(plan_for(SLOTS), CYCLES)
@@ -290,7 +442,8 @@ def fill_iteration(rect: Fixture, *, opponent_slots: tuple[int, ...] = (), dead_
     groups = np.full(SLOTS, GROUP_LEARNER, dtype=np.int8)
     for slot in opponent_slots:
         groups[slot] = 0  # a resident snapshot's index: not the learner
-    for cycle in range(CYCLES):
+    for cycle in range(CYCLES + 1):
+        trailing = cycle == CYCLES
         for slot in slots:
             record = round_for(
                 cycle,
@@ -298,12 +451,12 @@ def fill_iteration(rect: Fixture, *, opponent_slots: tuple[int, ...] = (), dead_
                 rows=np.array([buffer.layout.row_index(cycle, int(slot))]),
                 group=int(groups[slot]),
                 reward=rng.normal(size=1).astype(np.float32),
-                valid=not (0 <= dead_from <= cycle),
+                valid=not (0 <= dead_from <= cycle - 1),
             )
             buffer.record_round(
                 record,
-                actions=rng.integers(0, 2, size=1).astype(np.int16),
-                log_probs=rng.normal(size=1).astype(np.float32),
+                actions=None if trailing else rng.integers(0, 2, size=1).astype(np.int16),
+                log_probs=None if trailing else rng.normal(size=1).astype(np.float32),
             )
     return buffer
 
@@ -465,12 +618,17 @@ def test_the_advantage_inputs_are_the_columns_the_estimator_takes(rect: Fixture)
 
 
 def test_the_truncated_cells_are_the_ones_the_critic_is_run_on(rect: Fixture) -> None:
+    """The cell is the one that was truncated, not the one the truncation was reported at.
+
+    ``V(final_obs)`` is stored against it, and the estimator reads the flag and that value at
+    the same index, so a cell one row out bootstraps a row from a state it never reached.
+    """
     buffer = rect.buffer
     buffer.begin_iteration(plan_for(SLOTS), CYCLES)
     slots = np.array([0, 1], dtype=np.int64)
     buffer.record_round(
         round_for(
-            1,
+            2,
             slots,
             rows=slots,
             truncated=np.array([True, False]),
@@ -510,19 +668,22 @@ def test_a_stacked_cell_gathers_the_row_below_it_and_zero_fills_across_an_episod
         built.fill()
         buffer.begin_iteration(plan_for(SLOTS), CYCLES)
         slots = np.arange(SLOTS, dtype=np.int64)
-        for cycle in range(CYCLES):
-            # The episode of every slot ends at cycle 1, so cycle 2 has no history to stack.
-            ends = np.full(SLOTS, 1 if cycle == 1 else 0, dtype=np.int8)
+        # The episode of every slot ends ON row 1 -- reported by the round at cycle 2, which is
+        # the round the ending step arrived at -- so row 2 opens a new one and has no history.
+        ends_at = 2
+        for cycle in range(CYCLES + 1):
+            trailing = cycle == CYCLES
+            ends = np.full(SLOTS, 1 if cycle == ends_at else 0, dtype=np.int8)
             buffer.record_round(
                 round_for(
                     cycle,
                     slots,
                     rows=slots,
                     episode_end=ends,
-                    terminated=np.full(SLOTS, cycle == 1),
+                    terminated=np.full(SLOTS, cycle == ends_at),
                 ),
-                actions=np.zeros(SLOTS, dtype=np.int16),
-                log_probs=np.zeros(SLOTS, dtype=np.float32),
+                actions=None if trailing else np.zeros(SLOTS, dtype=np.int16),
+                log_probs=None if trailing else np.zeros(SLOTS, dtype=np.float32),
             )
         planes = env_spec.n_planes
         gathered: dict[int, Any] = {}
@@ -550,12 +711,7 @@ def test_the_history_rows_are_carried_down_when_an_iteration_opens(
         built.fill()
         slots = np.arange(SLOTS, dtype=np.int64)
         buffer.begin_iteration(plan_for(SLOTS), CYCLES)
-        for cycle in range(CYCLES):
-            buffer.record_round(
-                round_for(cycle, slots, rows=slots),
-                actions=np.zeros(SLOTS, dtype=np.int16),
-                log_probs=np.zeros(SLOTS, dtype=np.float32),
-            )
+        record_clean_iteration(buffer, slots)
         last = buffer.obs_view[buffer.layout.row_index(CYCLES - 1, 0)].copy()
         buffer.begin_iteration(plan_for(SLOTS, iteration=1), CYCLES)
         carried = buffer.obs_view[buffer.layout.row_index(-1, 0)].copy()
@@ -580,13 +736,11 @@ def test_a_checkpoint_round_trips_the_history_it_carries(
     built = Fixture(env_spec, observations, frame_stack=2)
     other = None
     slots = np.arange(SLOTS, dtype=np.int64)
-    actions, log_probs = np.zeros(SLOTS, dtype=np.int16), np.zeros(SLOTS, dtype=np.float32)
     try:
         built.fill()
         buffer = built.buffer
         buffer.begin_iteration(plan_for(SLOTS), CYCLES)
-        for cycle in range(CYCLES):
-            buffer.record_round(round_for(cycle, slots, rows=slots), actions, log_probs)
+        record_clean_iteration(buffer, slots)
         # Opening the second iteration is what carries the first one's last cycles down.
         buffer.begin_iteration(plan_for(SLOTS, iteration=1), CYCLES)
         rows = buffer.history_rows * SLOTS
@@ -602,8 +756,7 @@ def test_a_checkpoint_round_trips_the_history_it_carries(
 
         other.buffer.begin_iteration(plan_for(SLOTS, iteration=2), CYCLES)
         assert np.array_equal(other.buffer.obs_view[:rows].copy(), saved)
-        for cycle in range(CYCLES):
-            other.buffer.record_round(round_for(cycle, slots, rows=slots), actions, log_probs)
+        record_clean_iteration(other.buffer, slots)
         planes = env_spec.n_planes
         gathered: dict[int, Any] = {}
         for batch in collect(other.buffer, 64, 64, 1):

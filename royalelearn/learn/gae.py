@@ -6,6 +6,12 @@ one, a python loop over a single slot. The pair exists so that the test can hold
 the slow one over every boundary case; without the test the pair is just two things to keep in
 step.
 
+Every array here is indexed the way the rectangle is: row ``t`` is one timestep. ``rewards[t]``
+is what the action taken at ``t`` earned, ``values[t]`` is ``V(s_t)``, ``terminated[t]`` and
+``truncated[t]`` say whether that action ended the episode, and ``values[t + 1]`` is the state
+it led to. ``delta_t = r_t + gamma * boot_t - V(s_t)`` is then one timestep's temporal
+difference and nothing has to be shifted on the way in.
+
 Two rules decide everything that is subtle here:
 
 **What a cell bootstraps from is decided by how its episode ended.** A terminated cell bootstraps

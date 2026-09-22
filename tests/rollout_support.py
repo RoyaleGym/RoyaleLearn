@@ -224,6 +224,34 @@ class SharedRectangle:
             self.segment.unlink()
 
 
+class TickReward:
+    """A reward that names the step it was earned on, so a row can be checked against it.
+
+    The value is the engine tick the step ENDED at, plus a half for the red seat. Two things
+    follow, and both are what a test about which row a reward is stored at needs. The reward is
+    a function of the transition alone, so a row whose observation stands at tick ``c`` and
+    whose action was taken there must hold ``c + decision_ticks`` and nothing else; and the two
+    seats of one battle are never each other's, so a column that took its neighbour's rewards is
+    as visible as one that took its neighbour's cycle.
+
+    Halves rather than a smaller offset because a half and an integer tick are both exact in
+    float32: an episode's stored rewards then sum to the environment's own total exactly, and
+    the test needs no tolerance to hide behind.
+    """
+
+    def bind(self, engine: Any) -> None:
+        return None
+
+    def reset(self, state: Any) -> None:
+        return None
+
+    def config(self) -> dict[str, Any]:
+        return {}
+
+    def get_reward(self, team: int, prev: Any, state: Any, results: Any) -> float:
+        return float(state.tick) + 0.5 * float(team)
+
+
 class ExplodingReward:
     """A reward function that raises on a chosen step, to see what a worker does about it."""
 

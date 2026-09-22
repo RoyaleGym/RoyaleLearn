@@ -116,12 +116,16 @@ def test_a_final_row_with_no_truncation_is_named(planner: SlotPlanner) -> None:
 
 
 def test_an_assignment_inside_an_episode_is_named(planner: SlotPlanner) -> None:
-    """A battle may change hands only on the cycle whose scalars report an episode end."""
+    """A battle may change hands only on the row after the one that ended an episode.
+
+    ``episode_end[t]`` marks the LAST row of an episode, so the new assignment belongs at
+    ``t + 1``: the first row of the episode it was drawn for.
+    """
     cycles, slots = 6, planner.n_slots
     group = np.full((cycles, slots), GROUP_LEARNER, dtype=np.int8)
     ends = np.full((cycles, slots), EPISODE_END_NONE, dtype=np.int8)
-    ends[3, 0] = EPISODE_END_WIN
-    ends[3, 1] = EPISODE_END_DRAW
+    ends[2, 0] = EPISODE_END_WIN
+    ends[2, 1] = EPISODE_END_DRAW
     group[3:, 0] = GROUP_SCRIPTED
     group[3:, 1] = GROUP_SCRIPTED
     assignments_constant_within_episodes(group, ends)

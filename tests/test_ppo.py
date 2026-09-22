@@ -117,8 +117,11 @@ def collect(built: Fixture, model: Any, *, iteration: int = 0) -> Any:
     engine = BatchedInference(buffer, model, master_seed=SEED)
     engine.begin_iteration(plan)
     slots = np.arange(SLOTS, dtype=np.int64)
-    rewards = np.random.default_rng(SEED).normal(size=(CYCLES, SLOTS)).astype(np.float32)
-    for cycle in range(CYCLES):
+    rewards = np.random.default_rng(SEED).normal(size=(CYCLES + 1, SLOTS)).astype(np.float32)
+    # Every round of the iteration, the trailing one included: it carries the bootstrap
+    # observation and the last cycle's reward, and without it the last row is never completed.
+    for cycle in range(CYCLES + 1):
+        trailing = cycle == CYCLES
         terminated = np.zeros(SLOTS, dtype=bool)
         if cycle == CYCLES - 2:
             terminated[0] = True
@@ -129,6 +132,9 @@ def collect(built: Fixture, model: Any, *, iteration: int = 0) -> Any:
             reward=rewards[cycle],
             terminated=terminated,
         )
+        if trailing:
+            buffer.record_round(played, None, None)
+            continue
         answer = engine.act(played)
         buffer.record_round(played, answer.actions, answer.log_probs)
     return buffer
@@ -461,22 +467,29 @@ def packed(built: Fixture, observation: dict[str, np.ndarray]) -> np.ndarray:
 
 
 def cut_iteration(built: Fixture, model: Any, *, cycle: int, slot: int) -> Any:
-    """An iteration in which one seat's episode was cut rather than decided."""
+    """An iteration in which one seat's episode was cut rather than decided.
+
+    ``cycle`` is the ROW that was truncated. The round that reports a cut is the one the cut
+    step arrived at, which is the cycle above it.
+    """
     buffer = built.buffer
     plan = plan_for(SLOTS)
     buffer.begin_iteration(plan, CYCLES)
     engine = BatchedInference(buffer, model, master_seed=SEED)
     engine.begin_iteration(plan)
     slots = np.arange(SLOTS, dtype=np.int64)
-    for step in range(CYCLES):
+    for step in range(CYCLES + 1):
         truncated = np.zeros(SLOTS, dtype=bool)
-        truncated[slot] = step == cycle
+        truncated[slot] = step == cycle + 1
         played = round_for(
             step,
             slots,
             rows=np.array([buffer.layout.row_index(step, int(s)) for s in slots]),
             truncated=truncated,
         )
+        if step == CYCLES:
+            buffer.record_round(played, None, None)
+            continue
         answer = engine.act(played)
         buffer.record_round(played, answer.actions, answer.log_probs)
     return buffer

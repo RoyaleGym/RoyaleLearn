@@ -194,6 +194,20 @@ class RolloutRound:
     resting place in the experience buffer, and ``obs_rows`` says where each slot's row went.
     What crosses the boundary is the scalars and the episodes that ended.
 
+    TWO TIMESTEPS, AND WHICH IS WHICH. A round is published after a step, so it carries the
+    state that step reached and the step itself, and those are not the same timestep.
+
+    - ``obs_rows``, ``tick`` and ``group`` are the round's OWN cycle: where this state was
+      written, the engine clock it stands at, and who holds the seat from here on.
+    - ``reward``, ``terminated``, ``truncated``, ``deploy_status`` and ``episode_end`` are the
+      step that ARRIVED here, which began one cycle earlier -- so they belong to the row below
+      this one in the rectangle, which is the row whose action produced them.
+    - ``valid`` is the publication: false says this round did not arrive, so neither the state
+      nor the step it reports exists.
+
+    The round at cycle 0 has no step behind it and carries zeros for that half. The round at
+    cycle ``T`` has no row of its own and is the only carrier of row ``T - 1``'s step.
+
     ``deploy_status`` is -1 for no command and 0 for an accepted one; 1..11 is a DeployStatus
     refusal, which under a correct mask cannot happen and is therefore a mask bug rather than a
     tolerance.

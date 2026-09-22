@@ -1507,13 +1507,18 @@ class LearningCoordinator:
                     )
                 )
                 buffer.record_round(round_, answer.actions, answer.log_probs)
-                final_slots, final_rows = source.final_rows(round_)
-                self.update.record_final_observations(round_.cycle, final_slots, final_rows)
+                self._record_finals(source, round_)
                 rounds += 1
                 command = self.control.poll() or command
                 if command == "p":
                     command = self.control.wait_while_paused(self.printer)
         for round_ in source.finish_iteration():
+            # Not bookkeeping: the trailing round is where the last cycle's reward, done flags
+            # and deploy status are, and row T-1 has no other source for them. It is not
+            # counted as a round -- nothing was acted on it -- so the arithmetic that sizes the
+            # iteration still describes the cycles that were.
+            buffer.record_round(round_, None, None)
+            self._record_finals(source, round_)
             for record in round_.episodes:
                 self.matchmaker.on_episode(record)
             episodes.extend(round_.episodes)
@@ -1526,6 +1531,18 @@ class LearningCoordinator:
             "env_seconds": env_seconds,
             "command": command,
         }
+
+    def _record_finals(self, source: Any, round_: RolloutRound) -> None:
+        """Hand the update the observation each truncation of this round was cut off in.
+
+        Against the row that was truncated, which is one below the round that reported it: the
+        truncation flag and the value the bootstrap comes from have to be the same cell, or the
+        estimator bootstraps a row from a state it never reached.
+        """
+        if round_.cycle <= 0:
+            return
+        final_slots, final_rows = source.final_rows(round_)
+        self.update.record_final_observations(round_.cycle - 1, final_slots, final_rows)
 
     def _assign(
         self,

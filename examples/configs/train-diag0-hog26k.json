@@ -1,0 +1,252 @@
+{
+  "format_version": 1,
+  "run_name": "train-diag0-hog26k",
+  "runs_dir": "runs",
+  "master_seed": 20260921,
+  "profile": "laptop",
+  "timestep_limit": 100000000,
+  "env": {
+    "engine": {
+      "cls": "royalegym.rust_engine.RustEngine",
+      "kwargs": {}
+    },
+    "obs_builder": {
+      "cls": "royalegym.obs.SpatialObsBuilder",
+      "kwargs": {}
+    },
+    "action_parser": {
+      "cls": "royalegym.action.TileActionParser",
+      "kwargs": {}
+    },
+    "reward_fn": {
+      "cls": "royalegym.reward.default_reward",
+      "kwargs": {}
+    },
+    "state_mutator": {
+      "cls": "royalegym.state_mutator.DefaultStateMutator",
+      "kwargs": {
+        "decks": [
+          [
+            19,
+            13,
+            75,
+            0,
+            27,
+            9,
+            85,
+            92
+          ],
+          [
+            19,
+            13,
+            75,
+            0,
+            27,
+            9,
+            85,
+            92
+          ]
+        ]
+      }
+    },
+    "termination": [
+      {
+        "cls": "royalegym.done_condition.GameOverCondition",
+        "kwargs": {}
+      }
+    ],
+    "truncation": [
+      {
+        "cls": "royalegym.done_condition.StepLimitCondition",
+        "kwargs": {
+          "max_steps": 480
+        }
+      }
+    ],
+    "decision_ms": 500
+  },
+  "eval_env": null,
+  "extra_component_modules": [],
+  "obs": {
+    "frame_stack": 1
+  },
+  "rollout": {
+    "source": "process",
+    "workers": 2,
+    "games_per_worker": 24,
+    "shards_per_worker": 2,
+    "spin_us": 100,
+    "round_timeout_s": 30.0,
+    "restart_failed_workers": true,
+    "max_restarts_per_worker": 3,
+    "launch_delay_s": 0.5,
+    "stagger_first_reset": true,
+    "overlap": false,
+    "eval_workers": 2,
+    "eval_games_per_worker": 24
+  },
+  "net": {
+    "channels": 64,
+    "blocks": 4,
+    "norm_groups": 8,
+    "vector_embed": 32,
+    "value_hidden": 256,
+    "card_embed": 64,
+    "coord_conv": true,
+    "separate_trunks": true,
+    "policy_head": "pointer",
+    "logit_scale": "rsqrt_c",
+    "init": "orthogonal",
+    "noop_bias": 0.0,
+    "autocast_dtype": "bfloat16",
+    "device": "cuda"
+  },
+  "ppo": {
+    "n_epochs": 3,
+    "timesteps_per_iteration": 8192,
+    "batch_size": 4096,
+    "minibatch_size": 256,
+    "clip_range": 0.2,
+    "dual_clip_c": 3.0,
+    "vf_coef": 1.0,
+    "value_clipping": false,
+    "ent_coef": {
+      "kind": "linear",
+      "start": 0.01,
+      "end": 0.003,
+      "over_env_steps": 30000000
+    },
+    "ent_coef_noop": {
+      "kind": "linear",
+      "start": 0.02,
+      "end": 0.0,
+      "over_env_steps": 10000000
+    },
+    "max_grad_norm": 0.5,
+    "lr_actor": 0.0002,
+    "lr_critic": 0.0002,
+    "adam_eps": 1e-05,
+    "lr_backoff": {
+      "kl_threshold": 0.02,
+      "patience": 3,
+      "factor": 0.5,
+      "lr_min": 2e-05
+    },
+    "advantage_standardization": true,
+    "critic_chunk": 1024,
+    "discard_opponent_rows": true,
+    "keep_previous_iterations": 0,
+    "debug_assert_iterations": 10,
+    "check_ratio_invariant_every": 50,
+    "ratio_atol": {
+      "bfloat16": 0.02,
+      "float32": 0.0001
+    }
+  },
+  "advantage": {
+    "gamma": {
+      "kind": "geometric",
+      "start": 0.997,
+      "end": 0.999,
+      "over_env_steps": 20000000
+    },
+    "gae_lambda": 0.99,
+    "standardize_rewards": true,
+    "reward_clip": 10.0
+  },
+  "ladder": {
+    "mix": [
+      0.5,
+      0.35,
+      0.15
+    ],
+    "max_resident_opponents": 2,
+    "pfsp_weighting": "hard",
+    "pfsp_power": 2.0,
+    "pfsp_uniform_floor": 0.2,
+    "weight_floor_scale": 0.01,
+    "candidate_every_env_steps": 100000000,
+    "floor_admit_every_env_steps": 50000000,
+    "pool_working_size": 48,
+    "eval_seed_count": 500,
+    "release_mode": "stochastic",
+    "refit_every_iterations": 10,
+    "gate": {
+      "champion_games": 1000,
+      "champion_lower_bound": 0.52,
+      "anchor_games": 200,
+      "anchor_tolerance_pp": 2.0,
+      "stratified_snapshots": 8,
+      "stratified_games": 100,
+      "bootstrap_resamples": 10000
+    },
+    "rater": {
+      "prior_sd": 400.0,
+      "anchor": "scripted:noop",
+      "draws": "davidson"
+    }
+  },
+  "checkpoint": {
+    "every_env_steps": 50000,
+    "keep": 10,
+    "include_buffer": false,
+    "strict_load": true
+  },
+  "metrics": {
+    "sinks": [
+      {
+        "kind": "jsonl",
+        "enabled": true,
+        "options": {}
+      },
+      {
+        "kind": "console",
+        "enabled": true,
+        "options": {}
+      },
+      {
+        "kind": "viser",
+        "enabled": true,
+        "options": {}
+      },
+      {
+        "kind": "wandb",
+        "enabled": false,
+        "options": {}
+      }
+    ],
+    "image_every": 50,
+    "keep_episode_log_iterations": 200
+  },
+  "alarms": {
+    "enabled": true,
+    "ratio_invariant_multiple": 5.0,
+    "buffer_fill_frac": 0.98,
+    "clip_fraction": 0.5,
+    "kl_high": 0.05,
+    "kl_dead": 1e-05,
+    "explained_variance": 0.0,
+    "cards_per_match_warn": 8.0,
+    "cards_per_match_halt": 3.0,
+    "noop_entropy_floor": 0.02,
+    "tile_top1_share": 0.25,
+    "card_tile_top10_share": 0.5,
+    "draw_rate": 0.5,
+    "episode_steps_at_cap_frac": 0.8,
+    "transitivity_residual": 0.1,
+    "capacity_ratio": 1.5,
+    "gate_failures": 5,
+    "disabled": [],
+    "patience_overrides": {},
+    "severity_overrides": {}
+  },
+  "determinism": {
+    "tier": "run_exact",
+    "torch_threads": 1
+  },
+  "doctor": {
+    "ram_budget_mb": 6500,
+    "run_mask_disagreement_gate": true,
+    "vram_headroom_mb": 256
+  }
+}

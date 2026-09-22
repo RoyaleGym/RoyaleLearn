@@ -16,12 +16,19 @@ THE ROUND, IN ONE PLACE. A round is one shard across the whole farm at one cycle
 publishes the observation the policy is to act on at cycle ``t``; the parent answers with that
 cycle's actions; the worker steps and publishes cycle ``t + 1``.
 
-A round's observation is therefore the state at its own cycle, and its scalars -- the reward,
-the two done flags, the deploy status and the episode end -- are the step that ARRIVED at it,
-which is the transition that began one cycle earlier. The round at cycle 0 has no transition
-behind it and carries zeros; the trailing round at cycle ``T`` carries the last transition's
-reward and the bootstrap observation, and ``finish_iteration`` is what waits for it. An
-iteration is ``T`` cycles of the loop plus that one wait.
+A round's observation is therefore the state at its own cycle, and so are the tick that dates it
+and the group holding the seat. Its other scalars -- the reward, the two done flags, the deploy
+status and the episode end -- are the step that ARRIVED at it, which is the transition that
+began one cycle earlier. The round at cycle 0 has no transition behind it and carries zeros; the
+trailing round at cycle ``T`` carries the last transition's scalars and the bootstrap
+observation, and ``finish_iteration`` is what waits for it. An iteration is ``T`` cycles of the
+loop plus that one wait.
+
+That is the shape of the WIRE, and it is the only place the two halves are ever a row apart. The
+learner's rectangle stores one timestep per row, so ``ExperienceBuffer.record_round`` puts a
+round's arriving scalars into row ``cycle - 1``, beside the action that earned them, and the
+trailing round is where row ``T - 1``'s come from. Every column of the rectangle is therefore
+read at the same index as every other, and nothing downstream re-indexes anything.
 """
 
 from __future__ import annotations
@@ -1335,11 +1342,11 @@ def assignments_constant_within_episodes(
 ) -> None:
     """Refuse a rectangle in which a seat changed hands in the middle of an episode.
 
-    One vectorised comparison over ``(T, R)``: a slot's group may differ from the cycle before
-    it only at a cycle that reported an episode end. ``episode_end[t]`` is the end of the step
-    that ARRIVED at cycle ``t``, so the observation at ``t`` is already the next episode's
-    first and the assignment drawn for it belongs at ``t`` -- which is why the end and the
-    change are on the same row rather than one apart.
+    Both arrays are the rectangle's, in the rectangle's convention: ``episode_end[t]`` is the
+    end of the episode the action at ``t`` finished, so the boundary sits between ``t`` and
+    ``t + 1`` and row ``t + 1`` is where the next episode -- and the assignment drawn for it --
+    begins. One vectorised comparison over ``(T, R)`` then says it: a slot's group may differ
+    from the row above it only where that row ended an episode.
 
     It is what makes "one policy for one whole episode" checkable rather than merely intended,
     and it catches every way an assignment could reach the middle of a trajectory.
@@ -1352,7 +1359,7 @@ def assignments_constant_within_episodes(
             "(cycles, slots)"
         )
     changed = group[1:] != group[:-1]
-    allowed = episode_end[1:] != EPISODE_END_NONE
+    allowed = episode_end[:-1] != EPISODE_END_NONE
     offending = np.argwhere(changed & ~allowed)
     if offending.size:
         cycle, slot = (int(v) for v in offending[0])

@@ -6,7 +6,15 @@ only -- it is the bootstrap row -- and the ``k - 1`` rows below cycle zero are t
 down from the previous iteration, so an iteration boundary is not a discontinuity in what the
 policy sees.
 
-Three properties are worth stating because each is a decision:
+ONE ROW IS ONE TIMESTEP. Row ``t`` of a slot holds the observation ``s_t``, the action taken in
+it, the log-probability that action was drawn with, the reward that action earned, the flag that
+says whether it ended the episode and the engine's answer to the command it carried. Nothing in
+the rectangle is stored a row away from the row it describes, and every column may be read
+against every other at the same index. A rollout round carries two timesteps' worth of news --
+its own state, and the step that arrived at it -- and ``record_round`` is the one place that is
+taken apart.
+
+Three further properties are worth stating because each is a decision:
 
 **Every row of the rectangle is stored, including the seats a frozen or scripted opponent
 played.** That costs a quarter more memory than storing only learner rows and it buys a buffer
@@ -16,10 +24,11 @@ rows that turn out to be discarded. What decides whether a cell reaches the upda
 
 **Frame stacking is a gather, not a second copy.** A slot's rows sit at a fixed stride of ``R`` in
 the index, so the stack for a cell is rows ``t, t-1, ... t-k+1`` of the same slot, assembled at
-unpack time in the same kernel that dequantises. Where a previous row belongs to an earlier
-episode -- the worker's ``episode_end`` flag says so -- the stack is zero-filled from that point
-back, so the first frame of an episode has a zero history and the policy is never shown the tail
-of the battle before it.
+unpack time in the same kernel that dequantises. ``episode_end[p]`` is the boundary AFTER row
+``p`` -- row ``p`` is the last row of the episode it ended -- so the frame at row ``p`` belongs
+to the cell above it exactly while ``episode_end[p]`` is none. The stack is zero-filled from the
+first boundary back, so the first frame of an episode has a zero history and the policy is never
+shown the tail of the battle before it.
 
 **Minibatches gather per minibatch and drop nothing.** Fancy-indexing a whole batch of these rows
 materialises gigabytes; taking the remainder of an epoch as a smaller final batch, weighted by its
@@ -330,7 +339,13 @@ class RectBuffer(ExperienceBuffer):
         self._carry_ready = True
 
     def _carry_history(self) -> None:
-        """Copy the last ``k - 1`` collected cycles into the rows below cycle zero."""
+        """Copy the last ``k - 1`` collected cycles into the rows below cycle zero.
+
+        Their episode ends come with them, and they are the ends of the rows being copied, not
+        of the rows above them: cycle ``T - 1``'s end is the boundary between it and the
+        observation the next iteration opens at, which is why row ``-1`` can answer for the
+        first cell of the new rectangle at all.
+        """
         if self.history_rows == 0 or not self._carry_ready:
             return
         for offset in range(1, self.history_rows + 1):
@@ -351,33 +366,61 @@ class RectBuffer(ExperienceBuffer):
             self._history_valid[self.history_rows + target] = self.valid[source]
 
     def record_round(
-        self, r: RolloutRound, actions: np.ndarray, log_probs: np.ndarray
+        self,
+        r: RolloutRound,
+        actions: np.ndarray | None,
+        log_probs: np.ndarray | None,
     ) -> None:
-        """Write one shard-round's scalars. The observations are already in place."""
+        """Write one shard-round's scalars into the rows they describe.
+
+        A round is two timesteps' worth of news. Its observation is the state at its own cycle,
+        and the action chosen from it is that row's; its reward, its two done flags, its deploy
+        status and its episode end all describe the step that ARRIVED at it, which began one
+        cycle earlier. So the arriving half goes to row ``cycle - 1``, beside the action that
+        earned it, and the round's own half stays at ``cycle``.
+
+        Both ends of the iteration follow from that and neither is a special case worth a flag.
+        The round at cycle zero has no transition behind it, so its arriving half is dropped:
+        there is no row below zero for it, and what it carries is the cleared record a worker
+        publishes when it re-opens. The round at cycle ``T`` has no row of its own -- ``T`` is
+        the bootstrap row, observations only -- but it is the ONLY place the last transition's
+        reward and flags exist, and they belong to row ``T - 1``.
+
+        ``actions`` and ``log_probs`` are None for that trailing round, which was never acted
+        on.
+        """
         cycle = r.cycle
-        if cycle == self.cycles:
-            # The bootstrap cycle carries observations and nothing else.
-            return
-        if not 0 <= cycle < self.cycles:
+        if not 0 <= cycle <= self.cycles:
             raise IndexError(
-                f"cycle {cycle} is outside the {self.cycles} this iteration collects"
+                f"cycle {cycle} is outside the {self.cycles} this iteration collects and the "
+                "bootstrap cycle above them"
             )
         slots = r.slots
-        self.reward[cycle, slots] = r.reward
-        self.terminated[cycle, slots] = r.terminated
-        self.truncated[cycle, slots] = r.truncated
-        self.valid[cycle, slots] = r.valid
-        self.group[cycle, slots] = r.group
-        self.deploy_status[cycle, slots] = r.deploy_status
-        self.tick[cycle, slots] = r.tick
-        self._episode_end[self.history_rows + cycle, slots] = r.episode_end
-        self.action[cycle, slots] = actions
-        self.log_prob[cycle, slots] = log_probs
+        if cycle > 0:
+            acted = cycle - 1
+            self.reward[acted, slots] = r.reward
+            self.terminated[acted, slots] = r.terminated
+            self.truncated[acted, slots] = r.truncated
+            self.valid[acted, slots] = r.valid
+            self.deploy_status[acted, slots] = r.deploy_status
+            self._episode_end[self.history_rows + acted, slots] = r.episode_end
+        if cycle < self.cycles:
+            self.group[cycle, slots] = r.group
+            self.tick[cycle, slots] = r.tick
+            if actions is not None:
+                self.action[cycle, slots] = actions
+            if log_probs is not None:
+                self.log_prob[cycle, slots] = log_probs
         self._rounds_recorded += 1
 
     @property
     def episode_end(self) -> np.ndarray:
-        """``(T, R)``: how each cell's episode ended, from the ending seat's own view."""
+        """``(T, R)``: how the episode this cell's action ENDED ended, from the seat's own view.
+
+        A cell that did not end one reads ``EPISODE_END_NONE``, so a non-zero entry at row ``p``
+        says two things at once: row ``p`` is the last row of an episode, and the boundary sits
+        between ``p`` and ``p + 1``.
+        """
         return self._episode_end[self.history_rows :][: self.cycles]
 
     def set_values(self, values: Tensor) -> None:
@@ -512,6 +555,13 @@ class RectBuffer(ExperienceBuffer):
         Frame ``j`` is the row ``j`` cycles earlier in the same slot. It is live while no episode
         ended between it and the cell, while it was collected at all, and -- below cycle zero --
         while there was a previous iteration to carry it down from.
+
+        "No episode ended between them" is asked of the frame's OWN row, because
+        ``episode_end[p]`` is the boundary after row ``p``: a frame that ended an episode is the
+        last row of that episode, and the cell above it opened the next one. Asking it of the
+        row above instead is the same question about the wrong boundary -- it zeroes the history
+        of the second row of every episode and stacks the tail of the previous battle behind the
+        first.
         """
         count = cycle.size
         frames = self.frame_stack
