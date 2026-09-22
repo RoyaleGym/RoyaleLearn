@@ -91,6 +91,25 @@ def test_the_shipped_example_is_its_profile_written_out_in_full(name: str) -> No
     assert _disagreements(profile_leaves, written) == {}
 
 
+def test_each_profiles_minibatch_is_the_value_it_was_chosen_at() -> None:
+    """The measured values, written down, so that the pair above cannot agree on a wrong one.
+
+    ``test_the_shipped_example_is_its_profile_written_out_in_full`` compares the code with the
+    file. That catches drift between them and nothing else: move both to 512 and it still passes,
+    which is exactly the state this repo was in until 582ce96. A number that came from a
+    measurement belongs in a test beside the measurement.
+
+    laptop 256: measured on the 4 GB card (``docs/harness-spec.md`` section 6). 512 reserved 4243
+    MB of a 4294 MB card and took 180-233 s an update against 47-49 s at 256. workstation 2048 and
+    many_core 8192 are UNMEASURED: no such machine has run one. They are here to be changed by a
+    measurement rather than by an edit, and on a card too small for them the preflight refuses the
+    run before it starts.
+    """
+    assert C.profile("laptop").ppo.minibatch_size == 256
+    assert C.profile("workstation").ppo.minibatch_size == 2048
+    assert C.profile("many_core").ppo.minibatch_size == 8192
+
+
 def test_the_dump_is_canonical_and_idempotent() -> None:
     config = C.laptop()
     once = C.dump_config(config)
