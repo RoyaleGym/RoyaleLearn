@@ -43,10 +43,10 @@ HEALTHY: dict[str, float | int | str] = {
     "env/elixir_count_exact_frac": 1.0,
     "env/reward_shaping_abs": 0.2,
     "env/reward_terminal_abs": 1.0,
-    # What laptop runs at minibatch 256 on a 4 GB card report: about 3372 MB available against
-    # a measured need of 2349.
-    "health/vram_available_mb": 3400.0,
-    "health/vram_needed_mb": 2350.0,
+    # What laptop runs at minibatch 256 on a 4 GB card report: a 48 s update with about 1.2 GB
+    # of the card still free.
+    "time/update": 48.0,
+    "health/vram_driver_free_mb": 1176.0,
     "ladder/transitivity_residual": 0.02,
     "ladder/consecutive_gate_failures": 0,
     "throughput/rollout_capacity_ratio": 2.4,
@@ -75,8 +75,6 @@ TRIPS: dict[str, dict[str, float]] = {
     },
     "elixir_count_inexact": {"env/elixir_count_exact_frac": 0.4},
     "shaping_dominates": {"env/reward_shaping_abs": 4.0},
-    # A neighbour took about 1.4 GB of the card after startup.
-    "vram_spilling": {"health/vram_available_mb": 2000.0},
     "transitivity": {"ladder/transitivity_residual": 0.4},
     "gate_starved": {"ladder/consecutive_gate_failures": 6},
     "capacity_ratio": {"throughput/rollout_capacity_ratio": 0.8},
@@ -85,6 +83,10 @@ TRIPS: dict[str, dict[str, float]] = {
 #: Alarms about a counter rising across rows rather than about one row's level. No single row
 #: can trip them, so they are tested on their own below and have no TRIPS entry.
 RISES = frozenset({"worker_failures", "worker_failures_persistent"})
+
+#: Alarms that compare a row against the rows before it rather than against a threshold. Like the
+#: rises, no single row can trip one, so they are tested on their own below.
+HISTORY = frozenset({"vram_spilling"})
 
 
 def _row(**moved: float) -> dict[str, float | int | str]:
@@ -120,10 +122,70 @@ def test_every_alarm_is_tested_firing_and_staying_silent() -> None:
     unvalidated.
     """
     built = {alarm.name: alarm for alarm in default_alarms(AlarmConfig())}
-    assert sorted(set(built) - set(TRIPS) - RISES) == [], "an alarm with no row that trips it"
+    assert sorted(set(built) - set(TRIPS) - RISES - HISTORY) == [], (
+        "an alarm with no row that trips it"
+    )
     for alarm in built.values():
         absent = [key for key in alarm.keys if key not in HEALTHY]
         assert absent == [], f"{alarm.name} is silent on the healthy row: it lacks {absent}"
+
+
+def _spill_rows(alarms, seconds, free_mb, *, count=1, start=1):
+    """Feed ``count`` rows at one update time and one free-memory reading."""
+    fired = []
+    for offset in range(count):
+        fired = alarms.evaluate(
+            _row(
+                **{
+                    "run/iteration": start + offset,
+                    "time/update": seconds,
+                    "health/vram_driver_free_mb": free_mb,
+                }
+            )
+        )
+    return [result.name for result in fired]
+
+
+def test_the_spill_alarm_fires_when_a_full_card_comes_with_a_slow_update() -> None:
+    """The measured case: 48 s with room, then 200 s with none. Patience is three rows."""
+    alarms = _set()
+    _spill_rows(alarms, 48.0, 1176.0, count=3)
+    assert _spill_rows(alarms, 200.0, 0.0, start=4) == []
+    assert _spill_rows(alarms, 200.0, 0.0, start=5) == []
+    assert _spill_rows(alarms, 200.0, 0.0, start=6) == ["vram_spilling"]
+
+
+def test_the_spill_alarm_is_silent_when_the_machine_is_merely_busy() -> None:
+    """Contention slows an update too, and it is not this alarm's subject.
+
+    Measured on this machine: the same update took 435-531 s quiet and 758 s under load, with the
+    card unchanged. Without the memory reading beside it, an alarm on time alone would call a
+    loaded laptop a spill every time somebody else built something.
+    """
+    alarms = _set()
+    _spill_rows(alarms, 48.0, 1176.0, count=3)
+    for iteration in range(4, 12):
+        assert _spill_rows(alarms, 400.0, 1176.0, start=iteration) == []
+
+
+def test_the_spill_alarm_is_silent_on_a_full_card_that_is_keeping_up() -> None:
+    """A caching allocator that has finished growing sits at or near zero free as a matter of
+    course, so a full card on its own says nothing. Measured: a healthy run read exactly 0.0 free
+    on every iteration."""
+    alarms = _set()
+    for iteration in range(1, 12):
+        assert _spill_rows(alarms, 48.0, 0.0, start=iteration) == []
+
+
+def test_the_spill_alarms_bar_is_the_best_of_the_run_not_its_first_iteration() -> None:
+    """The first update pays for cuDNN's first look at each shape, so it is the slowest of a
+    healthy run. Taken as the baseline it would hide a spill that is only twice as slow as it."""
+    alarms = _set()
+    _spill_rows(alarms, 90.0, 1176.0)
+    _spill_rows(alarms, 45.0, 1176.0, start=2)
+    assert _spill_rows(alarms, 95.0, 0.0, start=3) == []
+    assert _spill_rows(alarms, 95.0, 0.0, start=4) == []
+    assert _spill_rows(alarms, 95.0, 0.0, start=5) == ["vram_spilling"]
 
 
 def test_every_alarm_reads_keys_the_schema_knows() -> None:

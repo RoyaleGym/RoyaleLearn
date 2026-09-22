@@ -540,7 +540,7 @@ ALARM_METRICS: dict[str, tuple[str, ...]] = {
     "seat_bias": ("env/win_rate_by_seat_ci95_lo", "env/win_rate_by_seat_ci95_hi"),
     "elixir_count_inexact": ("env/elixir_count_exact_frac",),
     "shaping_dominates": ("env/reward_shaping_abs", "env/reward_terminal_abs"),
-    "vram_spilling": ("health/vram_available_mb", "health/vram_needed_mb"),
+    "vram_spilling": ("time/update", "health/vram_driver_free_mb"),
     "transitivity": ("ladder/transitivity_residual",),
     "gate_starved": ("ladder/consecutive_gate_failures",),
     "capacity_ratio": ("throughput/rollout_capacity_ratio",),

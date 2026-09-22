@@ -36,6 +36,7 @@ __all__ = [
     "AlarmSet",
     "MetricAlarm",
     "RoseAlarm",
+    "SpillAlarm",
     "default_alarms",
     "names",
 ]
@@ -97,6 +98,49 @@ class MetricAlarm(Alarm):
 
     def values(self, row: MetricRow) -> dict[str, float]:
         return {key: value for key in self.keys if (value := _value(row, key)) is not None}
+
+
+class SpillAlarm(MetricAlarm):
+    """The update has slowed against this run's own best while the card has no room left.
+
+    Written this way because the obvious way does not work. The first version compared the memory
+    this process could still take -- free memory plus what its allocator already held -- against
+    the peak one minibatch measured at startup. The train session tested it on the card: a second
+    process took 2 GB and left 35 MB free for five iterations, and the alarm stayed silent by
+    645 MB. The reason is arithmetic rather than tuning. An outsider can only consume the FREE
+    part, so that sum bottoms out at what this process holds, and the startup gate guarantees that
+    what it holds is more than one minibatch needs. It was least sensitive in the case its own
+    text named.
+
+    Nothing this process can read about memory says the thing that matters either, because the
+    platform does not refuse an oversubscribed allocation: it backs it with host memory over PCIe
+    and reports success. The allocation is served, the counters look ordinary and the run is
+    several times slower for the rest of its life. So the alarm watches the harm and takes the
+    memory reading as the evidence that the harm is this one: the update several times slower than
+    the best this run has managed, on a card the driver says is full. Measured 2026-09-22 on the
+    4 GB card: the same update took 47-49 s with room to spare and 180-233 s without, while machine
+    contention alone moved it by 1.4 to 1.7. A factor of two sits between them.
+
+    The best is a running minimum rather than a mean, so a slow iteration cannot raise the bar it
+    is judged against, and the first iteration's cuDNN warm-up cannot lower it.
+    """
+
+    def __init__(
+        self, name: str, *, factor: float, floor_mb: float, **kwargs: object
+    ) -> None:
+        super().__init__(name, self._spilling, **kwargs)  # type: ignore[arg-type]
+        self.factor = float(factor)
+        self.floor_mb = float(floor_mb)
+        self._best: float | None = None
+
+    def _spilling(self, seconds: float, driver_free_mb: float) -> bool:
+        if seconds <= 0.0:
+            return False
+        best = self._best
+        if best is None or seconds < best:
+            self._best = seconds
+            return False
+        return seconds >= self.factor * best and driver_free_mb < self.floor_mb
 
 
 class RoseAlarm(MetricAlarm):
@@ -281,13 +325,14 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
         # It warns rather than halting, deliberately. Stopping a nine-hour run because a
         # neighbour got greedy is worse than the slowdown it would prevent, and the preflight
         # can afford to refuse only because nothing is lost at second five.
-        MetricAlarm(
+        SpillAlarm(
             "vram_spilling",
-            lambda available, needed: available < needed,
+            factor=2.0,
+            floor_mb=128.0,
             patience=3,
             meaning=(
-                "less device memory is available than one minibatch measured at startup: the "
-                "update is being backed by host memory over PCIe and is several times slower"
+                "the update is at least twice this run's best while the driver reports no free "
+                "device memory: the sign of an allocation backed by host memory over PCIe"
             ),
         ),
         MetricAlarm(

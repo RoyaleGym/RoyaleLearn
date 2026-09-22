@@ -1147,7 +1147,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | **`doctor`** | | | |
 | `ram_budget_mb` | 6500 | MB | of 7800 |
 | `run_mask_disagreement_gate` | `true` | | exhaustive over all 2304 non-no-op actions |
-| `vram_headroom_mb` | 256 | MB | device memory that must stay free after one minibatch's measured peak, or the run does not start (section 7.7, step 12). The same peak plus this margin is `health/vram_needed_mb`, which the `vram_spilling` alarm compares every later iteration against (section 13.3). 0 turns off both |
+| `vram_headroom_mb` | 256 | MB | device memory that must stay free after one minibatch's measured peak, or the run does not start (section 7.7, step 12). The same peak plus this margin is `health/vram_needed_mb`, which is published every iteration so a slowdown can be read against the regime it happened in (section 13.3). 0 turns off the gate |
 
 `examples/configs/laptop.json` and `workstation.json` are their profiles written out in full.
 `tests/test_config.py::test_the_shipped_example_is_its_profile_written_out_in_full` holds each to its
@@ -2736,7 +2736,8 @@ enemy-elixir field was an estimate on some episodes and the alarm below says so)
 each iteration whenever CUDA is available: `vram_reserved_mb`, `vram_inactive_split_mb`,
 `vram_driver_free_mb`, `vram_alloc_retries`, `vram_available_mb` (driver free plus what this process
 reserves) and `vram_needed_mb` (one minibatch's peak measured at startup plus
-`doctor.vram_headroom_mb`), the two the `vram_spilling` alarm compares.
+`doctor.vram_headroom_mb`). The `vram_spilling` alarm reads `time/update` and `vram_driver_free_mb`;
+the other two are kept because they say which memory regime a slowing update is in.
 
 ### 13.3 Alarms
 
@@ -2788,7 +2789,7 @@ being hunted, and a false halt costs everything the run was for.
 | `seat_bias` | `env/win_rate_by_seat`'s 95% interval excludes 0.45-0.55 | 3 | warn | an unseeded reset, a reward asymmetry, or an observation mirror bug; a few points inside that band can be the shipped engine's own seat asymmetry, which is why this warns rather than halts and why the ladder's paired evaluation swaps sides on every seed |
 | `elixir_count_inexact` | `env/elixir_count_exact_frac < 0.99` | 3 | warn | the observation's opponent-elixir field is an estimate on some episodes: a repeated card in a deck, or an engine whose elixir law is not the calibration's. The policy is reading a documented-exact slot that is not. A value near zero rather than slightly under one is the second cause and not a broken counter: it says the engine build and the card data disagree about elixir, so read `run/engine_build_digest` before anything else |
 | `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | shaping has taken over the objective. Until 1065b78 and c38dc82 it compared two structural zeros, so it has not yet been validated on a real run (section 10) |
-| `vram_spilling` | `health/vram_available_mb < health/vram_needed_mb`: the device memory this run could occupy (driver free plus what it already reserves) is below one minibatch's peak, measured by the preflight at startup, plus `doctor.vram_headroom_mb` | 3 | warn | another process took device memory after startup, so the update is being backed by host memory over PCIe and runs several times slower. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It is the one threshold in this table measured on the machine it is applied to. It stays silent when the preflight measured nothing (no CUDA device, or `doctor.vram_headroom_mb` set to 0), because `health/vram_needed_mb` is then absent |
+| `vram_spilling` | `time/update >= 2 x the best update this run has had` AND `health/vram_driver_free_mb < 128` | 3 | warn | the update is several times slower than this run has managed, on a card the driver says is full. That is what an allocation backed by host memory over PCIe looks like from inside the process, and the platform gives no other sign: it does not refuse an oversubscribed allocation, it serves it and reports success. The memory reading is there to tell a spill from a busy machine, which slows an update by 1.4 to 1.7 rather than by 4. The bar is a running minimum, so a slow iteration cannot raise the bar it is judged against and the first iteration's warm-up cannot lower it. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It stays silent on a run with no CUDA device, because `health/vram_driver_free_mb` is then absent |
 | `transitivity` | `ladder/transitivity_residual > 0.10` | 3 | warn | the scalar rating is lying |
 | `gate_starved` | five consecutive gate failures | 1 | warn | the plateau signal, stated as an event |
 | `capacity_ratio` | `throughput/rollout_capacity_ratio < 1.5` | 3 | warn | the harness is becoming the bottleneck |
@@ -2824,12 +2825,23 @@ What a validated threshold looks like, from the two that behaved: held on the fi
 cleared by the second, with patience long enough to absorb the start. A new alarm can be checked
 against that shape in a minute.
 
-`vram_spilling` has the opposite gap. It has been seen staying silent with room to move: 42 rows from
-seven runs at minibatch 256 on the 4 GB card read 2995 to 3372 MB available against 2349 MB needed
-**[M]**. Nobody has watched it fire on a card. The suite trips it on a synthetic row, and
-`tests/test_alarms.py` now fails for any built alarm that has no row to trip it or that reads a key
-the healthy row lacks, because such an alarm passes the healthy-row test by absence. The check on a
-card is a second CUDA process taking about 1.5 GB during a run, and a warning three iterations later.
+`vram_spilling` is the cautionary one, and it is worth reading before anyone writes another alarm
+about memory. The first version compared the memory this process could still take -- driver free plus
+what its allocator already holds -- against the peak one minibatch measured at startup. The train
+session tested it on the card on 2026-09-22: a second process took 2,048 MB and left 35 MB free for
+five iterations, against a patience of three. `health/vram_driver_free_mb` went 377.2 to 0.0 while
+`health/vram_available_mb` moved only 3371.9 to 2994.7, against 2349.0 needed, so it stayed silent by
+645.7 MB **[M]**. The reason is arithmetic, not tuning: an outsider can only consume the free part, so
+that sum bottoms out at what this process holds, and the startup gate guarantees that what it holds
+exceeds what one minibatch needs. The alarm was least sensitive in the case its own text named.
+
+No in-process memory reading fixes that, because the platform does not refuse an oversubscribed
+allocation: it backs it with host memory and reports success, so the allocation is served, the
+counters look ordinary, and only the clock changes. The alarm therefore watches the harm and uses the
+memory reading as the evidence that this is the cause. Its numbers are measured: the same update took
+47-49 s with room and 180-233 s without **[M]**, while machine contention alone moved it from 435-531 s
+to 758 s **[M]**. A factor of two sits between those two populations. It has still never been seen
+firing on a card; the check is the train session's experiment above, re-run against this version.
 
 The other alarms have been checked against two iterations of one profile, which by the rule above
 is not validation. A metric's row population belongs in its identity rather than in its
