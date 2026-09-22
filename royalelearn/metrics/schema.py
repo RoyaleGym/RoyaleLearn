@@ -584,6 +584,16 @@ CONDITIONAL: dict[str, str] = {
     # pair's 0.5 made "never played" indistinguishable from "even contest".
     "ladder/score_vs_noop": "the learner-vs-anchor pair has games",
     "ladder/score_vs_random_legal": "the learner-vs-anchor pair has games",
+    # The same rule for the rest of the ladder group. Every one of these had a neutral value that
+    # reads as a measurement: an Elo of zero, uncorrelated seats, a gate that cost nothing, a
+    # perfectly transitive rating, and a learner exactly as good as the first snapshot.
+    "ladder/elo_readout": "a training game has been scored this run",
+    "ladder/paired_rho": "the paired-seed correlation has been computed",
+    "ladder/gate_seconds_frac": "a gate ran this iteration",
+    "ladder/transitivity_residual": "a rating fit exists",
+    "ladder/rating_above_v0": "the fit holds both the learner and the first snapshot",
+    "ladder/gate_observed_rate": "a gate decision carries its champion condition",
+    "ladder/gate_lower_bound": "a gate decision carries its champion condition",
     # Absent without a device rather than zero. A zero here would read as "no fragmentation"
     # and "no free memory" on a machine that simply has no GPU to report either about, which is
     # the same sentinel this file exists to stop. ``vram_peak_mb`` predates the rule and still

@@ -336,12 +336,17 @@ def ladder_fields(
         # key read 0. Measured 2026-09-22: 0 in all 124 metric rows on disk, at every run
         # length, which is what "structurally unreachable" looks like from the outside.
         "ladder/eval_games_total": len(pool.eval_view()),
-        "ladder/elo_readout": float(elo) if elo is not None else 0.0,
-        "ladder/paired_rho": float(paired_rho) if paired_rho is not None else 0.0,
-        "ladder/gate_seconds_frac": (
-            float(gate_seconds_frac) if gate_seconds_frac is not None else 0.0
-        ),
     }
+    # Each of these is absent until it has been measured. The neutral value of every one of them
+    # is a statement: an Elo of zero, seats that are uncorrelated, a gate that cost nothing. A
+    # reader cannot tell such a number from a measurement, and a plot of it draws a flat line
+    # through the part of the run where nothing was computed.
+    if elo is not None:
+        fields["ladder/elo_readout"] = float(elo)
+    if paired_rho is not None:
+        fields["ladder/paired_rho"] = float(paired_rho)
+    if gate_seconds_frac is not None:
+        fields["ladder/gate_seconds_frac"] = float(gate_seconds_frac)
     view = pool.eval_view()
     # Emitted only when the pair was actually played. ``PairRecord.score_a`` answers 0.5 for a
     # pair with no games (results.py), and 0.5 is also what a genuine draw looks like -- so an
@@ -370,9 +375,16 @@ def ladder_fields(
     )
 
     if ratings is not None:
-        learner_rating = ratings.rating.get(learner_id, 0.0)
-        v0_rating = ratings.rating.get(pool.v0 or "", 0.0)
-        fields["ladder/rating_above_v0"] = learner_rating - v0_rating
+        # Both sides of the difference have to be in the fit. The learner is not: every eval game
+        # is a snapshot against something, so ``rating.get(learner_id, 0.0)`` returned the default
+        # and the key published MINUS the first snapshot's rating -- read as -93.9, -146.2,
+        # -191.7 and -129.6 on one run, which looks like a learner falling behind its own opening
+        # snapshot and is nothing of the kind. It comes back when the live learner is evaluated
+        # under its own id.
+        learner_rating = ratings.rating.get(learner_id)
+        v0_rating = ratings.rating.get(pool.v0 or "")
+        if learner_rating is not None and v0_rating is not None:
+            fields["ladder/rating_above_v0"] = learner_rating - v0_rating
         fields["ladder/transitivity_residual"] = ratings.transitivity_residual
         named = set(members if members is not None else pool.sampler()) | {learner_id}
         for member in sorted(named):
@@ -384,24 +396,19 @@ def ladder_fields(
             fields[f"ladder/rating_se/{member}"] = se
             fields[f"ladder/rating_ci95_lo/{member}"] = rating - Z95 * se
             fields[f"ladder/rating_ci95_hi/{member}"] = rating + Z95 * se
-    else:
-        fields["ladder/rating_above_v0"] = 0.0
-        fields["ladder/transitivity_residual"] = 0.0
 
     if decision is not None:
         from ..ladder.gate import CONDITION_CHAMPION
 
         champion_condition = decision.conditions.get(CONDITION_CHAMPION)
-        fields["ladder/gate_observed_rate"] = (
-            champion_condition.observed if champion_condition else 0.0
-        )
-        fields["ladder/gate_lower_bound"] = (
-            champion_condition.bound if champion_condition else 0.0
-        )
+        if champion_condition is not None:
+            fields["ladder/gate_observed_rate"] = champion_condition.observed
+            fields["ladder/gate_lower_bound"] = champion_condition.bound
         fields["ladder/gate_failed_condition"] = failed_condition(decision)
     else:
-        fields["ladder/gate_observed_rate"] = 0.0
-        fields["ladder/gate_lower_bound"] = 0.0
+        # The only one of the three that keeps a value without a gate, because "no gate has run"
+        # is a state of the run rather than a missing measurement, and a reader of the column
+        # wants to see where the gates begin.
         fields["ladder/gate_failed_condition"] = "none"
     return fields
 

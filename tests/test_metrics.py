@@ -14,7 +14,7 @@ import msgspec
 import pytest
 from msgspec.structs import replace
 
-from royalelearn.api.ladder import RatingTable
+from royalelearn.api.ladder import ConditionResult, GateDecision, RatingTable
 from royalelearn.api.metrics import MetricsSink
 from royalelearn.api.rollout import EpisodeRecord
 from royalelearn.api.schedule import ScheduleState
@@ -178,6 +178,26 @@ def _update() -> UpdateResult:
     )
 
 
+def _decision() -> GateDecision:
+    """One gate's audition, with the champion condition the row's two gate numbers come from."""
+    from royalelearn.ladder.gate import CONDITION_CHAMPION
+
+    return GateDecision(
+        candidate="snap:v1",
+        champion="snap:v0",
+        admit=True,
+        promote=True,
+        cycle=False,
+        conditions={
+            CONDITION_CHAMPION: ConditionResult(
+                passed=True, n=1000, observed=0.56, bound=0.52, reference=0.5
+            )
+        },
+        eval_seed_set_sha="0" * 8,
+        wall_seconds=12.0,
+    )
+
+
 def _pool(tmp_path) -> LadderPool:
     pool = LadderPool(ResultLog(tmp_path / "ladder" / "games.jsonl"), context="ctx")
     pool.add("snap:v0", step=0)
@@ -234,9 +254,61 @@ def _row(tmp_path) -> dict:
         run=schedule_fields(state, decision_ms=500),
         ppo=update_fields(_update()),
         env=episode_fields(_episodes(), truncation_steps=600).fields,
-        ladder=ladder_fields(pool, ratings=pool.ratings, elo=1240.0, paired_rho=0.31),
+        ladder=ladder_fields(
+            pool,
+            ratings=pool.ratings,
+            elo=1240.0,
+            paired_rho=0.31,
+            gate_seconds_frac=0.04,
+            decision=_decision(),
+        ),
     )
     return metrics.row()
+
+
+def test_the_ladder_group_leaves_out_what_it_has_not_measured(tmp_path) -> None:
+    """Every one of these had a neutral value, and every neutral value is a claim.
+
+    An Elo of zero, seats that are uncorrelated, a gate that cost nothing, a rating that is
+    perfectly transitive, a learner exactly as good as the first snapshot. A reader cannot tell
+    one of those from a measurement, and a plot draws a flat line through the part of the run
+    where nothing was computed. One of them was worse than flat: the learner is never in the fit,
+    so ``rating_above_v0`` published minus the first snapshot's rating, which one run read as
+    -93.9 falling to -191.7 and which looks exactly like a policy losing to its own opening
+    snapshot.
+    """
+    pool = _pool(tmp_path)
+    bare = ladder_fields(pool)
+    for key in (
+        "ladder/elo_readout",
+        "ladder/paired_rho",
+        "ladder/gate_seconds_frac",
+        "ladder/transitivity_residual",
+        "ladder/rating_above_v0",
+        "ladder/gate_observed_rate",
+        "ladder/gate_lower_bound",
+    ):
+        assert key not in bare, key
+    # The pool's own shape is not conditional: it is known from the moment the run starts.
+    assert bare["ladder/pool_size"] == len(pool.members())
+
+    fitted = ladder_fields(pool, ratings=pool.ratings, elo=1240.0, paired_rho=0.31)
+    assert fitted["ladder/elo_readout"] == pytest.approx(1240.0)
+    assert fitted["ladder/paired_rho"] == pytest.approx(0.31)
+    assert "ladder/transitivity_residual" in fitted
+    # This fixture's log holds games the learner played, so the fit knows it and the difference
+    # is real. A run's does not: the gate hands snap:v{n} to the evaluator, so no game is ever
+    # keyed to the learner.
+    assert "ladder/rating_above_v0" in fitted
+
+    without_learner = msgspec.structs.replace(
+        pool.ratings,
+        rating={member: value for member, value in pool.ratings.rating.items()
+                if member != "learner"},
+    )
+    thin = ladder_fields(pool, ratings=without_learner)
+    assert "ladder/rating_above_v0" not in thin
+    assert "ladder/transitivity_residual" in thin
 
 
 # -- the schema --------------------------------------------------------------
