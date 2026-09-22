@@ -670,7 +670,22 @@ class _Diagnostics:
         self._epoch_n = [0 for _ in range(self.epochs)]
         self._grad_actor: list[Tensor] = []
         self._grad_critic: list[Tensor] = []
-        #: The first minibatch's worst ratio deviation, as a tensor until it is needed.
+        #: The FIRST minibatch's worst ratio deviation, and deliberately only that one.
+        #:
+        #: It reads exactly 0.0 on a healthy update -- 124 of 124 metric rows on disk as of
+        #: 2026-09-22 -- which looks like a dead metric and is not. At the first minibatch of
+        #: the first epoch nothing has been stepped, so the stored log-probabilities and a fresh
+        #: forward over the stored bytes must agree; a non-zero value there means a mask, codec
+        #: or weight-version mismatch, and `ratio_invariant` halts the run on it. Zero is the
+        #: whole point.
+        #:
+        #: What it is NOT is a blow-up detector, and it was briefly changed into one here by
+        #: taking the worst deviation over every minibatch instead. That reads 0.237 on a
+        #: perfectly healthy update -- a policy that moved enough to clip, at a clip_range of
+        #: 0.2 -- and it halted a run on its first outing. An invariant that must hold and a
+        #: diagnostic that is expected to move cannot share a key: the alarm reads this one, so
+        #: this one stays the invariant. A worst-over-update figure would be a new key with its
+        #: own threshold, and is not worth one until something wants it.
         self.ratio_deviation: Tensor | None = None
         self.ratio_value = 0.0
 
@@ -719,10 +734,19 @@ class _Diagnostics:
         self._chose += chose_n
         self._sums["policy_loss"] += -dual.mean() * n
         self._sums["value_loss"] += value_loss * n
-        self._sums["entropy"] += result.entropy.mean() * n
+        # Both entropies are conditioned on the rows that HAD a choice, for the same reason the
+        # KL is. A forced row's entropy is exactly zero -- one legal action is a point mass --
+        # so averaging over every row multiplies the answer by the choosing fraction and the
+        # published number becomes a reading of the elixir bar. Measured 2026-09-22 over the 124
+        # metric rows on disk: `entropy_normalised` equalled `1 - forced_noop_frac` to within
+        # 0.0075 everywhere, because a forced row contributes 0/log2 and a choosing row
+        # contributes entropy/log(n_legal), which is 1 for a policy still uniform on its legal
+        # set. The key was an algebraic restatement of a different key, and its documented
+        # healthy band of 0.3-0.8 could not be reached by any policy at this forced fraction.
+        self._sums["entropy"] += (result.entropy * chose).sum()
         self._sums["noop_entropy"] += (result.noop_entropy * chose).sum()
         self._sums["forced_rows"] += (n - chose_n)
-        self._sums["entropy_normalised"] += (result.entropy / legal).mean() * n
+        self._sums["entropy_normalised"] += ((result.entropy / legal) * chose).sum()
         self._sums["kl"] += kl * chose_n
         self._sums["clip_fraction"] += clip * chose_n
         self._sums["dual_clip_fraction"] += (
@@ -750,11 +774,21 @@ class _Diagnostics:
     ) -> UpdateResult:
         total = max(1, self.samples)
         means = {name: float((value / total).item()) for name, value in self._sums.items()}
-        # Two of them are not means over every row. The play/wait entropy is summed over the
-        # rows that had a choice and is divided by those; the forced-row count is a count.
+        # Most of them are not means over every row. Everything the policy could have moved is
+        # summed over the rows that had a choice and divided by those; the forced-row count is
+        # a count. Only `policy_loss` and `value_loss` stay means over the whole batch, because
+        # they are the quantities actually optimised and their denominator is part of the
+        # optimisation rather than part of the reporting.
         chose = float(self._chose.item())
         divisor = max(chose, 1.0)
-        for name in ("noop_entropy", "kl", "clip_fraction", "dual_clip_fraction"):
+        for name in (
+            "entropy",
+            "entropy_normalised",
+            "noop_entropy",
+            "kl",
+            "clip_fraction",
+            "dual_clip_fraction",
+        ):
             means[name] = float((self._sums[name] / divisor).item()) if chose else 0.0
         means["forced_rows"] = float(self._sums["forced_rows"].item())
         if self.ratio_deviation is not None:
