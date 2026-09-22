@@ -1,10 +1,12 @@
 # The harness, specified
 
-`docs/design.md` says what the harness is for and which commitments it is held to. This page says
-what is built, field by field, so that the code can be written from it without further design
-decisions. Every number is either **[M]** measured with its source named, or **[A]** derived by
-arithmetic from measured numbers, with the arithmetic shown. Nothing here is a menu: where two
-defensible choices existed, one was taken and the reason is given.
+This page is for the person writing or reading the harness code. It says what is built, field by
+field, so that the code can be written from it without further design decisions. Its companion is
+`docs/design.md`, which says what the harness is for and which commitments it is held to.
+
+Every number here is either **[M]** measured with its source named, or **[A]** derived by arithmetic
+from measured numbers, with the arithmetic shown. Nothing here is a menu: where two defensible
+choices existed, one was taken and the reason is given.
 
 Where this page says *the references*, it means the three learners this family already has:
 [rlgym-ppo](https://github.com/AechPro/rlgym-ppo), rlgym-learn with rlgym-learn-algos, and
@@ -28,10 +30,10 @@ Terms, fixed once and used throughout:
 ## 1. The decisions everything else follows from
 
 **D1. The iteration is a rectangle: `T` cycles × `R` slots.** Slot → (worker, shard, battle, seat)
-is fixed for the run. The buffer is a plain two-dimensional array with no ring arithmetic, GAE is one
-vectorised backward scan, and — the reason that matters most — the composition and the row order of
-every inference batch are functions of the slot index rather than of which worker answered first.
-Determinism does not depend on arrival order.
+is fixed for the run. The buffer is a plain two-dimensional array with no ring arithmetic, and GAE is
+one vectorised backward scan. The reason that matters most comes third: the composition and the row
+order of every inference batch are functions of the slot index rather than of which worker answered
+first. Determinism does not depend on arrival order.
 
 **D2. A worker owns a vec env of many battles; the boundary carries one packed slab per worker per
 shard-round.** `K` worker processes each holding `ClashSelfPlayVecEnv(num_games=M)`, not `K×M`
@@ -394,8 +396,9 @@ assertion at construction. The observation carries no velocity, acceleration or 
 motion reaches the policy by frame stacking (`obs.frame_stack`, section 9.1), which is the harness's
 own affair and costs the environment nothing.
 
-Superhuman information — anything a human player at the same moment could not see — is enabled per
-field through the obs builder's frozen `Reveal` struct, which is part of `ClashParallelEnv.config()`.
+Superhuman information, meaning anything a human player at the same moment could not see, is enabled
+per field through the obs builder's frozen `Reveal` struct, which is part of
+`ClashParallelEnv.config()`.
 An enabled field adds vector slots, and `enemy_spell_aim` adds a spatial plane, so both widths and the
 plane count move with it. Every one of those changes arrives through `vector_layout`,
 `spatial_layout` and the observation space like any other layout fact, and through `obs_digest` like
@@ -534,8 +537,9 @@ class RolloutSource(ABC):
 ```
 
 Shipped: `rollout.farm.ProcessRolloutSource` (default) and `rollout.inline.InlineRolloutSource`
-(identical semantics in one process, no shared memory — the reference implementation and what the
-fast tests run). A future `RustRolloutSource` implements the same ABC and writes the same bytes.
+(identical semantics in one process, no shared memory). The inline source is the reference
+implementation and what the fast tests run. A future `RustRolloutSource` implements the same ABC and
+writes the same bytes.
 
 ### 4.2 `api/policy.py`
 
@@ -838,9 +842,9 @@ class CheckpointStore(ABC):
     def prune(self, run_dir: Path, keep: int) -> list[Path]: ...
 ```
 
-Shipped sinks: `JsonlSink` (always installed, never optional — it is the file the resume test
-compares), `ConsoleSink`, `CompositeSink`, `WandbSink` (a decorator over any sink). Shipped store:
-`DirCheckpointStore`.
+Shipped sinks: `JsonlSink` (always installed and never optional, because it is the file the resume
+test compares), `ConsoleSink`, `CompositeSink`, `WandbSink` (a decorator over any sink). Shipped
+store: `DirCheckpointStore`.
 
 ---
 
@@ -976,7 +980,7 @@ Included even though they look cosmetic, because each changes the byte stream: `
 every difference; a difference in an included field is refused by name.
 
 Both digests come from `ClashParallelEnv.config()`, which reports `calibration_digest` over the
-calibration values as loaded and `build_digest` over the copies compiled into the extension —
+calibration values as loaded and `build_digest` over the copies compiled into the extension.
 `RustEngine.build_digest()` is the same number read directly off the engine. The harness hashes no
 data file of its own: a digest computed here from `royalegym.protocol.data_dir()` would be a second
 opinion about what the engine is running on, and a second opinion is exactly what a stale build looks
@@ -1006,18 +1010,18 @@ After loading a checkpoint written at the end of iteration `k`:
 **Where that last clause stops, and why it stops there.** An episode is addressed by its battle
 and its ordinal: `ClashSelfPlayVecEnv` takes an `autoreset_seed_fn`, the harness gives it
 `derive_int(master_seed, "env/battle/{b}/ordinal/{k}")`, and a resumed worker is put back on the
-ordinal the original was about to play through `set_episode_ordinals`. Both counters are restored
-— the environment's, which decides which battle is played, and the matchmaker's, which decides who
-plays it — because restoring one without the other gives the right battles against the wrong
-opponents or the reverse.
+ordinal the original was about to play through `set_episode_ordinals`. Both counters are restored:
+the environment's, which decides which battle is played, and the matchmaker's, which decides who
+plays it. Restoring one without the other gives the right battles against the wrong opponents, or
+the reverse.
 
 What is not restored is an episode that was *half finished* when the checkpoint was written. Its
 transitions were already in the original run's buffer, and replaying it would count them twice, so
 a resumed run starts the next episode instead. The battles it then plays are the right ones and
 their phase is not: the rows differ in how many episodes completed, never in which were played.
-Two tests draw that line — one asserts the row-for-row continuation from a boundary, the other
-measures the phase difference from inside an episode, and the second fails if resuming mid-episode
-is ever offered. The warm-up that spreads first-episode phases apart is skipped on a resume for
+Two tests draw that line. One asserts the row-for-row continuation from a boundary. The other
+measures the phase difference from inside an episode, and it fails if resuming mid-episode is ever
+offered. The warm-up that spreads first-episode phases apart is skipped on a resume for
 the same reason: it would move every battle off the episode it is continuing.
 
 `state_digest`, defined once in `royalelearn/checkpoint.py`, is a sha256 over, in this fixed order:
@@ -1200,9 +1204,9 @@ class EnvFactorySpec(Struct, frozen=True):
 `EnvFactory(engine=..., obs_builder=(cls, kwargs), decision_ms=...)` recipe rather than constructing a
 `ClashParallelEnv` itself. One place knows how a ClashParallelEnv is assembled, and it is the place
 that also has to keep it picklable for `spawn`; a second assembly here would be a copy that drifts.
-`EnvFactorySpec` stays the JSON layer above it — the thing sent to workers, recorded in the checkpoint
-and hashed into the ladder's `context` — and `ClashParallelEnv.config()` read back off the built env
-is what proves the two agree.
+`EnvFactorySpec` stays the JSON layer above it: the thing sent to workers, recorded in the checkpoint
+and hashed into the ladder's `context`. `ClashParallelEnv.config()` read back off the built env is
+what proves the two agree.
 
 Only classes on an allow-list (`royalegym.*`, `royalelearn.*`, plus anything named in
 `config.extra_component_modules`) may be instantiated. A spec is data that arrives from a config file
@@ -1215,13 +1219,13 @@ window so the arms cannot drift apart:
 
 | `minibatch_size` | `time/update` over four runs | `vram_reserved_mb` | driver free |
 |---|---|---|---|
-| 512 | 233, 226, 180, 217 s — **spread 29%** | 4243 MB (0.99x the card) | 0 MB |
-| 256 | 47.7, 48.4, 47.4, 48.5 s — **spread 2.3%** | 2198 MB (0.51x) | 1176 MB |
+| 512 | 233, 226, 180, 217 s, **spread 29%** | 4243 MB (0.99x the card) | 0 MB |
+| 256 | 47.7, 48.4, 47.4, 48.5 s, **spread 2.3%** | 2198 MB (0.51x) | 1176 MB |
 
 **Read the decomposition, not the ratio.** 256 is stable at 48 s; 512 takes 180–233 s depending on
 what else is resident on the card. Dividing those gives 4.46x, but the spread is a real
 distribution rather than measurement error, and the ratio invites a reader to expect 4.46x on a
-24 GB card where there is probably no difference at all — because there is no cliff to be on.
+24 GB card where there is probably no difference at all, because there is no cliff to be on.
 
 The mechanism, confirmed rather than inferred. At 512 the allocator reserves 4243 MB against a
 4294 MB card. On Windows the driver does not refuse an oversubscribed allocation, it backs it with
@@ -1229,13 +1233,13 @@ host RAM over PCIe, so the update streams tensors across the bus instead of comp
 Three things establish it: reserved reaches 1.24x the physical card when cuDNN benchmarking is
 also allowed to allocate; `set_per_process_memory_fraction(0.95)` turns the slow run into an
 immediate `OutOfMemoryError`, so the memory was coming from beyond the card; and the 29% spread
-sits **entirely** on the 512 arm while 256 holds 2.3% in the same window — machine noise, thermal
+sits **entirely** on the 512 arm while 256 holds 2.3% in the same window. Machine noise, thermal
 throttling and scheduler jitter all predict both arms vary, and only one does.
 
 Two things this measurement should not be read as saying. It is one card on one platform, and the
 cliff is a property of the footprint against the device rather than of 512 as a number: the
 workstation profiles' larger minibatches are correct for their larger cards. And `num_alloc_retries`
-reads 0 throughout, which is **not** evidence the allocator is innocent — it counts the
+reads 0 throughout, which is **not** evidence the allocator is innocent. It counts the
 allocation-failure path, and on this platform the allocation never fails. It went to 2 the moment
 the memory fraction made failure possible. An instrument that cannot fire here is indistinguishable
 from one with nothing to report.
@@ -1294,8 +1298,8 @@ The rule, applied per key:
 
 On today's 95-card catalogue with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
 `uint8` planes, the two hit-point planes as `float16`, and the two static planes. The hit-point planes
-are the only ones whose declared `high` reaches 64 — every other plane is a small integer count or an
-indicator in [0, 1] — and they are also the only ones that fail the integer test, because they carry
+are the only ones whose declared `high` reaches 64, since every other plane is a small integer count
+or an indicator in [0, 1]. They are also the only ones that fail the integer test, because they carry
 a fraction of full health; it is the second fact and not the first that sends them to `float16`. The
 vector is 1 177 wide. Turning on `Reveal.enemy_spell_aim` adds a spatial plane, and with it one more
 `uint8` row; the table below is then recomputed from the rule rather than patched.
@@ -1390,7 +1394,7 @@ worker. Both reference learners treat a dead worker as a permanent silent hang.
 
 Because the contract is bytes, a Rust worker is a drop-in: it writes the same header, the same packed
 rows and the same scalars, and releases the same semaphores. `tests/test_rollout_farm.py` is the
-acceptance criterion — the process farm and the inline source must produce byte-identical buffers,
+acceptance criterion: the process farm and the inline source must produce byte-identical buffers,
 scalars and episode records from the same seed over 30 cycles.
 
 ### 7.4 The worker main loop
@@ -1432,12 +1436,12 @@ def worker_main(w: int, cfg: WorkerConfig, handles: Handles) -> None:
   parent draws the next assignment and hands it back on the same round's `Step`, before the first
   action of the new episode is taken. Partial control makes a trajectory unusable, and one place that
   knows what a battle is playing removes the whole class of bug rather than detecting it.
-- **`vec.action_masks()` is never called** — it restacks the whole batch; the mask is already in
-  `obs["action_mask"]`. `info["action_mask"]` is ignored for the same reason: it is a second copy of
-  a key the observation already carries.
+- **`vec.action_masks()` is never called**, because it restacks the whole batch and the mask is
+  already in `obs["action_mask"]`. `info["action_mask"]` is ignored for the same reason: it is a
+  second copy of a key the observation already carries.
 - **The terminal statistics are read, not reconstructed.** RoyaleGym puts seven flat scalars in
-  `info` on the step an episode ends — `episode_steps`, `episode_ticks`, `own_crowns`,
-  `enemy_crowns`, `own_tower_hp_frac`, `enemy_tower_hp_frac`, `elixir_leak_steps` — and the vec env
+  `info` on the step an episode ends: `episode_steps`, `episode_ticks`, `own_crowns`,
+  `enemy_crowns`, `own_tower_hp_frac`, `enemy_tower_hp_frac` and `elixir_leak_steps`. The vec env
   nests them under `infos["final_info"]` as batched arrays with `_`-prefixed validity masks, so the
   worker reads `infos["final_info"]["_own_crowns"]` to find which rows have one and copies the seven
   values for those rows into their `EpisodeRecord`. The hit-point fractions are already the mean over
@@ -1535,11 +1539,12 @@ Their results go into the run identity and the checkpoint.
    rebuild command. A run must die here, not at cycle 0. The reset comes before anything is read: a
    freshly constructed env reports `decision_ticks = 1` until its first `reset()`, so reading the
    configuration earlier would record a number that is about to change.
-2. **Read `ClashParallelEnv.config()`.** One JSON-able dict — `env`, `decision_ms`, `decision_ticks`,
-   `reveal`, `engine`, `obs_builder`, `action_parser`, `reward_fn`, `termination_cond`,
-   `truncation_cond`, `state_mutator`, `calibration_digest`, `build_digest`, each component as
-   `{"class": ..., "params": component.config()}` — and it is the single source for the timing fields
-   of `EnvSpec`, the `EngineBuild` digests of section 5.3 and the ladder's `context` of section 11.6.
+2. **Read `ClashParallelEnv.config()`.** It returns one JSON-able dict: `env`, `decision_ms`,
+   `decision_ticks`, `reveal`, `engine`, `obs_builder`, `action_parser`, `reward_fn`,
+   `termination_cond`, `truncation_cond`, `state_mutator`, `calibration_digest`, `build_digest`, each
+   component as `{"class": ..., "params": component.config()}`. That dict is the single source for the
+   timing fields of `EnvSpec`, the `EngineBuild` digests of section 5.3 and the ladder's `context` of
+   section 11.6.
    All three read that one dict, so a component whose parameters change moves the identity, the
    context and the printed summary together or not at all.
 3. **Read the layout off the environment.** Every key of `single_observation_space` with its shape,
@@ -1549,8 +1554,9 @@ Their results go into the run identity and the checkpoint.
    the vector width and its named fields, the mask width and the row total. Nothing in the harness
    holds a width, a plane count or a field offset of its own, which is why the whole test suite runs
    on `MockEngine`, whose widths are not the Rust catalogue's.
-4. **Resolve the vector fields the pointer head needs** — `hand_card_onehot`, `hand_cost`,
-   `hand_affordable` — through `vector_layout`. A missing name is a `PreflightError` naming it.
+4. **Resolve the vector fields the pointer head needs** through `vector_layout`. They are
+   `hand_card_onehot`, `hand_cost` and `hand_affordable`. A missing name is a `PreflightError`
+   naming it.
 5. **`royalegym.action.mask_disagreements(engine, parser, state, team)` for both teams**, exhaustive
    over all 2304 non-no-op actions. Non-empty is a `PreflightError`, not a warning: a policy trained
    against a wrong mask is worthless, the check is already written and nobody runs it.
@@ -1705,7 +1711,7 @@ These are correctness rules, not performance rules.
   it. Section 9.6 sets the tolerance accordingly and says what the check still catches.
 - **GroupNorm, never BatchNorm.** BatchNorm computes a different function at rollout (a small batch,
   running statistics) than at update (a minibatch of 256, `train()` mode). That difference is not a
-  rounding difference — it is a different function of the same weights, so the stored log-prob would
+  rounding difference. It is a different function of the same weights, so the stored log-prob would
   stop being the log-prob of the action that was taken.
 
 ### 8.3 `MaskedCategorical`
@@ -1747,8 +1753,8 @@ class MaskedCategorical(ActionDistribution):
 
 Every detail has a failure it prevents, and every reference implementation gets at least one wrong:
 
-1. **Mask before the softmax, never after.** The two are gradient-identical — a masked logit receives
-   exactly zero gradient either way — so the difference is numerical and it is decisive. Post-softmax
+1. **Mask before the softmax, never after.** The two are gradient-identical: a masked logit receives
+   exactly zero gradient either way. So the difference is numerical, and it is decisive. Post-softmax
    masking combined with the references' `clamp(probs, min=1e-11)` *resurrects every illegal action at
    p = 1e-11* with a finite log-prob, and `multinomial` will eventually draw one.
 2. **`torch.finfo(dtype).min`, never `float("-inf")`.** `-inf * 0` is NaN in the entropy sum; one
@@ -1802,7 +1808,7 @@ One shared-memory block of `(T + k) x R` rows of `row_bytes`, cycle-major, with 
 index(t, r) = (t + k - 1) * R + r          t in [-(k-1), T], r in [0, R)
 ```
 
-Cycle `T` holds observations only — it is the bootstrap row, and its scalars are unused. The `k - 1`
+Cycle `T` holds observations only. It is the bootstrap row, and its scalars are unused. The `k - 1`
 rows below cycle 0 are history: at the end of every iteration the last `k - 1` cycles are copied down
 into them, so cycle 0 of the next iteration has a full stack and an iteration boundary is not a
 discontinuity in what the policy sees. At `k = 1` there are none and the block is `(T+1) x R`. At the
@@ -1816,8 +1822,8 @@ decides whether a cell reaches the update is `trainable`, not where it was writt
 **Frame stacking is a gather, not a second copy.** Because the buffer is a rectangle indexed by cycle
 and a slot's rows sit at a fixed stride of `R` in that index, the stack for cell `(t, r)` is rows
 `t, t-1, ..., t-k+1` of the same slot, assembled at unpack time in the same kernel that dequantises.
-Nothing extra is stored and nothing is written twice. Where a previous row belongs to an earlier
-episode — the worker's `episode_end` flag at `t-1` says so — the stack is zero-filled from that point
+Nothing extra is stored and nothing is written twice. The worker's `episode_end` flag at `t-1` says
+where a previous row belongs to an earlier episode. There the stack is zero-filled from that point
 back, so the first frame of an episode has a zero history and the policy is never shown the tail of
 the battle before it. Only `spatial` and `mask_planes` are stacked; `vector` is the current frame's,
 because elixir, hand and clock are already the present state and a stale copy of them is noise. A test
@@ -1892,7 +1898,7 @@ returns = out + values[:T]
 ```
 
 - **A terminated cell bootstraps from 0. A truncated cell bootstraps from `final_value`.** A cell that
-  is neither — including the last cycle of the iteration for a row still mid-episode — bootstraps from
+  is neither, including the last cycle of the iteration for a row still mid-episode, bootstraps from
   `values[t+1]`, which is the value of the **true** next observation, because SAME_STEP autoreset only
   replaces a row when its episode ended and an episode that ended is flagged. This is the correct
   treatment and it is where both older references go wrong: one bootstraps a truncation off an
@@ -1995,12 +2001,12 @@ L              = L_policy + L_value + L_entropy
 with `H_i` the entropy of the masked categorical and `H2_i` the binary entropy of `p(no-op)` against
 `p(play)`, read off the same normalised log-probs at no cost. The actor and the critic have disjoint
 parameters, so summing one loss and calling `backward()` once is safe and the entropy term's gradient
-into critic parameters is exactly zero — which has its own test.
+into critic parameters is exactly zero. That has its own test.
 
 `ent_coef_noop` is a **warm-start guard and not a permanent term of the objective**. `H2(p_noop)` is
 maximised at `p_noop = 0.5` while a healthy Clash policy plays about 22 cards in a match and sits near
-`p_noop = 0.94`, so a coefficient that never decays pulls every converged policy toward overplaying —
-it is a term that pays for a behaviour the objective does not want. It therefore anneals to zero over
+`p_noop = 0.94`, so a coefficient that never decays pulls every converged policy toward overplaying.
+It is a term that pays for a behaviour the objective does not want. It therefore anneals to zero over
 its schedule; the schedule is in the run identity and `run/ent_coef_noop` is logged every iteration so
 the two regimes are never confused in a plot. The `noop_collapse*` and `noop_entropy_floor` alarms are
 untouched by this and keep watching after the coefficient reaches zero, and whether the guard was
@@ -2069,13 +2075,13 @@ produces a deviation of order **one**, not of order 1e-2:
   either zero or astronomically large;
 - a **codec** or codec-table mismatch feeds the update a different observation, and the log-prob of a
   2305-way categorical moves by far more than a percent;
-- a **weight-version** mismatch — the policy that acted is not the policy being updated — moves
+- a **weight-version** mismatch, where the policy that acted is not the policy being updated, moves
   log-probs by the size of a PPO update, which is what `ppo/update_magnitude_actor` measures and is
   orders above the tolerance.
 
 Kernel-level nondeterminism is not what this check is for, and at `2e-2` it will not see it. That is
 the correct division of labour: reproducibility is `determinism.tier`'s job, and tier T2 keeps bf16
-precisely because deterministic kernels are bit-reproducible run to run at any precision — T2 promises
+precisely because deterministic kernels are bit-reproducible run to run at any precision. T2 promises
 that two runs agree, never that two differently shaped forwards within one run do.
 
 The check runs for the first `ppo.debug_assert_iterations` iterations of a run and every
@@ -2143,14 +2149,14 @@ The reason this composition and not RoyaleGym's shipped `default_reward()`:
 - `ElixirTradeReward` is **not** a potential and it rewards turtling: an agent that never plays a card
   never incurs the negative term while enemy units still die to its towers and earn the positive one.
   At weight 0.02 over about forty trades a match that is 0.8, comparable to the plus-or-minus-one
-  terminal reward — the shaping can outweigh the objective.
+  terminal reward. The shaping can outweigh the objective.
 - `ElixirLeakPenalty` is not zero-sum: both players can leak at once. That is the signature of a term
   standing in for a missing potential.
 - The committed-elixir potential replaces both. Playing a card moves elixir from the bar to the board
   and is net zero; losing a unit costs; killing gains; and sitting at ten elixir is penalised
   automatically, because the opponent's potential keeps rising while yours does not. There is **no
-  coefficient to re-tune and no annealing schedule**, which is what
-  `royalegym/reward.py`'s own house rule — weights should settle, not drift — asks for.
+  coefficient to re-tune and no annealing schedule**, which is what `royalegym/reward.py`'s own house
+  rule asks for: weights should settle, not drift.
 
 Unit values use exact `Fraction(card.elixir, card.count)` arithmetic, as RoyaleGym's own elixir term
 does, because the seat-mirror antisymmetry test depends on it: a running float sum of the same values
@@ -2191,15 +2197,15 @@ a fix, and it has not been made.
 
 ### 11.1 What lives where
 
-`royalegym.selfplay` keeps what is bookkeeping over ids and results — `Opponent`, `PolicySnapshot`,
-`OpponentPool`, the sampling strategies, `pfsp_weights`, `save`/`load`, and the streaming Elo — because
-it needs neither torch nor an env. RoyaleLearn owns the weights, the routing, the result log, the fit,
-the evaluation runner and the gate. `ladder/pool.py`'s `LadderPool` wraps an `OpponentPool`, a
-`ResultLog` and a `SnapshotStore`.
+`royalegym.selfplay` keeps what is bookkeeping over ids and results: `Opponent`, `PolicySnapshot`,
+`OpponentPool`, the sampling strategies, `pfsp_weights`, `save`/`load`, and the streaming Elo. It
+keeps them because it needs neither torch nor an env. RoyaleLearn owns the weights, the routing, the
+result log, the fit, the evaluation runner and the gate. `ladder/pool.py`'s `LadderPool` wraps an
+`OpponentPool`, a `ResultLog` and a `SnapshotStore`.
 
 `OpponentPool.record_result` and `_evict` are not called from this repo. The pool's aggregate record
-cannot represent draws separately — `wins: float` with a draw adding 0.5 makes five wins and five
-losses indistinguishable from ten draws, and those carry completely different variance — and `_evict`
+cannot represent draws separately: `wins: float` with a draw adding 0.5 makes five wins and five
+losses indistinguishable from ten draws, and those carry completely different variance. And `_evict`
 drops the *oldest* snapshot, which is exactly the diversity the anti-forgetting floor exists to
 protect. `ladder/results.py` owns the result log and `ladder/eviction.py` owns eviction until those
 are fixed upstream (section 16, ask 4).
@@ -2224,7 +2230,7 @@ gauge      = r["scripted:noop"] pinned at 0
 
 The log-posterior is concave, so Newton/IRLS converges in fewer than ten steps on a pool of a few
 hundred, in milliseconds. Standard errors come from the diagonal of the inverse observed Fisher
-information — the Hessian of the negative log-posterior. A **difference** between two players uses the
+information, the Hessian of the negative log-posterior. A **difference** between two players uses the
 corresponding 2x2 block, never the sum of the two marginals. `nu` is fitted jointly; if the measured
 draw rate is under 2% the config falls back to `draws = "half_win"` and the run's `ladder.json`
 records that it did.
@@ -2260,7 +2266,7 @@ probability each slot is drawn from. Of the laptop profile's 96 battles, exactly
 34 pool and 14 scripted, and those numbers do not move for the life of the run. `config.role_counts`
 turns the mixture into the three counts; the matchmaker lays them over the battle indices with a
 seeded permutation from `match/battle/-2/ordinal/{n_battles}`, so which battle gets which role is a
-pure function of the master seed and the battle count, and nothing else — not the iteration, not the
+pure function of the master seed and the battle count, and nothing else: not the iteration, not the
 ordinal, not the pool, not the ratings. A permutation rather than "the first 48 indices" because
 battles map to workers and shards in contiguous blocks: a role pinned to low indices would put every
 double-seat episode on the first worker and none on the last, and a shard-round is as long as its
@@ -2268,9 +2274,9 @@ slowest worker.
 
 **The opponent and the learner's seat are still one draw per episode**, addressed by the battle and
 its ordinal. An iteration spans several episodes in every slot, so one draw per slot per iteration
-would give every episode that starts inside that iteration the same opponent — a correlation across
-the mixture that nothing in the statistics accounts for. And because that draw is addressed by the
-battle and its ordinal rather than by the iteration, it does not move when the iteration length
+would give every episode that starts inside that iteration the same opponent. That is a correlation
+across the mixture that nothing in the statistics accounts for. And because that draw is addressed
+by the battle and its ordinal rather than by the iteration, it does not move when the iteration length
 changes: the same episode of the same battle meets the same opponent however the iteration boundary
 falls across it.
 
@@ -2280,26 +2286,26 @@ falls across it.
 | pool | 34 (`mix[1]` = 0.35) | one of at most `max_resident_opponents` frozen snapshots, PFSP-weighted | 1 |
 | scripted | 14 (`mix[2]` = 0.15) | uniform over `NoopOpponent` and `RandomLegalOpponent(0.9)`, run in the worker | 1 |
 
-Trainable rows per cycle are therefore `n_battles + mirror_battles` — 96 + 48 = **144 of 192 slots,
-exactly three quarters**, on every cycle of every iteration whatever the master seed. `config.geometry`
-sizes the iteration from that number and `ppo.timesteps_per_iteration` counts kept rows, so
-`cycles × learner_rows ≥ timesteps_per_iteration` is a fact about the rectangle rather than about its
-average.
+Trainable rows per cycle are therefore `n_battles + mirror_battles`, which is 96 + 48 = **144 of 192
+slots, exactly three quarters**, on every cycle of every iteration whatever the master seed.
+`config.geometry` sizes the iteration from that number and `ppo.timesteps_per_iteration` counts kept
+rows, so `cycles × learner_rows ≥ timesteps_per_iteration` is a fact about the rectangle rather than
+about its average.
 
 Rounding, when the shares do not divide the battles: `mirror = round(mix[0] × n_battles)`, then the
 remaining battles split between pool and scripted in the ratio `mix[1] : mix[2]` with pool rounded and
 scripted taking the remainder. Halves round up rather than to even, because Python's `round(0.5)` is 0
 and a one-battle rectangle under the shipped mixture would then contain no mirror at all. The three
 counts always sum to `n_battles`, and each lands within one battle of its exact share. A share whose
-quota is under half a battle rounds to zero — three battles cannot hold a tenth of one — so the
+quota is under half a battle rounds to zero, because three battles cannot hold a tenth of one. So the
 mixture a small run actually plays is the count, not the config.
 
 **Why counts and not a draw.** Under a per-episode draw the mirror count was Binomial(96, 0.5): a
 standard deviation of 4.9 rows per cycle, against a laptop iteration whose margin over the
 trainable-row floor (`0.98 × 32 768 = 32 113` against a planned 32 832) is 0.2%. Measured over master
-seeds 0–299, 76 of them — one in four — sized an iteration below the floor, and `TrainableRowsShort`
-halted the run in its first minutes. The shipped seed happened to draw 48 and survive, which is why no
-recorded run showed it.
+seeds 0–299, 76 of them sized an iteration below the floor. That is one in four, and
+`TrainableRowsShort` halted the run in its first minutes. The shipped seed happened to draw 48 and
+survive, which is why no recorded run showed it.
 
 **A battle share and a row share are not the same quantity.** The mixture is a share of *battles*;
 `throughput/discarded_rows_frac` is a share of *rows*, and a row is one slot on one cycle. A mirror
@@ -2312,9 +2318,10 @@ its role for the whole iteration whether its episodes are long or short, so the 
 `MIXTURE_TOLERANCE`; it can become an equality, short only of rows lost to a dead worker.
 
 *Landed in de70de8.* Before it, the role was drawn per episode from `mix` and the iteration was sized
-from the expectation. The shipped profiles do not change size — 144, 1 152 and 2 304 learner rows a
-cycle, as the table in section 2.2 always said — but they are now that size on every seed rather than
-on average: measured over master seeds 0–299, 76 iterations short of the floor became 0.
+from the expectation. The shipped profiles do not change size. They are still 144, 1 152 and 2 304
+learner rows a cycle, as the table in section 2.2 always said, but they are now that size on every
+seed rather than on average: measured over master seeds 0–299, 76 iterations short of the floor
+became 0.
 `MixMatchmaker.FORMAT_VERSION` is 2, which adds `n_battles` to the checkpoint; a format-1 checkpoint
 still loads and recovers its rectangle at the resumed run's first `plan`. The one property given up is
 that a run replayed at a different worker count lays its roles out differently, since exactly half of
@@ -2334,11 +2341,11 @@ that a run replayed at a different worker count lays its roles out differently, 
   `royalegym.selfplay.pfsp_weights`.
 - **The learner's seat is drawn uniformly** between blue and red for every pool and scripted battle,
   redrawn at every episode boundary, so `env/win_rate_by_seat` measures the seat advantage the learner
-  actually experiences. Redrawing the seat costs nothing in exactness — a battle contributes one
-  learner row from whichever seat it takes — which is why the seat stayed a draw when the role stopped
-  being one. The shipped engine is not a 180-degree rotation between seats: multi-unit ground deploys
-  land differently on the two sides, so a seat advantage of a few points can be the game's own and is
-  a warning, not a leak.
+  actually experiences. Redrawing the seat costs nothing in exactness, because a battle contributes
+  one learner row from whichever seat it takes. That is why the seat stayed a draw when the role
+  stopped being one. The shipped engine is not a 180-degree rotation between seats: multi-unit ground
+  deploys land differently on the two sides, so a seat advantage of a few points can be the game's
+  own and is a warning, not a leak.
 - **A pool slot plays scripted while no snapshot is resident.** Before the first candidate is admitted
   there is nothing to draw from, and a scripted opponent is the honest substitute: it fills the same
   one seat, so the iteration is still exactly the size it was planned at.
@@ -2360,7 +2367,7 @@ candidate every `candidate_every_env_steps` (4 000 000 game-steps at the laptop 
 hours).
 
 Every candidate is evaluated; only those that pass enter the pool. A failed candidate is discarded,
-not retried, and its results stay in the log — a run of consecutive failures is exactly the plateau
+not retried, and its results stay in the log. A run of consecutive failures is exactly the plateau
 signal worth having, and `gate_starved` alarms on five in a row. Independently of the gate a
 **checkpoint** is written at every candidate: checkpoints are for resuming, pool membership is for
 rating, and conflating the two is what makes a pool unbounded.
@@ -2386,23 +2393,23 @@ rating, and conflating the two is what makes a pool unbounded.
    weights make of it (section 11.3). The cost stays at 800 battles.
 
 Outcomes: all three pass, admit and promote to champion. (1) and (2) pass and (3) fails, **admit to the
-pool but leave the champion unchanged**, with `meta["cycle"] = true` — it is a useful diverse opponent
-and a detected cycle, not progress. (1) fails, discard the candidate and keep the results.
+pool but leave the champion unchanged**, with `meta["cycle"] = true`. That is a useful diverse
+opponent and a detected cycle, not progress. (1) fails, discard the candidate and keep the results.
 
 A floor admits unconditionally every `floor_admit_every_env_steps`, so a plateau cannot starve the
 pool.
 
 Total 2200 battles per gate, all of which are rating evidence. Cost on the laptop profile: 2200
 battles of about 420 decisions is 924 000 game-steps, which at 2 eval workers is about **6 to 7
-minutes** **[A]**, against a candidate cadence of about two hours — **roughly 5% of wall clock, which
-is exactly why the gate can afford to be statistically honest.** `ladder/gate_seconds_frac` is logged.
-If it exceeds 8%, raise `candidate_every_env_steps` first: a pool does not need more than twenty
-members a day. Only if that is not acceptable, lower `n` to 600 and raise the required observed rate.
-Never drop the interval.
+minutes** **[A]**, against a candidate cadence of about two hours. That is **roughly 5% of wall clock,
+which is exactly why the gate can afford to be statistically honest.** `ladder/gate_seconds_frac` is
+logged. If it exceeds 8%, raise `candidate_every_env_steps` first: a pool does not need more than
+twenty members a day. Only if that is not acceptable, lower `n` to 600 and raise the required
+observed rate. Never drop the interval.
 
-A `GateDecision` record — the candidate, each condition's `n`, observed value, bound and verdict, the
-eval seed set hash, the champion id and the wall time — is written to
-`ladder/gates/<candidate>.json` and pushed to the metrics sink as an artifact.
+A `GateDecision` record is written to `ladder/gates/<candidate>.json` and pushed to the metrics sink
+as an artifact. It holds the candidate, each condition's `n`, observed value, bound and verdict, the
+eval seed set hash, the champion id and the wall time.
 
 ### 11.5 Evaluation
 
@@ -2472,9 +2479,10 @@ message naming the field. A `LoadedPolicyCache` keeps at most
 `max_resident_opponents + 2` modules resident in VRAM.
 
 Archive everything and never delete: at a megabyte each, five hundred snapshots is under a gigabyte.
-`HallOfFameEviction` removes snapshots from the **sampler** only — never a scripted anchor, never v0,
-never a member of the champion chain; among the rest it keeps a stratified sample across the fitted
-rating range and prefers keeping snapshots flagged `meta["cycle"]`, because those are the diverse ones.
+`HallOfFameEviction` removes snapshots from the **sampler** only, and never a scripted anchor, never
+v0, never a member of the champion chain. Among the rest it keeps a stratified sample across the
+fitted rating range and prefers keeping snapshots flagged `meta["cycle"]`, because those are the
+diverse ones.
 Evicted snapshots stay in the archive and in the result log and their ratings stay in the fit:
 eviction is about sampling cost, not about forgetting evidence.
 
@@ -2517,7 +2525,7 @@ A candidate must be about 35 Elo stronger to pass reliably: a true 35-Elo improv
 roughly even odds per attempt and a true 70-Elo improvement passes essentially always, which is the
 right shape for a gate applied every few million steps. With a non-trivial draw rate `d` the variance
 of the score rate is `(p(1-p) - d/4)/n`, strictly less than the binomial, so the table is conservative
-once draws are counted separately — one more reason to store them separately.
+once draws are counted separately. That is one more reason to store them separately.
 
 ### 11.8 What the ladder logs
 
@@ -2525,12 +2533,12 @@ The fitted rating and its 95% interval for the learner and every pool member, wi
 `rating_above_v0`; the score rate against each scripted anchor, which is the one scale that never
 drifts; every gate outcome with the condition that failed; the draw rate; `paired_rho`; the pool and
 sampler sizes; eviction events; per-snapshot evaluation game counts; and the **transitivity
-residual** — the fraction of head-to-head pairs with at least 30 games whose observed score
+residual**, which is the fraction of head-to-head pairs with at least 30 games whose observed score
 contradicts the fit by more than two standard errors.
 
 The residual is the number that says whether a scalar rating is meaningful for this population. Above
 about 10% the scalar release metric is lying and the `Rater` ABC is exactly the seam a Nash-averaging
-or alpha-rank implementation drops into — the result log stores every game rather than an aggregate,
+or alpha-rank implementation drops into. The result log stores every game rather than an aggregate,
 so it already holds the dense matrix such a method needs. Publishing the number is how
 `royalegym/selfplay.py`'s honest docstring caveat about non-transitivity becomes a measurement instead
 of a warning, and it is far better discovered by a logged diagnostic in month one than by a confusing
@@ -2580,9 +2588,9 @@ to a checkpoint is adding a folder constant and a dict entry; there is no centra
 `os.replace(partial, final)`. The directory itself is not fsynced: `os.fsync` on a directory handle is
 a POSIX guarantee and raises on Windows, where this harness's default profile runs, so the durability
 step is per file and the atomic step is the rename. `os.replace` is atomic on both platforms, which is
-the property the recovery actually needs — a crash mid-write leaves the previous checkpoint intact and
+the property the recovery actually needs: a crash mid-write leaves the previous checkpoint intact and
 the partial directory obviously named. `latest()` reads the run index, never
-`int(x) for x in os.listdir(...)` — that form crashes the save on any stray file, and the save is
+`int(x) for x in os.listdir(...)`. That form crashes the save on any stray file, and the save is
 called from the crash handler, which is exactly where the user most needs it not to.
 
 **Pruning** keeps `checkpoint.keep` checkpoints by the manifest index and survives a stray file in the
@@ -2681,18 +2689,18 @@ a documented identity change, not a broken promise.
 
 `MetricsSink` per section 4.6. Shipped:
 
-- **`JsonlSink`** — always installed, never optional. One msgspec-encoded line per iteration in
+- **`JsonlSink`** is always installed and never optional. One msgspec-encoded line per iteration in
   `metrics.jsonl`, plus `episodes.jsonl` and `alarms.jsonl`. No service, no account, replayable, and it
   is the file the resume test compares.
-- **`ConsoleSink`** — the per-iteration grouped block, printed by iterating the metric dict rather than
-  by indexing a fixed key list, so a new metric cannot crash the console.
-- **`ViserSink`** — the learning status the viewer's panel reads, described below.
-- **`WandbSink`** — a **decorator** over any sink. It flattens nested keys to `group/name`, persists
+- **`ConsoleSink`** prints the per-iteration grouped block. It iterates the metric dict rather than
+  indexing a fixed key list, so a new metric cannot crash the console.
+- **`ViserSink`** carries the learning status the viewer's panel reads, described below.
+- **`WandbSink`** is a **decorator** over any sink. It flattens nested keys to `group/name`, persists
   `run_id` in the checkpoint and passes it to `wandb.init(id=..., resume="allow")` so a resumed run
   continues the same wandb run, carries an `enable` flag that makes it a pure pass-through, populates
   the wandb config from the resolved config **and the `RunIdentity`**, and imports `wandb` lazily
   behind an optional extra.
-- **`CompositeSink`** — fans out; the default is
+- **`CompositeSink`** fans out. The default is
   `Composite([Jsonl, Console, Viser, Wandb(enable=False)])`.
 
 **The learning panel is a sink, not a hook.** RoyaleViser draws a learning panel beside the battle it
@@ -2720,8 +2728,8 @@ The field names are fixed by `royaleviser.model.Learning`: `run`, `iteration`, `
 `"extra": {name: number | str}` map drawn underneath, of which about three rows fit on screen.
 `ViserSink` maps the metric row onto those names and spends the three extras on `rating`, formatted
 as `"1183 ± 22"` from the fitted rating and its standard error, `cards_per_match`, and the last gate
-verdict. `tests/test_viser_sink.py` plays the viewer with a plain socket — send the hello, receive the
-datagram, decode it, assert the fields — and imports nothing from RoyaleViser, so the test states the
+verdict. `tests/test_viser_sink.py` plays the viewer with a plain socket: send the hello, receive the
+datagram, decode it, assert the fields. It imports nothing from RoyaleViser, so the test states the
 protocol rather than inheriting it.
 
 Environment-side metrics reach the sink on the round scalars and the `EpisodeRecord`s the worker emits;
@@ -2740,22 +2748,22 @@ schema key is emitted, so the documentation and the code cannot drift.
 
 ### 13.2 The metric list
 
-**`run/`** — `iteration`, `cumulative_timesteps`, `cumulative_env_steps`, `cumulative_updates`,
+**`run/`**: `iteration`, `cumulative_timesteps`, `cumulative_env_steps`, `cumulative_updates`,
 `wall_seconds`, `gamma`, `gae_lambda`, `credit_horizon_seconds`, `ent_coef`, `ent_coef_noop`,
 `lr_actor`, `lr_critic`, `determinism_tier`, `resumed_with_drift`, `state_digest`.
 
-**`throughput/`** — `overall_steps_per_second`, `collected_steps_per_second`,
+**`throughput/`**: `overall_steps_per_second`, `collected_steps_per_second`,
 `engine_ticks_per_second`, `rollout_capacity_ratio` (rollout timesteps/s over update timesteps/s; the
-invariant of section 2.3, warn under 1.5), `boundary_mb_per_second`, `parent_wait_frac` (the parent blocked on workers that have not
-published, which rises when the workers cannot keep up — not a number about workers idling),
-`inference_ms_per_round`, `discarded_rows_frac`, `gpu_util_frac`.
+invariant of section 2.3, warn under 1.5), `boundary_mb_per_second`, `parent_wait_frac` (the parent
+blocked on workers that have not published, which rises when the workers cannot keep up; it is not a
+number about workers idling), `inference_ms_per_round`, `discarded_rows_frac`, `gpu_util_frac`.
 
-**`time/`** — `iteration`, `collection`, `inference`, `env`, `codec`, `ipc`, `critic_pass`, `gae`,
+**`time/`**: `iteration`, `collection`, `inference`, `env`, `codec`, `ipc`, `critic_pass`, `gae`,
 `update`, `checkpoint`, `gate`, `overlap_saved`. The ratio of collection to iteration is how you see
 whether a run is environment-bound or learner-bound, and the residual is broken out because the
 reference's residual silently absorbs the four places it is actually slow.
 
-**`ppo/`** — `policy_loss`, `value_loss`, `entropy`, `entropy_normalised`, `noop_entropy`, `kl`,
+**`ppo/`**: `policy_loss`, `value_loss`, `entropy`, `entropy_normalised`, `noop_entropy`, `kl`,
 `kl_epoch{0,1,2}`, `clip_fraction`, `clip_fraction_epoch{0,1,2}`, `dual_clip_fraction`,
 `explained_variance`, `grad_norm_actor`, `grad_norm_critic`, `update_magnitude_actor`,
 `update_magnitude_critic`, `ratio_max_abs_dev`, `advantage_std_pre_norm`, `return_running_mean`,
@@ -2765,14 +2773,14 @@ reference's residual silently absorbs the four places it is actually slow.
 | metric | healthy | what it diagnoses |
 |---|---|---|
 | `explained_variance` | rising to 0.5-0.9 | the critic's health. No reference logs it, and value loss is uninterpretable while returns are normalised by a moving standard deviation. Still negative after fifty iterations is the most likely cause of a plateau |
-| `entropy_normalised` | 0.3-0.8 | raw entropy falling is ambiguous — a confident policy or a tighter mask. Only the normalised form separates them |
+| `entropy_normalised` | 0.3-0.8 | raw entropy falling is ambiguous: it can be a confident policy or a tighter mask. Only the normalised form separates them |
 | `noop_entropy` | above 0.05 nats | the leading indicator of no-op collapse, before `cards_per_match` bottoms out. Taken over the rows whose mask offered more than the no-op, because a decision the elixir bar cannot afford has a binary entropy of zero by construction and most decisions on this environment are that one (section 18, item 8). An unconditioned mean measures the elixir curve: it reads near zero on a healthy run, so a floor on it fires permanently, and a gate that had really collapsed would move it by a fraction of what it moves on the rows that had a choice |
 | `clip_fraction` | 0.05-0.20 | pinned near 1.0 is the signature of a rollout/update mask disagreement, or a learning rate far too high |
 | `kl` | 0.003-0.02 | below the band, lower `batch_size`; above it, raise `batch_size` or let the backoff act |
 | `grad_norm_*` | below `max_grad_norm` most steps | pinned at 0.5 every step means the clip is the binding constraint and the effective learning rate is unknown |
 | `credit_horizon_seconds` | 40-50 | logged every run so it can never be ten seconds by accident |
 
-**`policy/`** — `cards_per_match` (healthy about 22; **this and not the no-op rate is the
+**`policy/`**: `cards_per_match` (healthy about 22; **this and not the no-op rate is the
 no-op-collapse metric**, because a healthy policy is about 94% no-op and 99.5% no-op is 1.8 cards a
 match and dead), `noop_rate`, `legal_actions_mean`, `legal_actions_p05/p50/p95`, `forced_noop_frac`
 (the share with exactly one legal action, which carries zero policy gradient), `tile_entropy`,
@@ -2783,7 +2791,7 @@ The healthy figure for `cards_per_match` is elixir arithmetic, not a guess: a fu
 generates 85.7 elixir (120 s at 0.357/s plus 60 s at 0.714/s) plus 5 at the start, and at an average
 four-elixir card that is about 22 cards.
 
-**`env/`** — `episode_steps_mean` and the **histogram** (a spike at the 480-step cap is the draw and
+**`env/`**: `episode_steps_mean` and the **histogram** (a spike at the 480-step cap is the draw and
 turtle equilibrium), `episode_steps_p05/p50/p95`, `episodes_completed`, `ticks_mean`, `crowns_for`,
 `crowns_against`, `crown_diff`, `tower_hp_frac_end_own/enemy`, `draw_rate`, `win_rate_by_seat` (near
 50%; the observation layer guarantees bit-identical mirrored observations, but the shipped engine's
@@ -2795,13 +2803,13 @@ enemy-elixir field was an estimate on some episodes and the alarm below says so)
 `frac_elixir_above_99`, `illegal_action_rate`, and `reward_terms/<name>` (signed) and
 `reward_terms_abs/<name>` (magnitude) per weighted term.
 
-**`ladder/`** — `rating`, `rating_se`, `rating_ci95_lo/hi` per member, `rating_above_v0`,
+**`ladder/`**: `rating`, `rating_se`, `rating_ci95_lo/hi` per member, `rating_above_v0`,
 `elo_readout`, `champion_id`, `champion_step`, `pool_size`, `sampler_size`, `gate_attempts`,
 `gate_passes`, `gate_observed_rate`, `gate_lower_bound`, `gate_failed_condition`, `gate_seconds_frac`,
 `score_vs_noop`, `score_vs_random_legal`, `transitivity_residual`, `paired_rho`, `draw_rate_eval`,
 `eval_games_total`, `evictions`.
 
-**`health/`** — `illegal_action_rate` (**exactly zero by construction; this is an alert, not a plot**),
+**`health/`**: `illegal_action_rate` (**exactly zero by construction; this is an alert, not a plot**),
 `mask_disagreements` (from the start-up gate), `worker_restarts`, `worker_failures_by_kind`,
 `rows_dropped_dead_worker`, `obs_codec_clipped`, `samples_unused_frac`, `nan_guard_trips`,
 `vram_peak_mb`, `rss_peak_mb`, `buffer_fill_frac`, and the device-memory regime read at the end of
@@ -2845,7 +2853,7 @@ being hunted, and a false halt costs everything the run was for.
 | `illegal_actions` | `env/illegal_action_rate > 0` | 1 | **halt** | a mask bug, an unmasked policy, or a wrong action encoding. With a correct mask it is exactly zero |
 | `ratio_invariant` | `ppo/ratio_max_abs_dev > 5 * ratio_atol` | 1 | **halt** | a mask, codec or weight-version mismatch (section 9.6). The multiple of the configured tolerance is what keeps the alarm meaningful in fp32 and under bf16 alike; all three failures it is aimed at produce a deviation of order one |
 | `nonfinite` | any loss, gradient or logit non-finite | 1 | **halt** | |
-| `buffer_overflow` | `health/buffer_fill_frac > 1.0` | 1 | **halt** | an invariant is broken. A healthy rectangle reads **exactly one**: every cell is written once per iteration, so anything under one is a cell nobody filled and anything over it is impossible. The threshold is above one and not below it for that reason — a bound of 0.98 would halt every healthy run on its first iteration |
+| `buffer_overflow` | `health/buffer_fill_frac > 1.0` | 1 | **halt** | an invariant is broken. A healthy rectangle reads **exactly one**: every cell is written once per iteration, so anything under one is a cell nobody filled and anything over it is impossible. The threshold is above one and not below it for that reason: a bound of 0.98 would halt every healthy run on its first iteration |
 | `worker_failures` | `health/worker_restarts` rose | 1 | warn | |
 | `worker_failures_persistent` | rose on three consecutive iterations | 3 | **halt** | |
 | `clip_pinned` | `ppo/clip_fraction > 0.5` | 3 | **halt** | mask disagreement, or a learning rate far too high |
@@ -2874,24 +2882,23 @@ it was built for then arrives invisibly. That is not hypothetical here: `noop_en
 on both iterations of the first real run and was read twice, by two people, as a policy warming
 up.
 
-Measured against those two iterations — the only healthy rows this harness has produced — four
-alarms held and two of them are a threshold problem rather than a finding:
+Those two iterations are the only healthy rows this harness has produced. Measured against them,
+four alarms held, and two of them are a threshold problem rather than a finding:
 
 | alarm | held | reading |
 |---|---|---|
 | `noop_entropy_floor` | both rows | **the threshold was wrong**, and the metric is now conditioned on the rows that had a choice (section 18, item 8). The number those rows report is the unconditioned one |
-| `kl_dead` | both rows, at 4.8e-06 and 3.6e-07 | **the same fault, and the same repair.** A forced row's ratio is exactly one — the distribution is a point mass at the same action before and after the update — so it contributes zero KL structurally. `ppo/kl`, `ppo/clip_fraction` and `ppo/dual_clip_fraction` are now means over the rows that had a choice, and the threshold stands. This reached past the dashboard: `lr_backoff` reads this KL, so a diluted one put the brake that stops a blow-up out of reach by the same factor |
+| `kl_dead` | both rows, at 4.8e-06 and 3.6e-07 | **the same fault, and the same repair.** A forced row's ratio is exactly one: the distribution is a point mass at the same action before and after the update. So it contributes zero KL structurally. `ppo/kl`, `ppo/clip_fraction` and `ppo/dual_clip_fraction` are now means over the rows that had a choice, and the threshold stands. This reached past the dashboard: `lr_backoff` reads this KL, so a diluted one put the brake that stops a blow-up out of reach by the same factor |
 | `ev_negative` | first row only | healthy: the critic had seen one batch, and explained variance was +0.25 by the second. Patience is 50 |
 | `noop_collapse` | first row only | healthy: `cards_per_match` was 6.98 on a freshly initialised policy and 22.08 by the second row. Patience is 5 |
 
-So two alarms are fixed and two behaved. The rule that produced
-that table is worth more than the table: before shipping a threshold, measure the quantity on the
-population it will really be averaged over, and if that population is mostly structural zeros,
-**condition the metric rather than
-lowering the number** — because the share of rows that are structural zeros is itself a property
-of the game rather than of the learner. Here it is the elixir economy, and it moves as the policy
-learns to hold elixir, as the deck changes, and in overtime at double rate. A threshold re-tuned
-against today's share is a number with an expiry date nobody will notice passing.
+So two alarms are fixed and two behaved. The rule that produced that table is worth more than the
+table: before shipping a threshold, measure the quantity on the population it will really be
+averaged over, and if that population is mostly structural zeros, **condition the metric rather than
+lowering the number**. The share of rows that are structural zeros is itself a property of the game
+rather than of the learner. Here it is the elixir economy, and it moves as the policy learns to hold
+elixir, as the deck changes, and in overtime at double rate. A threshold re-tuned against today's
+share is a number with an expiry date nobody will notice passing.
 
 What a validated threshold looks like, from the two that behaved: held on the first iteration,
 cleared by the second, with patience long enough to absorb the start. A new alarm can be checked
@@ -2934,9 +2941,9 @@ firing on a card; the check is the train session's experiment above, re-run agai
 
 The other alarms have been checked against two iterations of one profile, which by the rule above
 is not validation. A metric's row population belongs in its identity rather than in its
-implementation — `ppo/kl@choice` against `@all`, declared in the schema — so a threshold cannot
-be set against the wrong population by accident and a reviewer sees the fault without running
-anything. That is the systemic form of both repairs, and it is not built.
+implementation, written as `ppo/kl@choice` against `@all` and declared in the schema. Then a
+threshold cannot be set against the wrong population by accident, and a reviewer sees the fault
+without running anything. That is the systemic form of both repairs, and it is not built.
 
 ### 13.4 The diagnostic bundle
 
@@ -3036,7 +3043,7 @@ could reach the middle of a trajectory.
 
 ### 14.2 The file a user runs
 
-`examples/train_1v1.py` — about fifteen lines, all of it the things a bot creator actually changes.
+`examples/train_1v1.py` is about fifteen lines, all of it the things a bot creator actually changes.
 
 ```python
 from pathlib import Path
@@ -3091,10 +3098,10 @@ Checked once per **round**, not once per iteration, via a sentinel file in the r
 `SIGINT` handler, so neither a tty nor a busy-wait is needed: `c` checkpoint now, `q` checkpoint and
 quit, `p` pause (a blocking wait on an Event).
 
-The whole loop is wrapped in `try/except (Exception, KeyboardInterrupt)` — `KeyboardInterrupt`
-explicitly, because it is not an `Exception` and a bare `except Exception` therefore skips its own
-emergency save on Ctrl-C — with a nested `try` around the emergency checkpoint, then a `finally` that
-closes every worker, joins **with a timeout** and terminates the stragglers.
+The whole loop is wrapped in `try/except (Exception, KeyboardInterrupt)`, with a nested `try` around
+the emergency checkpoint, then a `finally` that closes every worker, joins **with a timeout** and
+terminates the stragglers. `KeyboardInterrupt` is named explicitly because it is not an `Exception`,
+so a bare `except Exception` skips its own emergency save on Ctrl-C.
 
 **An emergency checkpoint holds only the learner the last metric row describes.** From the update's
 first change until that iteration's row is written, the learner in memory is one no row describes, so
@@ -3138,7 +3145,7 @@ metric.
 | `test_returns.py` | Welford matches numpy's mean and `n-1` variance over 10^5 samples; the state round-trips through JSON; the mean is never subtracted | fast |
 | `test_buffer.py` | `record_round` writes exactly the right cells; minibatches cover every trainable valid cell exactly `n_epochs` times with nothing dropped; a batch never straddles an epoch; the pinned staging ring does not alias; the measured footprint matches the `row_bytes` formula of section 2.1 to the byte | fast |
 | `test_frame_stack.py` | at `k = 2` the two frames of a stacked cell have consecutive `info["tick"]` values and belong to the same episode; the first cell of an episode stacks a zero history; cycle 0 of an iteration stacks the history rows carried over from the previous one; `vector` is the current frame's and is not stacked; `frame_stack` changes `arch_digest` and `obs_digest`; at `k = 1` the stacked observation is byte-identical to the unstacked one | fast |
-| `test_ppo.py` | gradient accumulation over `k` minibatches gives the **same** gradient as one full batch to 1e-5 — the property that makes `minibatch_size` a pure memory knob; clip fraction and KL match hand-computed values on a synthetic batch; dual clip binds only for a negative advantage; `ratio == 1` gives exactly `-mean(A)`; the two mask asserts fire when fed a deliberately mismatched mask; the backoff fires after exactly `patience` consecutive breaches and floors at `lr_min` | fast |
+| `test_ppo.py` | gradient accumulation over `k` minibatches gives the **same** gradient as one full batch to 1e-5, which is the property that makes `minibatch_size` a pure memory knob; clip fraction and KL match hand-computed values on a synthetic batch; dual clip binds only for a negative advantage; `ratio == 1` gives exactly `-mean(A)`; the two mask asserts fire when fed a deliberately mismatched mask; the backoff fires after exactly `patience` consecutive breaches and floors at `lr_min` | fast |
 | `test_schedules.py` | the gamma and entropy anneals hit their endpoints exactly at the stated env-step count; the whole schedule state round-trips | fast |
 | `test_rewards.py` | each potential term equals `gamma*Phi(s') - Phi(s)` on a hand-built transition; the composition is antisymmetric between seats on a mirrored transition; `set_gamma` reaches every term; the schedule's discount reaches the reward during a real collection, inline and (slow) through worker processes; every profile and shipped example file names `default_potential_reward`; the objective is filed under the name the shaping alarm reads; the committed-elixir potential is zero for a card played and negative for elixir left in the bar while the opponent's rises | fast |
 | `test_rollout_inline.py` | an `InlineRolloutSource` run of 20 cycles: slots map to the right battles, rewards are antisymmetric on mirror battles, episode ends arrive in pairs, `deploy_status` is never in 1..11, the seven terminal scalars are read out of `final_info` and match what the worker counted, and a battle's assignment changes only on the cycle after its `episode_end` | fast |
@@ -3188,14 +3195,14 @@ metric stream; and `ClashSelfPlayVecEnv(..., viser=...)` for the state stream. W
 | # | ask | cost today | size |
 |---|---|---|---|
 | 1 | **Rust-backed default observation and mask** (RoyaleGym's own job 7) | 200 of 298 microseconds per transition, 67% of the rollout side; landing it takes rollout capacity from about 3 300 to about 9 000 timesteps/s and frees two cores | large, already planned |
-| 2 | `ClashSelfPlayVecEnv(..., copy=False)` — drop the per-step `copy.deepcopy` of the whole batch | 14 microseconds per transition, 387 KB per step | one line |
+| 2 | `ClashSelfPlayVecEnv(..., copy=False)`, to drop the per-step `copy.deepcopy` of the whole batch | 14 microseconds per transition, 387 KB per step | one line |
 | 3 | `PlacementOracle` grid reuse between the mask's grids and the observation's | up to 7 of 14 `point_grid` calls per step, about 80 microseconds per game-step | small |
 | 4 | `selfplay._Record` gains separate `wins`/`draws`/`losses`; `record_result(..., eval=False, context=...)`; atomic `save`; `fit_ratings` and `is_stronger`; an `EvictionPolicy` ABC whose default is not oldest-first; `_evict` stops leaking `records`. Plus the potential-based reward terms of section 10 | draws are lossy, which breaks every binomial interval; `_evict` deletes exactly the diverse opponents the uniform floor protects; `ElixirTradeReward` rewards turtling at a magnitude comparable to the terminal reward | medium; the harness ships its own until then |
 | 6 | `call`/`get_attr`/`set_attr` on the vec env; a counter for entities dropped past `max_entities` | reaching into `vec.envs[i]` is undocumented; a silent truncation during training is the class of bug `docs/design.md` warns about | small |
 
 Ask 1 lands as a **drop-in speed-up, not a rewrite**, because nothing in this design touches the
-Python builders' internals — only `single_observation_space`, the `Dict` key names, the two layout
-methods and the mask contract. That is the property to protect in review.
+Python builders' internals. It uses only `single_observation_space`, the `Dict` key names, the two
+layout methods and the mask contract. That is the property to protect in review.
 
 ---
 
@@ -3206,17 +3213,17 @@ runs `cargo` or `maturin`: the whole plan runs against the already-built `royale
 `MockEngine`, which is deliberate, because it is what lets the middle stages proceed in parallel on a
 small machine.
 
-**Stage 0 — clear the seed.** Delete the six vendored modules, `SEED_CLASSES`, `NOTICE`,
+**Stage 0, clear the seed.** Delete the six vendored modules, `SEED_CLASSES`, `NOTICE`,
 `LICENSE-APACHE-2.0` and the ruff exclusion list; update `pyproject.toml` (licence, dependencies,
 extras, markers); rewrite `royalelearn/__init__.py` and `tests/test_package.py`. This lands first
 because everything else touches `pyproject.toml`.
 
-**Stage 1 — the spine.** `config.py`, `seeding.py`, `determinism.py`, `identity.py`, `errors.py`,
+**Stage 1, the spine.** `config.py`, `seeding.py`, `determinism.py`, `identity.py`, `errors.py`,
 `obs_layout.py`, `version.py`, the whole of `api/`, `rollout/layout.py`, `rollout/envspec.py`,
 `metrics/schema.py`, and their tests. Nothing downstream can start until the ABCs and the byte layout
 are frozen, because they are the interfaces everything else is written against.
 
-**Stage 2 — four independent tracks.** Each owns disjoint files and depends only on stage 1.
+**Stage 2, four independent tracks.** Each owns disjoint files and depends only on stage 1.
 
 - *Networks*: `learn/nets.py`, `learn/distribution.py`, `learn/actor_critic.py` and their tests.
 - *Data path*: `rollout/codec.py`, `learn/buffer.py`, `learn/gae.py`, `learn/returns.py`,
@@ -3229,21 +3236,21 @@ are frozen, because they are the interfaces everything else is written against.
   their tests. This track is pure numpy and statistics with no torch and no env, so it is the cleanest
   one to start first if effort is scarce.
 
-**Stage 3 — the update.** `learn/ppo.py`, `learn/inference.py`, `rewards.py` and their tests. Depends
+**Stage 3, the update.** `learn/ppo.py`, `learn/inference.py`, `rewards.py` and their tests. Depends
 on the networks and the data path; `ppo.py` and `buffer.py` are coupled through the minibatch path, so
 splitting them costs more in interface churn than it saves.
 
-**Stage 4 — the run.** `coordinator.py`, `cli.py`, `__main__.py`, `metrics/alarms.py`,
+**Stage 4, the run.** `coordinator.py`, `cli.py`, `__main__.py`, `metrics/alarms.py`,
 `metrics/bundle.py`, `examples/**`, and the slow tests: resume, the identity guard, the ratio
 invariant, replay and the smoke run.
 
-**Stage 5 — verification.** The full suite once, plus `royalelearn doctor` and `royalelearn bench`,
+**Stage 5, verification.** The full suite once, plus `royalelearn doctor` and `royalelearn bench`,
 with the measured numbers pasted into `docs/throughput.md` and the README. This is the only stage that
 runs the whole sweep; earlier stages scope `pytest` to the files they touch and report what they
 changed rather than proving it with a full gate. Then the documentation pages of section 3, written
 against the code as it actually landed, because every number in them is measured here.
 
-**Stage 6 — the first real run.** Twenty-four hours on `MockEngine` first (no rebuild, and it is
+**Stage 6, the first real run.** Twenty-four hours on `MockEngine` first (no rebuild, and it is
 faster), then `RustEngine`. Acceptance: `health/illegal_action_rate` exactly zero,
 `ppo/explained_variance` positive by iteration 50, `policy/cards_per_match` above 10,
 `env/win_rate_by_seat` inside 0.45-0.55, `throughput/rollout_capacity_ratio` above 1.5, and one gate
@@ -3288,24 +3295,25 @@ run with, and each is a number the harness already logs.
    halves the cost and loses the timing granularity that decides Clash fights, 250 costs four times as
    much. Ablate it in the second run, not the first, because it is the parameter most likely to be
    blamed for a plateau that is really something else.
-8. **How much of a batch can carry a gradient at all — measured, and it is 6%.** The first two
-   real iterations on the laptop profile reported `policy/forced_noop_frac` at **0.937 and
-   0.924** **[M]**, exactly equal to `policy/noop_rate` in both, with
+8. **How much of a batch can carry a gradient at all. It is measured, and the answer is 6%.** The
+   first two real iterations on the laptop profile reported `policy/forced_noop_frac` at
+   **0.937 and 0.924** **[M]**, exactly equal to `policy/noop_rate` in both, with
    `policy/legal_actions_mean` at 29 of 2305. So in 93% of collected decisions the mask leaves
-   exactly one action — the no-op — because the elixir bar cannot afford anything. Those rows
+   exactly one action, the no-op, because the elixir bar cannot afford anything. Those rows
    are not a policy choosing to wait; they are a policy with nothing to choose, and they
    contribute exactly zero policy gradient while occupying a full row of the rectangle, a full
    share of the boundary's bandwidth and a full share of every epoch.
 
    It is visible in everything downstream and explains all of it: `ppo/kl` at 4.8e-06 then
    3.6e-07, `ppo/clip_fraction` at 1e-04 then exactly 0, `ppo/grad_norm_actor` at 0.003,
-   `ppo/entropy_normalised` at 0.07 against a healthy band of 0.3-0.8 — an average over rows
-   whose legal set has one member and whose entropy is therefore zero. A reader who saw only
-   the KL would conclude the update was broken. The update is fine; the batch is 94% padding.
+   `ppo/entropy_normalised` at 0.07 against a healthy band of 0.3-0.8. That last one is an
+   average over rows whose legal set has one member and whose entropy is therefore zero. A
+   reader who saw only the KL would conclude the update was broken. The update is fine; the
+   batch is 94% padding.
 
    **And the padding is where the wall clock goes.** The same iteration measured
-   `time/collection` at 12.6 s against `time/update` at 531.1 s — **97.7% of the iteration is
-   the update** **[M]**, three epochs over a batch that is 93% rows the policy cannot learn
+   `time/collection` at 12.6 s against `time/update` at 531.1 s, so **97.7% of the iteration is
+   the update** **[M]**: three epochs over a batch that is 93% rows the policy cannot learn
    from. (The first iteration reads 84% because it pays for cuDNN's first look at each shape:
    `time/inference` 76.6 s then 10.2 s.)
 
@@ -3326,33 +3334,33 @@ run with, and each is a number the harness already logs.
    it steered the reader away from the cheapest branch** **[M]**. `net.separate_trunks` defaults
    to true and `SeparateActorCritic` gives the actor and the critic a trunk each with no shared
    tensor, so forced rows can be dropped from the *actor's* forward and backward while the
-   critic and GAE keep every row. The saving is real but bounded — it is the actor's share of
-   the update, not the update — and it is a fourth option rather than a variant of the first.
+   critic and GAE keep every row. The saving is real but bounded. It is the actor's share of
+   the update, not the update, and it is a fourth option rather than a variant of the first.
 
    **There is also a fifth, which is a denominator rather than a filter, and it is not about
    speed at all.** The actor's three loss terms are means over every row in the minibatch
    (`ppo.py`: `dual.mean()`, `result.entropy.mean()`, `result.noop_entropy.mean()`), while a
-   forced row contributes exactly zero to each numerator — its log-probability is identically
+   forced row contributes exactly zero to each numerator. Its log-probability is identically
    zero whatever the parameters, so its surrogate has no gradient and its entropies are point
    masses. The critic's MSE is the one term where every row contributes to the numerator too.
    So the policy gradient is divided by `1/(1 - forced_noop_frac)` more rows than contribute to
    it: measured 2026-09-22, 10.2x on one run and 32x at `forced` 0.969 **[M]**. Two cautions
    before anyone reaches for it. The factor **varies per iteration with the elixir economy**, so
    it is a learning rate that moves, which is a worse problem than a learning rate that is
-   wrong. And Adam largely cancels a *uniform* rescaling — `m` and `sqrt(v)` scale together, so
-   the step changes only through `eps` and wherever `max_grad_norm` binds — which means the
+   wrong. And Adam largely cancels a *uniform* rescaling: `m` and `sqrt(v)` scale together, so
+   the step changes only through `eps` and wherever `max_grad_norm` binds. That means the
    correct test is the parameter delta after an optimizer step, not the gradient norm. A
    gradient-norm comparison would show a clean 14x while the weights moved almost identically.
-9. **The trunk's discrimination, against its input's.** If the harness ever alarms on representation
-   collapse — the encoder producing nearly the same embedding for boards that differ — the threshold
-   must be **relative, never absolute**, and it must be built to three rules that a naive version of
-   it breaks.
+9. **The trunk's discrimination, against its input's.** Representation collapse is the encoder
+   producing nearly the same embedding for boards that differ. If the harness ever alarms on it, the
+   threshold must be **relative, never absolute**, and it must be built to three rules that a naive
+   version of it breaks.
 
    *Relative, because the observation is mostly constant.* Across eight boards differing in one
-   unit's position, a destroyed tower and the elixir, only 51 of the observation's numbers move —
-   0.4% — and the greatest pairwise cosine is 0.9998 with nothing wrong **[M]**. The rest is static
-   arena, standing towers and an unchanged hand. An embedding cosine of 0.99 on that input would mean
-   the trunk was *increasing* discrimination, not losing it.
+   unit's position, a destroyed tower and the elixir, only 51 of the observation's numbers move,
+   which is 0.4%, and the greatest pairwise cosine is 0.9998 with nothing wrong **[M]**. The rest is
+   static arena, standing towers and an unchanged hand. An embedding cosine of 0.99 on that input
+   would mean the trunk was *increasing* discrimination, not losing it.
 
    *On the same states, not on a sample.* Because so few cells move, the input baseline is dominated
    by which boards were chosen: pairs differing only in elixir barely move it, a pair with a tower
@@ -3360,13 +3368,13 @@ run with, and each is a number the harness already logs.
    different state sets will disagree about that encoder and both will be right about what they
    measured. The baseline is computed on the states the encoding was computed on, or the two numbers
    are not a pair. `royalegym.measure_variability(builder, states, action_masks)` returns the input
-   side — cells, varying, fraction, raw cosine and varying-cell cosine — and excludes the action
+   side: cells, varying, fraction, raw cosine and varying-cell cosine. It excludes the action
    mask, which is legality rather than representation.
 
-   *Report both cosines, raw and varying-cell.* Under a planted total collapse — the board removed
-   from the observation entirely — the raw cosine moves by less than 0.01 while the varying-cell
-   cosine goes to 1.0 **[M]**. The number a naive detector would watch is the number that does not
-   move.
+   *Report both cosines, raw and varying-cell.* Under a planted total collapse, with the board
+   removed from the observation entirely, the raw cosine moves by less than 0.01 while the
+   varying-cell cosine goes to 1.0 **[M]**. The number a naive detector would watch is the number
+   that does not move.
 
    One thing the measurement is not for: ranking two different observation builders against each
    other. It compares a representation against itself, and across representations of different
