@@ -17,7 +17,7 @@ a JSON config names one and overrides what it likes on top.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -511,6 +511,51 @@ class RunConfig(msgspec.Struct, forbid_unknown_fields=True):
 # --------------------------------------------------------------------------
 
 
+def role_counts(mix: Sequence[float], n_battles: int) -> tuple[int, int, int]:
+    """How many battle slots play mirror, how many pool and how many scripted.
+
+    The mixture is a count of slots, not a probability each slot is drawn from, so this is the
+    one place it is turned into whole battles. ``MixMatchmaker`` decides *which* slots get each
+    role and ``geometry`` sizes the iteration from the same counts: two callers, one function,
+    because the whole point of the exercise is that the number the iteration is sized for is
+    the number the matchmaker fills.
+
+    It lives here rather than on the matchmaker only because of the import graph -- the
+    matchmaker reaches ``config`` through ``api.ladder`` and ``identity``, so ``config``
+    importing the matchmaker would close a cycle. The dependency runs the way it already did.
+
+    Rounding is resolved in two stages, each to the nearest whole battle with a half rounding
+    up, and the last share takes whatever is left:
+
+    * ``mirror = round(mix[0] * n_battles)``,
+    * the remaining battles split between pool and scripted in the ratio ``mix[1] : mix[2]``,
+      ``pool`` rounded and ``scripted`` taking the remainder.
+
+    So the three always sum to ``n_battles``, and each lands within one battle of its exact
+    share (the proof is short: each stage rounds by at most a half, and the second stage's
+    input is already off by at most a half). Halves round up rather than to even, because
+    ``round(0.5)`` is 0 in Python and a single battle under the shipped mixture would then be a
+    rectangle with no mirror in it at all.
+
+    Two consequences are worth saying out loud. A share small enough that its quota is under a
+    half rounds to zero: three battles cannot hold a tenth of one, so that role is simply not
+    in the rectangle, and the mixture the run reports is the count, not the config. And an
+    all-mirror mixture keeps every slot, which is what makes ``(1, 0, 0)`` collect twice the
+    rows per cycle rather than one and a half.
+    """
+    if n_battles < 0:
+        raise ValueError(f"a rectangle cannot have {n_battles} battles")
+    mirror = min(n_battles, _round_half_up(mix[0] * n_battles))
+    rest = n_battles - mirror
+    weight = mix[1] + mix[2]
+    pool = min(rest, _round_half_up(rest * mix[1] / weight)) if weight > 0.0 else 0
+    return mirror, pool, rest - pool
+
+
+def _round_half_up(value: float) -> int:
+    return math.floor(value + 0.5)
+
+
 class Geometry(msgspec.Struct, frozen=True):
     """The iteration's rectangle, derived from the config once and passed around whole.
 
@@ -526,6 +571,7 @@ class Geometry(msgspec.Struct, frozen=True):
     games_per_shard: int
     n_battles: int
     n_slots: int
+    mirror_battles: int
     learner_row_fraction: float
     learner_rows: int
     cycles: int
@@ -544,9 +590,19 @@ def geometry(config: RunConfig) -> Geometry:
     """The iteration's rectangle, derived from the config.
 
     Learner rows are the slots whose seat the learner plays: both seats of a mirror battle and
-    one of every other, so the fraction is ``mirror + (1 - mirror) / 2``. The cycle count is
-    then what it takes to reach ``timesteps_per_iteration`` learner transitions, rounded up --
-    an iteration collects at least what was asked for, never less.
+    one of every other. Because ``role_counts`` makes the mirror battles a count rather than a
+    share, that is ``n_battles + mirror_battles`` exactly -- the same number on every cycle of
+    every iteration of every run, whatever the master seed.
+
+    It used to be ``int(n_slots * (mirror + (1 - mirror) / 2))``, the count's expectation. The
+    two agree at the shipped laptop profile (96 + 48 = int(192 * 0.75) = 144), and what the
+    expectation could not do was promise it: the realised count was Binomial(96, 0.5) + 96,
+    with a standard deviation of 4.9 rows per cycle against an iteration whose slack over the
+    trainable-row floor was 0.2%, so about one master seed in four halted the run.
+
+    The cycle count is then what it takes to reach ``timesteps_per_iteration`` learner
+    transitions, rounded up -- an iteration collects at least what was asked for, never less,
+    and now the "at least" is a fact about the rectangle rather than about its average.
     """
     rollout = config.rollout
     if rollout.shards_per_worker < 1 or rollout.games_per_worker % rollout.shards_per_worker:
@@ -556,9 +612,8 @@ def geometry(config: RunConfig) -> Geometry:
         )
     n_battles = rollout.workers * rollout.games_per_worker
     n_slots = 2 * n_battles
-    mirror = config.ladder.mix[0]
-    fraction = mirror + (1.0 - mirror) / 2.0
-    learner_rows = int(n_slots * fraction)
+    mirror_battles = role_counts(config.ladder.mix, n_battles)[0]
+    learner_rows = n_battles + mirror_battles
     if learner_rows < 1:
         raise ValueError(
             f"the mixture {config.ladder.mix} leaves no learner rows in {n_slots} slots"
@@ -571,7 +626,8 @@ def geometry(config: RunConfig) -> Geometry:
         games_per_shard=rollout.games_per_worker // rollout.shards_per_worker,
         n_battles=n_battles,
         n_slots=n_slots,
-        learner_row_fraction=fraction,
+        mirror_battles=mirror_battles,
+        learner_row_fraction=learner_rows / n_slots,
         learner_rows=learner_rows,
         cycles=cycles,
         timesteps_per_iteration=config.ppo.timesteps_per_iteration,

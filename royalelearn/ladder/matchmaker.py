@@ -1,14 +1,28 @@
 """Who each battle plays next.
 
-One draw per episode, addressed by the battle and its reset ordinal. Two things follow from
-that address, and both are the reason it is not addressed by the iteration and the slot.
+Two separate decisions, and they are made in different places on purpose.
 
-An iteration spans several episodes in every slot, so one draw per slot per iteration would
-give every episode that starts inside that iteration the same opponent -- a correlation across
-the mixture that nothing in the statistics accounts for. And because the address does not
-mention the iteration, it does not move when the iteration length or the worker count changes:
-the same episode of the same battle meets the same opponent on any geometry, which is what
-makes a rerun a rerun.
+**Which role a battle plays** -- mirror, pool or scripted -- belongs to the battle slot, for the
+whole run. The mixture is a count of slots: exactly 48 of 96 battles are mirror slots at the
+laptop profile, not 96 slots each drawn mirror with probability a half. That is what makes a
+cycle's learner rows a constant, and the iteration is sized from that constant. The layout is a
+seeded permutation of the battle indices, so it is a pure function of the master seed and the
+battle count -- a permutation rather than "the first 48", because battles map to workers and
+shards in blocks and a role that always lands on low indices always lands on the same worker.
+
+**Who a battle plays and from which seat** is still one draw per episode, addressed by the
+battle and its reset ordinal. An iteration spans several episodes in every slot, so one draw
+per slot per iteration would give every episode that starts inside that iteration the same
+opponent -- a correlation across the mixture that nothing in the statistics accounts for. And
+because the address does not mention the iteration, it does not move when the iteration length
+changes: the same episode of the same battle meets the same opponent however the iteration
+boundary falls across it.
+
+The role cannot have that last property and be exact at the same time. Exactly half of 96
+battles and exactly half of 192 battles are not the same set of indices, so a run replayed at a
+different worker count now lays its roles out differently. Exactness across the rectangle is
+worth more than invariance to it: the rectangle is part of the run's identity already, and a
+sampled mixture was halting one laptop iteration in four.
 
 A policy is bound to a battle for exactly one episode. The parent redraws at the battle's own
 episode boundary, so a partially controlled trajectory cannot occur.
@@ -34,6 +48,7 @@ from ..api.rollout import (
     EpisodeRecord,
     SlotPlan,
 )
+from ..config import role_counts
 from ..seeding import MATCH_BATTLE, derive_generator, stream_path
 from .pool import SCRIPTED_IDS
 
@@ -41,12 +56,15 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..config import Geometry, LadderConfig
     from .pool import LadderPool
 
-__all__ = ["RESIDENCY_BATTLE", "MixMatchmaker", "pfsp_shape"]
+__all__ = ["RESIDENCY_BATTLE", "ROLE_LAYOUT_BATTLE", "MixMatchmaker", "pfsp_shape"]
 
 #: The residency draw's address. It is not a battle index -- no battle is negative -- so the
 #: draw cannot collide with any battle's own stream, and it is still a path out of ``STREAMS``
 #: rather than a private string.
 RESIDENCY_BATTLE = -1
+#: The role layout's address, on the same pattern and a different sentinel. Its ``ordinal`` is
+#: the battle count, because the layout is a permutation of exactly that many slots.
+ROLE_LAYOUT_BATTLE = -2
 
 
 def pfsp_shape(p: np.ndarray, weighting: str, power: float) -> np.ndarray:
@@ -80,19 +98,34 @@ def pfsp_shape(p: np.ndarray, weighting: str, power: float) -> np.ndarray:
 class MixMatchmaker(Matchmaker):
     """The mixture of section 11.3: half mirror, a third pool, a sixth scripted.
 
-    Expected trainable rows per battle are ``0.5*2 + 0.5*1 = 1.5``, so three quarters of the
-    collected rows are kept and ``ppo.timesteps_per_iteration`` counts kept rows. The discarded
-    share is logged and asserted against this mixture every iteration: a drift there means the
-    matchmaker is not doing what the config says.
+    The shares are counts of battle slots. Of 96 battles, 48 are mirror slots, 34 pool and 14
+    scripted, for the whole run; the learner sits in both seats of a mirror battle and one seat
+    of the others, so a cycle collects 96 + 48 = 144 learner rows out of 192, three quarters,
+    every cycle of every iteration whatever the master seed.
+
+    Counts rather than a draw per episode because the iteration is sized from that number. A
+    drawn mixture makes the mirror count Binomial(96, 0.5) -- a standard deviation of 4.9 rows
+    per cycle -- against an iteration whose slack over the trainable-row floor is 0.2%, so
+    about one master seed in four sized an iteration too small and halted the run in its first
+    minutes. Counting also makes the discarded-row share an equality rather than a sample
+    proportion compared against a constant, and those two quantities were not even the same
+    one: a mirror episode runs about 9% longer than a scripted one, so a battle's share of the
+    mixture and its share of the rows differ by about two points.
+
+    What stays random is what does not change a seat count: which opponent a pool or scripted
+    battle draws, and which seat the learner takes, both redrawn at every episode boundary from
+    that battle's own stream.
     """
 
-    FORMAT_VERSION = 1
+    #: 2 adds ``n_battles``. A format-1 checkpoint loads; see ``load_checkpoint``.
+    FORMAT_VERSION = 2
 
     def __init__(
         self,
         master_seed: int,
         config: LadderConfig,
         *,
+        n_battles: int | None = None,
         learner_id: str = "learner",
         scripted_ids: Sequence[str] = SCRIPTED_IDS,
     ) -> None:
@@ -107,15 +140,78 @@ class MixMatchmaker(Matchmaker):
         self._ordinal: dict[int, int] = {}
         self._residents: tuple[int, tuple[str, ...]] | None = None
         self._plan_epoch: int | None = None
+        self._n_battles: int | None = None
+        self._mirror_battles = 0
+        self._layout: np.ndarray | None = None
+        if n_battles is not None:
+            self.set_rectangle(int(n_battles))
 
     # -- the mixture --------------------------------------------------------
 
     @property
+    def n_battles(self) -> int | None:
+        """The rectangle the roles are laid out over, or None before the first ``plan``."""
+        return self._n_battles
+
+    def set_rectangle(self, n_battles: int) -> None:
+        """Lay the roles out over ``n_battles`` battle slots.
+
+        Called by ``plan`` with the iteration's geometry, and by the constructor when a caller
+        already knows the rectangle. Laying it out again for the same count is a no-op, so an
+        iteration boundary does not move a single role.
+        """
+        if n_battles < 1:
+            raise ValueError(f"a rectangle of {n_battles} battles has nothing to assign")
+        if self._n_battles == n_battles:
+            return
+        mirror, pool, _scripted = role_counts(self.mix, n_battles)
+        rng = derive_generator(
+            self.master_seed,
+            stream_path(MATCH_BATTLE, battle=ROLE_LAYOUT_BATTLE, ordinal=n_battles),
+        )
+        order = rng.permutation(n_battles)
+        layout = np.full(n_battles, ROLE_SCRIPTED, dtype=np.int8)
+        layout[order[:mirror]] = ROLE_MIRROR
+        layout[order[mirror : mirror + pool]] = ROLE_POOL
+        self._n_battles = n_battles
+        self._mirror_battles = mirror
+        self._layout = layout
+
+    def role_of(self, battle: int) -> int:
+        """What ``battle`` plays, every episode, for the whole run."""
+        if self._layout is None or self._n_battles is None:
+            raise RuntimeError(
+                "the role layout is not set: build the matchmaker with n_battles, or call "
+                "plan() with the iteration's geometry before drawing an assignment"
+            )
+        if not 0 <= battle < self._n_battles:
+            raise IndexError(
+                f"battle {battle} is outside a rectangle of {self._n_battles} battles"
+            )
+        return int(self._layout[battle])
+
+    @property
+    def learner_rows(self) -> int:
+        """Learner rows one cycle of the rectangle produces: two per mirror battle, one per
+        other battle, so ``n_battles + mirror_battles``."""
+        if self._n_battles is None:
+            raise RuntimeError("no rectangle has been laid out yet")
+        return self._n_battles + self._mirror_battles
+
+    @property
     def expected_learner_row_fraction(self) -> float:
         """The share of collected rows the learner sits in: both seats of a mirror, one of the
-        rest."""
-        mirror = self.mix[0]
-        return mirror + (1.0 - mirror) / 2.0
+        rest.
+
+        Exact once a rectangle is laid out. Before then there is no rectangle to be exact
+        about, and this is the mixture's own share -- what the count converges to as the
+        battles grow. Nothing in a run reads it there: ``plan`` lays the rectangle out at the
+        top of every iteration, before a row is collected.
+        """
+        if self._n_battles is None:
+            mirror = self.mix[0]
+            return mirror + (1.0 - mirror) / 2.0
+        return self.learner_rows / (2 * self._n_battles)
 
     @property
     def expected_discarded_rows_frac(self) -> float:
@@ -224,6 +320,9 @@ class MixMatchmaker(Matchmaker):
     ) -> Assignment:
         """One battle's next episode.
 
+        The role is the slot's, not the episode's: ``role_of(battle)`` answers it and nothing
+        drawn here can change it. What is drawn is the opponent and the learner's seat.
+
         A pool assignment names its opponent by its position in the resident table, and the
         table the worker resolves that position against is the one the iteration's plan carried.
         So the pool must not move between the plan and the assignments drawn against it: it is
@@ -237,15 +336,11 @@ class MixMatchmaker(Matchmaker):
                 "at an iteration boundary, because an assignment's group is a position in the "
                 "plan's resident table and every one of them moves with the epoch"
             )
+        role = self.role_of(battle)
         rng = derive_generator(
             self.master_seed, stream_path(MATCH_BATTLE, battle=battle, ordinal=ordinal)
         )
-        bucket = float(rng.random())
-        mirror, pool_share, _scripted = self.mix
         residents = self.residents(pool, ratings)
-        role = ROLE_MIRROR
-        if bucket >= mirror:
-            role = ROLE_POOL if bucket < mirror + pool_share else ROLE_SCRIPTED
         if role == ROLE_POOL and not residents:
             # Before the first snapshot is admitted there is nothing to draw, and a scripted
             # opponent is the honest substitute: it keeps the seat count and the discarded-row
@@ -297,6 +392,7 @@ class MixMatchmaker(Matchmaker):
         until the next plan is checked against it.
         """
         self._plan_epoch = None
+        self.set_rectangle(geometry.n_battles)
         assignments = tuple(
             self.assign(battle, self.ordinal(battle), pool, ratings)
             for battle in range(geometry.n_battles)
@@ -314,14 +410,30 @@ class MixMatchmaker(Matchmaker):
     # -- checkpoint ---------------------------------------------------------
 
     def save_checkpoint(self, folder: Path) -> None:
+        """The ordinals, and the rectangle the roles are laid out over.
+
+        The layout itself is not stored: it is a pure function of the master seed, the mixture
+        and the battle count, so storing the count reproduces it exactly and storing the array
+        would only add a second copy that could disagree with the first.
+        """
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "matchmaker.json").write_bytes(
             msgspec.json.encode(
-                {"ordinal": {str(k): v for k, v in sorted(self._ordinal.items())}}
+                {
+                    "ordinal": {str(k): v for k, v in sorted(self._ordinal.items())},
+                    "n_battles": self._n_battles,
+                }
             )
         )
 
     def load_checkpoint(self, folder: Path, *, strict: bool = True) -> None:
+        """Put the ordinals and the rectangle back.
+
+        A format-1 checkpoint has no ``n_battles``; it loads, and the rectangle comes back at
+        the resumed run's first ``plan``, which is drawn before any assignment is. The roles
+        are the same either way, because the same seed and the same battle count produce the
+        same layout.
+        """
         path = folder / "matchmaker.json"
         if not path.exists():
             if strict:
@@ -332,3 +444,9 @@ class MixMatchmaker(Matchmaker):
         self._ordinal = {int(k): int(v) for k, v in state["ordinal"].items()}
         self._residents = None
         self._plan_epoch = None
+        self._n_battles = None
+        self._mirror_battles = 0
+        self._layout = None
+        stored = state.get("n_battles")
+        if stored is not None:
+            self.set_rectangle(int(stored))

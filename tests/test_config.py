@@ -212,18 +212,65 @@ def test_geometry_refuses_shards_that_do_not_divide_the_games() -> None:
     assert any("divisible" in problem for problem in C.check_consistency(config))
 
 
-def test_the_learner_row_fraction_follows_the_mixture() -> None:
-    """Both seats of a mirror battle are the learner's; one seat of every other battle is."""
+def test_the_learner_rows_are_a_count_of_battles_and_not_a_share() -> None:
+    """Both seats of a mirror battle are the learner's; one seat of every other battle is.
+
+    The mirror battles are a count, so the rows are a count: the rectangle is the size it is
+    rather than the size it is expected to be.
+    """
     config = C.laptop()
     geometry = C.geometry(config)
-    mirror = config.ladder.mix[0]
-    assert geometry.learner_row_fraction == pytest.approx(mirror + (1 - mirror) / 2)
-    assert geometry.learner_rows == int(geometry.n_slots * geometry.learner_row_fraction)
+    assert geometry.mirror_battles == 48
+    assert geometry.learner_rows == geometry.n_battles + geometry.mirror_battles
+    assert geometry.learner_row_fraction == geometry.learner_rows / geometry.n_slots
 
     all_mirror = msgspec.structs.replace(
         config, ladder=msgspec.structs.replace(C.LadderConfig(), mix=(1.0, 0.0, 0.0))
     )
     assert C.geometry(all_mirror).learner_rows == C.geometry(all_mirror).n_slots
+
+
+def test_the_rectangle_is_the_size_the_matchmaker_actually_fills() -> None:
+    """``geometry`` and ``MixMatchmaker`` must not each do this arithmetic their own way.
+
+    They share ``role_counts``; what this checks is that the matchmaker's own assignments add
+    up to the number the config sized the iteration from, which is the claim that recomputing
+    the arithmetic in two places could not make.
+    """
+    from royalelearn.api.rollout import ROLE_MIRROR
+    from royalelearn.ladder.matchmaker import MixMatchmaker
+
+    for name in sorted(C.PROFILES):
+        config = C.profile(name)
+        geometry = C.geometry(config)
+        matchmaker = MixMatchmaker(11, config.ladder, n_battles=geometry.n_battles)
+        mirror = sum(
+            matchmaker.role_of(battle) == ROLE_MIRROR for battle in range(geometry.n_battles)
+        )
+        assert mirror == geometry.mirror_battles
+        assert geometry.n_battles + mirror == geometry.learner_rows
+        assert matchmaker.learner_rows == geometry.learner_rows
+        assert geometry.cycles * geometry.learner_rows >= config.ppo.timesteps_per_iteration
+
+
+def test_the_role_counts_sum_to_the_battles_on_every_mixture() -> None:
+    """Whatever the mixture and however few the battles, the three counts are the rectangle."""
+    mixes = [
+        (0.50, 0.35, 0.15),
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.5, 0.5),
+        (0.33, 0.33, 0.34),
+        (0.9, 0.05, 0.05),
+        (0.05, 0.05, 0.90),
+    ]
+    for mix in mixes:
+        for n_battles in range(1, 130):
+            counts = C.role_counts(mix, n_battles)
+            assert sum(counts) == n_battles
+            assert all(count >= 0 for count in counts)
+            for count, share in zip(counts, mix, strict=True):
+                assert abs(count - share * n_battles) <= 1.0
 
 
 def test_a_jsonl_sink_is_required() -> None:
