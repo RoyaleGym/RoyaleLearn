@@ -7,51 +7,56 @@ name = "royalelearn"
 version = "0.1.0"
 description = "RoyaleLearn: self-play PPO training harness for RoyaleGym Clash Royale environments"
 requires-python = ">=3.12"
-# MIT for this repo's own files; the six vendored rlgym-ppo seed modules stay Apache-2.0
-# (NOTICE, LICENSE-APACHE-2.0).
-license = { text = "MIT AND Apache-2.0" }
+license = { text = "MIT" }
 # royalegym is not on PyPI: it is the sibling checkout ../RoyaleGym, installed editable before
 # this package by the workspace recipe in README.md (RoyaleSim -> RoyaleGym -> RoyaleViser ->
 # RoyaleLearn). pip resolves it from the venv; it never fetches it.
+#
+# The base install is deliberately torch-free: the ABCs, the config tree, the CLI's config and
+# identity commands and the rollout worker all run on numpy and msgspec alone.
 dependencies = [
     "royalegym>=0.1.0",
     "numpy>=2.0",
+    "msgspec>=0.18",
 ]
 
 [project.optional-dependencies]
-# The vendored rlgym_ppo seed (royalelearn/*_policy.py, value_estimator.py, experience_buffer.py,
-# ppo_learner.py) needs torch; the package imports without it (see royalelearn/__init__.py).
+# The learner: networks, the update, inference, and everything that touches a device.
 torch = [
     "torch>=2.4",
+]
+# The optional metrics sink; the JSONL sink is always installed and is never optional.
+wandb = [
+    "wandb",
 ]
 dev = [
     "pytest>=8.0",
     "ruff>=0.16",
+    "hypothesis>=6.0",
 ]
 
-[tool.setuptools]
-packages = ["royalelearn"]
+[project.scripts]
+royalelearn = "royalelearn.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["royalelearn*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
-addopts = "-ra --strict-markers"
+# The default run is the fast suite. The slow tests and the ones needing a freshly built
+# royalesim are selected explicitly, so a bare `pytest -q` stays a few seconds long.
+addopts = "-ra --strict-markers -m \"not slow and not engine\""
+markers = [
+    "slow: takes more than about five seconds",
+    "engine: needs a royalesim build that matches the data on disk",
+]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 src = ["royalelearn", "tests"]
-# rlgym_ppo's files exactly as copied: they are replaced, not cleaned, when the harness is
-# written, so lint findings in them are noise.
-extend-exclude = [
-    "royalelearn/continuous_policy.py",
-    "royalelearn/discrete_policy.py",
-    "royalelearn/multi_discrete_policy.py",
-    "royalelearn/value_estimator.py",
-    "royalelearn/experience_buffer.py",
-    "royalelearn/ppo_learner.py",
-]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

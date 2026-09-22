@@ -62,12 +62,17 @@ battle ends its last observation goes to `infos["final_obs"]` and `infos["final_
 already holds the next one's first. With `ROYALEVISER=127.0.0.1:9870` set, another terminal's
 `python -m royaleviser --stream 127.0.0.1:9870` watches the batch step; that made the still above.
 
-The package itself imports without torch, and says so when asked for a piece that needs it:
+The package itself imports without torch. The configuration tree, the run identity and the
+rollout worker run on numpy and msgspec alone, which is what lets the config and identity
+commands work in an environment where torch is not installed:
 
 ```
-$ python -c "import royalelearn; royalelearn.PPOLearner"
-ImportError: royalelearn.PPOLearner lives in the vendored rlgym_ppo seed royalelearn/ppo_learner.py, which needs 'torch' (not installed). The seed is not wired to RoyaleGym; see README.md.
+$ python -c "import royalelearn, sys; print(royalelearn.RunConfig, 'torch' in sys.modules)"
+<class 'royalelearn.config.RunConfig'> False
 ```
+
+Public names are resolved on first use, so a name that does need torch pays for it when it is
+asked for, and raises an `ImportError` naming the package to install when it is missing.
 
 ## With the rest of the stack
 
@@ -107,22 +112,19 @@ cd RoyaleSim && ..\.venv\Scripts\maturin develop --release && cd ..     # builds
 
 This repo needs the whole block, in that order: `royalelearn` declares `royalegym` as a dependency
 and pip resolves it from the venv, never from PyPI. `pip install -e "RoyaleLearn[torch]"` adds
-torch; the seed modules below additionally need `rlgym_ppo`, which is not a dependency and will not
-become one.
+torch, which only the learner itself needs.
 
 ## Status (2026-09-21)
 
 Working:
 
-- The package imports in the workspace venv without torch or `rlgym_ppo`; `royalelearn.SEED_CLASSES`
-  names the seed classes, and asking for one raises an `ImportError` that names the missing package
-  (above).
-- Six seed modules, `continuous_policy.py`, `discrete_policy.py`, `multi_discrete_policy.py`,
-  `value_estimator.py`, `experience_buffer.py` and `ppo_learner.py`, copied verbatim from
-  [rlgym-ppo](https://github.com/AechPro/rlgym-ppo) (Copyright Matthew Allen, Apache License 2.0;
-  see `NOTICE` and `LICENSE-APACHE-2.0`). They import `torch` and `rlgym_ppo`, are bound to Rocket
-  League's action layout and do not run here. They are a reference for what a working PPO harness
-  looks like, not a foundation: ruff excludes them and they will be replaced, not cleaned.
+- The package imports in the workspace venv without torch, and resolves a name that needs it only
+  when it is asked for (above).
+- The pieces the harness is assembled from: the abstract base classes in `royalelearn/api/`, the
+  configuration tree and its three machine profiles, the seed tree every random draw descends
+  from, the run identity a resume is checked against, the environment spec read off a running
+  environment, the shared-memory layout the workers and the learner meet in, and the metric
+  schema. None of them needs torch.
 - Everything below this repo: the environments, the mask, the same-step autoreset, seeding end to
   end, the opponent-pool bookkeeping and the viewer stream.
 
@@ -141,12 +143,14 @@ Open, which is the harness itself:
 Tests:
 
 ```
-cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 9 passed (2026-09-21)
-..\.venv\Scripts\ruff check .                              # All checks passed!  (the six seed files are excluded)
+cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 164 passed (2026-09-21)
+..\.venv\Scripts\ruff check .                              # All checks passed!
 ```
 
-The tests are the import contract above, and that both layers below (`royalegym`, `royalesim`)
-import from the workspace venv.
+The tests are the import contract above, the configuration tree and its typo refusals, the seed
+tree's pinned values, the identity hash field by field, the byte layout against a golden record,
+and the environment spec read off a running `ClashSelfPlayVecEnv` on two card catalogues of
+different widths, so that nothing in them can be a width copied out of one.
 
 Read next: [`docs/design.md`](docs/design.md) (the five pieces, the metric, the conventions), then
 the [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) README for the environments and the
@@ -161,6 +165,4 @@ Issues and pull requests on this repo are welcome too.
 
 ## Licence
 
-MIT (`LICENSE`), except the six files listed in `NOTICE`, which are copied verbatim
-from [rlgym-ppo](https://github.com/AechPro/rlgym-ppo) (Copyright Matthew Allen) and
-remain under the Apache License 2.0 (`LICENSE-APACHE-2.0`).
+MIT (`LICENSE`).

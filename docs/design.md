@@ -63,15 +63,11 @@ The conventions the harness is held to are the family's, and will be familiar fr
 - **Layering.** This repo imports `royalegym` and nothing from `royalesim` directly, and it
   never touches calibration data. The direction is `RoyaleLearn -> RoyaleGym -> RoyaleSim`.
 
-## The rlgym-ppo seed modules
+## What the references contributed
 
-Six modules in `royalelearn/` are rlgym-ppo's `ppo/` subpackage, copied verbatim and
-unmodified (Copyright Matthew Allen, Apache License 2.0; see `NOTICE` and
-`LICENSE-APACHE-2.0`). They import `torch` and `rlgym_ppo`, are bound to Rocket League's
-action layout — `MultiDiscreteFF` hardcodes its 8 bins — and do not run here.
-
-They are a reference for what a working RLGym-PPO learner looks like, not a foundation. They
-will be **replaced** by the harness above, not cleaned up or extended, and `rlgym_ppo` is not
-a dependency of this package and will not become one. Their attribution headers and their
-listing in `NOTICE` stay with them for as long as they are in the tree; they are excluded
-from ruff in `pyproject.toml` so that lint noise never tempts anyone to edit them.
+rlgym-ppo's `ppo/` subpackage sat in `royalelearn/` while the harness was designed, as a
+reference for what a working RLGym-PPO learner looks like, and was removed when the harness
+landed. It was never a foundation: its modules are bound to Rocket League's action layout,
+and the decisions worth keeping from them are recorded with their reasons in
+`docs/harness-spec.md`, where they are named beside the ones that were not kept. `rlgym_ppo`
+is not a dependency of this package and will not become one.

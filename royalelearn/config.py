@@ -1,0 +1,740 @@
+"""The whole configuration of a run, as one tree.
+
+There is one source of truth. The config object is it: no keyword-argument facade duplicates its
+leaves, because two sources of truth for one number is the kind of variable this harness exists
+to remove. Every struct forbids unknown fields, so a typo is an error at load rather than a
+setting that silently does nothing, and every number carries its unit in ``docs/harness-spec.md``
+section 6 beside the reason it has the value it has.
+
+msgspec rather than pydantic because it is already a RoyaleGym dependency, it gives forbidden
+unknown fields, tagged unions and a canonical JSON round-trip, and the package's dependency list
+stays ``royalegym, numpy, msgspec``.
+
+Profiles are functions rather than files: one per machine class, differing only in numbers, and
+a JSON config names one and overrides what it likes on top.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+import msgspec
+
+from .determinism import TIERS
+from .errors import PreflightError
+from .rollout.envspec import ComponentSpec, EnvFactorySpec, JsonValue, canonical_json, digest_of
+
+__all__ = [
+    "MOCK_ENGINE",
+    "PROFILES",
+    "RUST_ENGINE",
+    "TAG_FIELD",
+    "AdvantageConfig",
+    "AlarmConfig",
+    "ArchSpec",
+    "CheckpointConfig",
+    "ConstantSpec",
+    "DeterminismConfig",
+    "DoctorConfig",
+    "GateConfig",
+    "GeometricSpec",
+    "Geometry",
+    "LadderConfig",
+    "LinearSpec",
+    "LrBackoffConfig",
+    "MetricsConfig",
+    "NetConfig",
+    "ObsConfig",
+    "PPOConfig",
+    "PiecewiseConstantSpec",
+    "RaterConfig",
+    "RolloutConfig",
+    "RunConfig",
+    "ScheduleSpec",
+    "SinkSpec",
+    "check_consistency",
+    "config_hash",
+    "default_env_spec",
+    "dump_config",
+    "geometry",
+    "laptop",
+    "load_config",
+    "many_core",
+    "profile",
+    "validate",
+    "workstation",
+]
+
+RUST_ENGINE = "royalegym.rust_engine.RustEngine"
+MOCK_ENGINE = "royalegym.mock_engine.MockEngine"
+
+
+# --------------------------------------------------------------------------
+# Schedules, as data
+# --------------------------------------------------------------------------
+
+
+class ConstantSpec(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, tag_field="kind", tag="constant"
+):
+    """A value that does not move."""
+
+    value: float
+
+
+class LinearSpec(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, tag_field="kind", tag="linear"
+):
+    """``start`` to ``end`` over ``over_env_steps`` game-steps, then ``end`` forever."""
+
+    start: float
+    end: float
+    over_env_steps: int
+
+
+class GeometricSpec(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, tag_field="kind", tag="geometric"
+):
+    """``start`` to ``end`` geometrically, which is what a discount wants: ``1 - gamma`` decays
+    by a constant factor rather than gamma moving by a constant amount."""
+
+    start: float
+    end: float
+    over_env_steps: int
+
+
+class PiecewiseConstantSpec(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, tag_field="kind", tag="piecewise"
+):
+    """``(env_steps, value)`` breakpoints, held between them."""
+
+    points: list[tuple[int, float]]
+
+
+ScheduleSpec = ConstantSpec | LinearSpec | GeometricSpec | PiecewiseConstantSpec
+
+#: The field every tagged union in the tree discriminates on, read off one of them rather than
+#: retyped, because ``_merge`` has to know a variant from a variant.
+TAG_FIELD: str = ConstantSpec.__struct_config__.tag_field
+
+
+# --------------------------------------------------------------------------
+# The tree
+# --------------------------------------------------------------------------
+
+
+class ObsConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """What the policy sees beyond the current frame.
+
+    The observation carries positions and no motion, so a policy that needs to tell an advancing
+    unit from a retreating one needs more than one frame. Stacking is a gather of buffer rows
+    and costs no extra storage; it is 1 by default because the extra channels cost stem compute
+    and the first run measures whether they buy anything.
+    """
+
+    frame_stack: int = 1
+
+
+class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The shape and the failure behaviour of the worker farm."""
+
+    source: str = "process"
+    workers: int = 3
+    games_per_worker: int = 32
+    #: A worker steps one shard while the parent infers on the other; worth about 25% of round
+    #: time and costs nothing.
+    shards_per_worker: int = 2
+    #: Microseconds to spin before blocking on a round event. An event round trip measures tens
+    #: of microseconds, a spin about two.
+    spin_us: int = 100
+    #: EVERY wait has a timeout; a timeout is a typed WorkerFailure, never a block.
+    round_timeout_s: float = 30.0
+    restart_failed_workers: bool = True
+    #: Three restarts of one worker in a run raises rather than silently degrading throughput.
+    max_restarts_per_worker: int = 3
+    #: Seconds between worker starts: several engine constructions at once each decode the
+    #: calibration and arena data.
+    launch_delay_s: float = 0.5
+    #: Desynchronise episode phase across battles at run start, so episode ends spread across
+    #: cycles instead of arriving in one spike.
+    stagger_first_reset: bool = True
+    #: Lag-1 collection under the update. Costs a second rectangle, so it is off on 8 GB.
+    overlap: bool = False
+    eval_workers: int = 2
+    eval_games_per_worker: int = 24
+
+
+class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The architecture. Hashed into ``arch_digest``, so a snapshot built from another one is
+    refused rather than shape-errored."""
+
+    channels: int = 64
+    blocks: int = 4
+    #: GroupNorm, never BatchNorm: BatchNorm computes a different function at rollout than at
+    #: update, which breaks the stored-log-prob contract.
+    norm_groups: int = 8
+    #: The scalar vector is broadcast into the map, so elixir can modulate every tile.
+    vector_embed: int = 32
+    value_hidden: int = 256
+    #: Must equal ``channels``: it is one side of the pointer head's inner product.
+    card_embed: int = 64
+    #: The arena is not translation-invariant: own half, enemy half, the river, the bridges and
+    #: the tower rects are all absolute.
+    coord_conv: bool = True
+    #: Makes "the mask and the entropy bonus never touch the critic" structural.
+    separate_trunks: bool = True
+    policy_head: str = "pointer"
+    logit_scale: str = "rsqrt_c"
+    #: Orthogonal, gain sqrt(2) hidden, 0.01 policy head, 1.0 value head.
+    init: str = "orthogonal"
+    #: Self-limiting at init; section 8.4 has the formula for when it is needed.
+    noop_bias: float = 0.0
+    #: bf16 keeps fp32's exponent range, so masking with ``finfo.min`` is safe and no GradScaler
+    #: is needed.
+    autocast_dtype: str = "bfloat16"
+    device: str = "cuda"
+
+
+#: The spec's name for the same struct, used where it is the network's description rather than a
+#: section of the config file.
+ArchSpec = NetConfig
+
+
+class LrBackoffConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Drop the learning rate when the KL stays above a threshold."""
+
+    kl_threshold: float = 0.02
+    patience: int = 3
+    factor: float = 0.5
+    lr_min: float = 2e-5
+
+
+class PPOConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The update."""
+
+    #: The family disagrees by three orders of magnitude, so none of them is evidence; 3 balances
+    #: reuse against the update being the wall-clock bottleneck. Watch clip fraction by epoch.
+    n_epochs: int = 3
+    timesteps_per_iteration: int = 32_768
+    #: Samples per optimizer step.
+    batch_size: int = 4_096
+    #: Samples per forward. A PURE MEMORY KNOB: gradients accumulate weighted by n/batch_size
+    #: with one optimizer step per batch, and a test proves the accumulated gradient equals the
+    #: full-batch one.
+    minibatch_size: int = 512
+    clip_range: float = 0.2
+    #: For a negative advantage the standard minimum does not bound the loss below, and in a
+    #: wide masked space a rarely-sampled action's ratio can be enormous.
+    dual_clip_c: float = 3.0
+    #: Separate networks and separate optimizers, so this only scales the critic's effective
+    #: learning rate.
+    vf_coef: float = 1.0
+    value_clipping: bool = False
+    ent_coef: ScheduleSpec = LinearSpec(0.01, 0.003, 30_000_000)
+    #: A warm-start guard against no-op collapse, applied to a binary entropy bounded by 0.693
+    #: nats. It anneals to zero because H2(p_noop) is maximised at 0.5 while a healthy policy
+    #: sits near 0.94, so a constant coefficient would bias every converged policy toward
+    #: overplaying. The alarms outlive the schedule.
+    ent_coef_noop: ScheduleSpec = LinearSpec(0.02, 0.0, 10_000_000)
+    #: Applied to the actor and the critic parameter sets SEPARATELY.
+    max_grad_norm: float = 0.5
+    lr_actor: float = 2e-4
+    lr_critic: float = 2e-4
+    #: The PPO paper's epsilon, not torch's 1e-8.
+    adam_eps: float = 1e-5
+    lr_backoff: LrBackoffConfig = LrBackoffConfig()
+    #: Once per ITERATION, over all trainable cells, before any split.
+    advantage_standardization: bool = True
+    #: Rows per chunk of the whole-iteration critic pass; unchunked it is a multi-gigabyte spike.
+    critic_chunk: int = 1024
+    #: The frozen seat's log-probs came from other weights; V-trace is the wrong tool against a
+    #: multi-generation-old snapshot.
+    discard_opponent_rows: bool = True
+    #: The buffer is cleared every iteration: each timestep is trained on exactly n_epochs times
+    #: and discarded. A rolling window is available at a linear memory cost.
+    keep_previous_iterations: int = 0
+    #: The two mask asserts and the ratio invariant run for this many iterations from a start.
+    debug_assert_iterations: int = 10
+    check_ratio_invariant_every: int = 50
+    #: Selected by ``net.autocast_dtype``. Neither 0.0 nor 1e-4 is claimed under autocast: the
+    #: rollout and update forwards are different batch shapes, cuDNN picks a kernel per shape,
+    #: and bf16 carries three significant digits.
+    ratio_atol: dict[str, float] = msgspec.field(
+        default_factory=lambda: {"fp32": 1e-4, "bfloat16": 2e-2}
+    )
+
+
+class AdvantageConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The discount and the credit horizon.
+
+    0.99 discounts the win to almost nothing by the end of regulation; the anneal follows
+    OpenAI Five's, with an endpoint scaled to a four-minute match. ``gae_lambda`` at 0.99 gives
+    a credit horizon of about 45 seconds, which matches the deploy-push-tower causal chain --
+    the references' 0.95 gives ten and cannot connect a deploy to the tower it takes.
+    """
+
+    gamma: ScheduleSpec = GeometricSpec(0.997, 0.999, 20_000_000)
+    gae_lambda: float = 0.99
+    #: A discount near one inflates return magnitudes roughly tenfold over 0.99.
+    standardize_rewards: bool = True
+    #: Standard deviations, independent of the standardisation.
+    reward_clip: float = 10.0
+
+
+class GateConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The three conditions a candidate must pass to become the champion."""
+
+    #: 500 seeds times 2 side assignments.
+    champion_games: int = 1000
+    #: A score rate whose lower bound must clear this: an observed 55.2% at n=1000, about 35 Elo.
+    champion_lower_bound: float = 0.52
+    anchor_games: int = 200
+    anchor_tolerance_pp: float = 2.0
+    stratified_snapshots: int = 8
+    stratified_games: int = 100
+    bootstrap_resamples: int = 10_000
+
+
+class RaterConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The Bradley-Terry-Davidson fit."""
+
+    #: Weakly informative; keeps the fit finite for a player with no losses.
+    prior_sd: float = 400.0
+    #: The gauge exists from the first game, before any snapshot.
+    anchor: str = "scripted:noop"
+    #: "davidson" or "half_win"; fall back if the measured draw rate is under 2%.
+    draws: str = "davidson"
+
+
+class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Who the learner plays, and when a snapshot joins the pool."""
+
+    #: mirror / pool / scripted.
+    mix: tuple[float, float, float] = (0.50, 0.35, 0.15)
+    #: At most four batched forwards per shard-round, and an LRU that never thrashes.
+    max_resident_opponents: int = 2
+    #: Training wants opponents that still beat the learner; evaluation uses "variance".
+    pfsp_weighting: str = "hard"
+    pfsp_power: float = 2.0
+    #: The anti-forgetting guard AlphaStar's forgotten-players slice does.
+    pfsp_uniform_floor: float = 0.2
+    weight_floor_scale: float = 0.01
+    candidate_every_env_steps: int = 4_000_000
+    #: A plateau cannot starve the pool.
+    floor_admit_every_env_steps: int = 50_000_000
+    #: Sampling is linear in the pool per episode, in python.
+    pool_working_size: int = 48
+    eval_seed_count: int = 500
+    #: Rating both the sampled and the argmax variant doubles the pool and the cost for no
+    #: decision.
+    release_mode: str = "stochastic"
+    refit_every_iterations: int = 10
+    gate: GateConfig = GateConfig()
+    rater: RaterConfig = RaterConfig()
+
+
+class CheckpointConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    every_env_steps: int = 2_000_000
+    keep: int = 10
+    #: The iteration boundary is the resume point; there is no mid-iteration state to preserve.
+    include_buffer: bool = False
+    strict_load: bool = True
+
+
+class SinkSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """One metrics sink. ``JsonlSink`` is always installed: it is the file the resume test
+    compares."""
+
+    kind: str
+    enabled: bool = True
+    options: dict[str, JsonValue] = {}
+
+
+class MetricsConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    sinks: list[SinkSpec] = msgspec.field(
+        default_factory=lambda: [
+            SinkSpec("jsonl"),
+            SinkSpec("console"),
+            SinkSpec("viser"),
+            SinkSpec("wandb", enabled=False),
+        ]
+    )
+    #: Iterations between per-card tile heatmaps.
+    image_every: int = 50
+    #: After this many iterations, ``episodes.jsonl`` is gzipped in place.
+    keep_episode_log_iterations: int = 200
+
+
+class AlarmConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Thresholds for the alarm table of section 13.3.
+
+    Recorded and excluded from the run identity: an alarm can stop a run and can never alter a
+    value, so two runs that differ only here produce the same numbers for as long as both run.
+    The severities and patiences live with the alarms themselves; the overrides below are for an
+    operator who wants one of them louder or quieter on their own machine.
+    """
+
+    enabled: bool = True
+    #: ``ratio_invariant`` fires above this multiple of the configured ``ppo.ratio_atol``, which
+    #: is what keeps the alarm meaningful in fp32 and under bf16 alike.
+    ratio_invariant_multiple: float = 5.0
+    buffer_fill_frac: float = 0.98
+    clip_fraction: float = 0.5
+    kl_high: float = 0.05
+    kl_dead: float = 1e-5
+    explained_variance: float = 0.0
+    cards_per_match_warn: float = 8.0
+    cards_per_match_halt: float = 3.0
+    noop_entropy_floor: float = 0.02
+    tile_top1_share: float = 0.25
+    card_tile_top10_share: float = 0.5
+    draw_rate: float = 0.5
+    episode_steps_at_cap_frac: float = 0.8
+    transitivity_residual: float = 0.10
+    capacity_ratio: float = 1.5
+    gate_failures: int = 5
+    disabled: list[str] = []
+    patience_overrides: dict[str, int] = {}
+    severity_overrides: dict[str, str] = {}
+
+
+class DeterminismConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Section 5.1. The tier is part of the run identity; the thread count is part of the tier."""
+
+    tier: str = "run_exact"
+    torch_threads: int = 1
+
+
+class DoctorConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The start-up gates that can refuse a run."""
+
+    #: Of the machine's total. A run whose projection exceeds this does not start.
+    ram_budget_mb: int = 6500
+    #: Exhaustive over every non-no-op action, both teams.
+    run_mask_disagreement_gate: bool = True
+
+
+def default_env_spec(engine: str = RUST_ENGINE, *, max_steps: int = 480) -> EnvFactorySpec:
+    """The environment a run uses unless it says otherwise.
+
+    The truncation is a step limit rather than a tick limit because it is decisions that the
+    buffer counts; 480 of them is a full regulation match plus overtime at the default decision
+    granularity, and it is the cap the episode-length histogram spikes at when two policies
+    settle into the turtle equilibrium.
+    """
+    return EnvFactorySpec(
+        engine=ComponentSpec(engine),
+        obs_builder=ComponentSpec("royalegym.obs.SpatialObsBuilder"),
+        action_parser=ComponentSpec("royalegym.action.TileActionParser"),
+        reward_fn=ComponentSpec("royalegym.reward.default_reward"),
+        state_mutator=ComponentSpec("royalegym.state_mutator.DefaultStateMutator"),
+        termination=[ComponentSpec("royalegym.done_condition.GameOverCondition")],
+        truncation=[
+            ComponentSpec("royalegym.done_condition.StepLimitCondition", {"max_steps": max_steps})
+        ],
+    )
+
+
+class RunConfig(msgspec.Struct, forbid_unknown_fields=True):
+    """One run, completely."""
+
+    format_version: int = 1
+    #: Cosmetic: recorded, printed, and not in the identity.
+    run_name: str = "royalelearn"
+    runs_dir: str = "runs"
+    #: In the identity: it changes every byte that follows.
+    master_seed: int = 20260921
+    #: Selects the shipped defaults; all of them are still overridable.
+    profile: str = "laptop"
+    #: Learner transitions.
+    timestep_limit: int = 100_000_000
+    env: EnvFactorySpec = msgspec.field(default_factory=default_env_spec)
+    #: None means ``env`` with the truncation removed.
+    eval_env: EnvFactorySpec | None = None
+    #: Modules a ComponentSpec may name beyond royalegym and royalelearn.
+    extra_component_modules: list[str] = []
+    obs: ObsConfig = ObsConfig()
+    rollout: RolloutConfig = RolloutConfig()
+    net: NetConfig = NetConfig()
+    ppo: PPOConfig = PPOConfig()
+    advantage: AdvantageConfig = AdvantageConfig()
+    ladder: LadderConfig = LadderConfig()
+    checkpoint: CheckpointConfig = CheckpointConfig()
+    metrics: MetricsConfig = MetricsConfig()
+    alarms: AlarmConfig = AlarmConfig()
+    determinism: DeterminismConfig = DeterminismConfig()
+    doctor: DoctorConfig = DoctorConfig()
+
+
+# --------------------------------------------------------------------------
+# Geometry
+# --------------------------------------------------------------------------
+
+
+class Geometry(msgspec.Struct, frozen=True):
+    """The iteration's rectangle, derived from the config once and passed around whole.
+
+    ``cycles`` by ``n_slots``, with slot -> (worker, shard, battle, seat) fixed for the run.
+    Everything downstream -- the buffer's shape, the slot maps, the matchmaker's plan -- reads
+    these numbers rather than recomputing them, so the arithmetic of section 2.2 lives in one
+    place (``config.geometry``).
+    """
+
+    workers: int
+    games_per_worker: int
+    shards_per_worker: int
+    games_per_shard: int
+    n_battles: int
+    n_slots: int
+    learner_row_fraction: float
+    learner_rows: int
+    cycles: int
+    timesteps_per_iteration: int
+
+    @property
+    def slots_per_shard(self) -> int:
+        return 2 * self.games_per_shard
+
+    @property
+    def slots_per_worker(self) -> int:
+        return 2 * self.games_per_worker
+
+
+def geometry(config: RunConfig) -> Geometry:
+    """The iteration's rectangle, derived from the config.
+
+    Learner rows are the slots whose seat the learner plays: both seats of a mirror battle and
+    one of every other, so the fraction is ``mirror + (1 - mirror) / 2``. The cycle count is
+    then what it takes to reach ``timesteps_per_iteration`` learner transitions, rounded up --
+    an iteration collects at least what was asked for, never less.
+    """
+    rollout = config.rollout
+    if rollout.shards_per_worker < 1 or rollout.games_per_worker % rollout.shards_per_worker:
+        raise ValueError(
+            f"games_per_worker {rollout.games_per_worker} is not divisible by "
+            f"shards_per_worker {rollout.shards_per_worker}"
+        )
+    n_battles = rollout.workers * rollout.games_per_worker
+    n_slots = 2 * n_battles
+    mirror = config.ladder.mix[0]
+    fraction = mirror + (1.0 - mirror) / 2.0
+    learner_rows = int(n_slots * fraction)
+    if learner_rows < 1:
+        raise ValueError(
+            f"the mixture {config.ladder.mix} leaves no learner rows in {n_slots} slots"
+        )
+    cycles = math.ceil(config.ppo.timesteps_per_iteration / learner_rows)
+    return Geometry(
+        workers=rollout.workers,
+        games_per_worker=rollout.games_per_worker,
+        shards_per_worker=rollout.shards_per_worker,
+        games_per_shard=rollout.games_per_worker // rollout.shards_per_worker,
+        n_battles=n_battles,
+        n_slots=n_slots,
+        learner_row_fraction=fraction,
+        learner_rows=learner_rows,
+        cycles=cycles,
+        timesteps_per_iteration=config.ppo.timesteps_per_iteration,
+    )
+
+
+# --------------------------------------------------------------------------
+# Profiles
+# --------------------------------------------------------------------------
+
+
+def laptop() -> RunConfig:
+    """8 GB RAM, 4 GB VRAM, 8 threads. The shipped default.
+
+    The learner is the bottleneck on this machine by about 2.5 times, which is why there are
+    three workers and not thirty-two, and why the network is four hundred thousand parameters
+    and not four million.
+    """
+    return RunConfig(profile="laptop")
+
+
+def workstation() -> RunConfig:
+    """32 GB RAM, 12 GB VRAM, 16 threads. Overlap on: the rollout hides under the update, at the
+    cost of a second rectangle."""
+    return RunConfig(
+        profile="workstation",
+        rollout=RolloutConfig(workers=12, games_per_worker=64, overlap=True),
+        net=NetConfig(channels=96, blocks=8, card_embed=96),
+        ppo=PPOConfig(timesteps_per_iteration=131_072, batch_size=16_384, minibatch_size=2_048),
+        ladder=LadderConfig(candidate_every_env_steps=2_000_000),
+    )
+
+
+def many_core() -> RunConfig:
+    """64 GB RAM, 24 GB VRAM, 64 threads."""
+    return RunConfig(
+        profile="many_core",
+        rollout=RolloutConfig(workers=24, games_per_worker=64, overlap=True),
+        net=NetConfig(channels=128, blocks=12, card_embed=128),
+        ppo=PPOConfig(timesteps_per_iteration=262_144, batch_size=32_768, minibatch_size=8_192),
+        ladder=LadderConfig(candidate_every_env_steps=2_000_000),
+    )
+
+
+PROFILES: dict[str, Any] = {"laptop": laptop, "workstation": workstation, "many_core": many_core}
+
+
+def profile(name: str) -> RunConfig:
+    """The shipped config for one machine class."""
+    try:
+        build = PROFILES[name]
+    except KeyError:
+        raise PreflightError(
+            f"profile {name!r} is not one of {', '.join(sorted(PROFILES))}"
+        ) from None
+    return build()
+
+
+# --------------------------------------------------------------------------
+# Consistency
+# --------------------------------------------------------------------------
+
+
+def check_consistency(config: RunConfig) -> list[str]:
+    """Everything wrong with a config, in one list.
+
+    All of it at once rather than one exception at a time: on a machine where building an
+    environment costs a minute, finding four mistakes takes four minutes otherwise.
+    """
+    problems: list[str] = []
+    ppo, rollout, net = config.ppo, config.rollout, config.net
+
+    if rollout.shards_per_worker < 1:
+        problems.append("rollout.shards_per_worker must be at least 1")
+    elif rollout.games_per_worker % rollout.shards_per_worker:
+        problems.append(
+            f"rollout.games_per_worker {rollout.games_per_worker} is not divisible by "
+            f"rollout.shards_per_worker {rollout.shards_per_worker}"
+        )
+    else:
+        geo = geometry(config)
+        if geo.cycles * geo.learner_rows < ppo.timesteps_per_iteration:
+            problems.append(
+                f"the rectangle collects {geo.cycles * geo.learner_rows} learner transitions, "
+                f"below ppo.timesteps_per_iteration {ppo.timesteps_per_iteration}"
+            )
+    if rollout.workers < 1:
+        problems.append("rollout.workers must be at least 1")
+    if rollout.source not in ("process", "inline"):
+        problems.append(f"rollout.source {rollout.source!r} is not 'process' or 'inline'")
+
+    if ppo.minibatch_size < 1 or ppo.batch_size % ppo.minibatch_size:
+        problems.append(
+            f"ppo.batch_size {ppo.batch_size} is not a multiple of ppo.minibatch_size "
+            f"{ppo.minibatch_size}, so a minibatch would not be a pure memory knob"
+        )
+    if ppo.n_epochs < 1:
+        problems.append("ppo.n_epochs must be at least 1")
+    if net.autocast_dtype not in ppo.ratio_atol:
+        problems.append(
+            f"ppo.ratio_atol has no entry for net.autocast_dtype {net.autocast_dtype!r}; "
+            f"it has {sorted(ppo.ratio_atol)}"
+        )
+    if net.card_embed != net.channels:
+        problems.append(
+            f"net.card_embed {net.card_embed} must equal net.channels {net.channels}: they are "
+            "the two sides of the pointer head's inner product"
+        )
+    if net.channels % net.norm_groups:
+        problems.append(
+            f"net.channels {net.channels} is not divisible by net.norm_groups {net.norm_groups}"
+        )
+
+    if config.obs.frame_stack < 1:
+        problems.append("obs.frame_stack must be at least 1")
+    if abs(sum(config.ladder.mix) - 1.0) > 1e-9:
+        problems.append(f"ladder.mix {config.ladder.mix} does not sum to 1")
+    if any(share < 0 for share in config.ladder.mix):
+        problems.append(f"ladder.mix {config.ladder.mix} has a negative share")
+    if config.ladder.max_resident_opponents < 1:
+        problems.append("ladder.max_resident_opponents must be at least 1")
+    if config.ladder.rater.draws not in ("davidson", "half_win"):
+        problems.append(f"ladder.rater.draws {config.ladder.rater.draws!r} is not a draw model")
+    if config.checkpoint.keep < 1:
+        problems.append("checkpoint.keep must be at least 1")
+    if config.determinism.tier not in TIERS:
+        problems.append(
+            f"determinism.tier {config.determinism.tier!r} is not one of {', '.join(TIERS)}"
+        )
+    if config.profile not in PROFILES:
+        problems.append(f"profile {config.profile!r} is not one of {', '.join(sorted(PROFILES))}")
+    if not any(sink.kind == "jsonl" and sink.enabled for sink in config.metrics.sinks):
+        problems.append(
+            "metrics.sinks must include an enabled 'jsonl' sink: it is the file a resume is "
+            "checked against"
+        )
+    return problems
+
+
+def validate(config: RunConfig) -> RunConfig:
+    """Return the config, or raise ``PreflightError`` naming everything wrong with it."""
+    problems = check_consistency(config)
+    if problems:
+        raise PreflightError(
+            "the configuration is inconsistent:\n" + "\n".join(f"  {p}" for p in problems)
+        )
+    return config
+
+
+# --------------------------------------------------------------------------
+# JSON
+# --------------------------------------------------------------------------
+
+
+def _merge(base: Any, overlay: Any) -> Any:
+    """Overlay a decoded JSON document onto another, mapping by mapping.
+
+    Lists replace rather than merge: a partially overridden list of sinks or of termination
+    conditions would be a third thing that neither document says. A mapping that names a
+    different variant of a tagged union replaces for the same reason -- a constant schedule
+    carrying the leftover endpoints of the linear one it overrode is not a schedule.
+    """
+    if isinstance(base, Mapping) and isinstance(overlay, Mapping):
+        tag = overlay.get(TAG_FIELD)
+        if tag is not None and tag != base.get(TAG_FIELD):
+            return overlay
+        merged = dict(base)
+        for key, value in overlay.items():
+            merged[key] = _merge(merged[key], value) if key in merged else value
+        return merged
+    return overlay
+
+
+def load_config(source: str | bytes | Path | Mapping[str, Any]) -> RunConfig:
+    """Read a config: a JSON string, a path to one, or an already-decoded mapping.
+
+    The document is applied ON TOP of the profile it names, so a file that sets three numbers
+    gets the rest of that machine class rather than the laptop's, and a file that sets none is
+    exactly the profile. Unknown fields are refused at every level of the tree.
+    """
+    if isinstance(source, Path):
+        raw: Any = msgspec.json.decode(source.read_bytes())
+    elif isinstance(source, (str, bytes)):
+        raw = msgspec.json.decode(source if isinstance(source, bytes) else source.encode("utf-8"))
+    else:
+        raw = dict(source)
+    if not isinstance(raw, dict):
+        raise PreflightError(f"a config must be a JSON object, not {type(raw).__name__}")
+    base = msgspec.to_builtins(profile(str(raw.get("profile", "laptop"))))
+    return msgspec.convert(_merge(base, raw), type=RunConfig)
+
+
+def dump_config(config: RunConfig, *, indent: int | None = None) -> str:
+    """The canonical JSON of a config: keys in a fixed order, so a reformat is not a new run."""
+    blob = canonical_json(config)
+    if indent is not None:
+        blob = msgspec.json.format(blob, indent=indent)
+    return blob.decode("utf-8")
+
+
+def config_hash(config: RunConfig) -> str:
+    """sha256 of the canonical JSON. Recorded, printed and diffed on resume."""
+    return digest_of(config)
