@@ -2063,12 +2063,27 @@ def _gpu_util() -> float:  # pragma: no cover - there is no GPU in the suite
 
 
 def _vram_peak_mb() -> float:
+    """Peak device memory since the previous call, which is what the schema promises.
+
+    The counter behind this is ``max_memory_allocated``, a high-water mark that torch never
+    lowers on its own, so reading it without resetting reports the largest allocation the
+    PROCESS ever made and repeats that number every iteration afterwards. Measured 2026-09-22:
+    six runs of different shapes all reported 3930.72, identical to five decimals, because each
+    had reached that mark once and the row could no longer fall. An iteration that halved the
+    minibatch would have read unchanged, and the comparison that found a 5.6x speedup would have
+    concluded memory was not involved.
+
+    Resetting here is what makes the key's own description true. Note the unit: this is decimal
+    MB against a card quoted in MiB, so 3930.72 is 91.5% of a 4096 MiB device, not 96%.
+    """
     try:
         import torch
 
         if not torch.cuda.is_available():
             return 0.0
-        return float(torch.cuda.max_memory_allocated()) / 1e6  # pragma: no cover
+        peak = float(torch.cuda.max_memory_allocated()) / 1e6  # pragma: no cover
+        torch.cuda.reset_peak_memory_stats()  # pragma: no cover
+        return peak  # pragma: no cover
     except Exception:  # pragma: no cover - torch is optional for everything but a run
         return 0.0
 
