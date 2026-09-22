@@ -270,6 +270,26 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
             patience=5,
             meaning="the shaping terms have taken over the objective",
         ),
+        # The only threshold here measured on the machine it is applied to. `needed` is the
+        # device peak the preflight measured for THIS minibatch on THIS card, plus the
+        # configured headroom; `available` is free memory plus what this process already holds,
+        # which is what it could occupy if it asked. The preflight guards the first instant and
+        # nothing guarded the rest: another process taking memory at hour three produces the
+        # same several-times-slower run, silently, because this platform backs an oversubscribed
+        # allocation with host RAM rather than refusing it.
+        #
+        # It warns rather than halting, deliberately. Stopping a nine-hour run because a
+        # neighbour got greedy is worse than the slowdown it would prevent, and the preflight
+        # can afford to refuse only because nothing is lost at second five.
+        MetricAlarm(
+            "vram_spilling",
+            lambda available, needed: available < needed,
+            patience=3,
+            meaning=(
+                "less device memory is available than one minibatch measured at startup: the "
+                "update is being backed by host memory over PCIe and is several times slower"
+            ),
+        ),
         MetricAlarm(
             "transitivity",
             lambda residual: residual > config.transitivity_residual,

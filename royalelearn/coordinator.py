@@ -1234,6 +1234,11 @@ class LearningCoordinator:
         peak = torch.cuda.max_memory_reserved()  # pragma: no cover
         torch.cuda.reset_peak_memory_stats()  # pragma: no cover
         margin = headroom * 1_000_000  # pragma: no cover
+        # Kept so every later row can be checked against it. The preflight guards one instant;
+        # what it cannot see is another process taking memory at hour three, which is the same
+        # silent slowdown arriving later. This is the only threshold in the harness measured on
+        # the machine it will be applied to, minutes before it is applied.
+        self.vram_needed_mb = (peak + margin) / 1e6  # pragma: no cover
         if peak + margin <= free_before:  # pragma: no cover
             return
         lower = self._next_legal_minibatch()  # pragma: no cover
@@ -1829,7 +1834,7 @@ class LearningCoordinator:
             "health/samples_unused_frac": float(result.samples_unused_frac),
             "health/nan_guard_trips": _nan_guard_trips(result),
             "health/vram_peak_mb": _vram_peak_mb(),
-            **_vram_regime(),
+            **_vram_regime(getattr(self, "vram_needed_mb", None)),
             "health/rss_peak_mb": _rss_peak_mb(),
             "health/buffer_fill_frac": _fill_frac(buffer, collection["rounds"], geo),
         }
@@ -2153,7 +2158,7 @@ def _gpu_util() -> float:  # pragma: no cover - there is no GPU in the suite
         return 0.0
 
 
-def _vram_regime() -> dict[str, MetricValue]:
+def _vram_regime(needed_mb: float | None = None) -> dict[str, MetricValue]:
     """The three numbers that say which memory regime a slowing update is in, plus retries.
 
     Read together at the end of an iteration they separate reservation growth, fragmentation
@@ -2168,14 +2173,25 @@ def _vram_regime() -> dict[str, MetricValue]:
             return {}
         stats = torch.cuda.memory_stats()  # pragma: no cover - no GPU in the suite
         free, _total = torch.cuda.mem_get_info()  # pragma: no cover
-        return {  # pragma: no cover
-            "health/vram_reserved_mb": float(stats.get("reserved_bytes.all.current", 0)) / 1e6,
+        reserved = float(stats.get("reserved_bytes.all.current", 0))  # pragma: no cover
+        fields = {  # pragma: no cover
+            "health/vram_reserved_mb": reserved / 1e6,
             "health/vram_inactive_split_mb": (
                 float(stats.get("inactive_split_bytes.all.current", 0)) / 1e6
             ),
             "health/vram_driver_free_mb": float(free) / 1e6,
+            # What COULD be mine: free space plus what I am already holding. This is the
+            # quantity the run's health turns on, and the raw free figure is not -- a caching
+            # allocator that has finished growing sits at or near zero free as its normal steady
+            # state, so a threshold on that alone fires on healthy runs and stays quiet on sick
+            # ones. Measured 2026-09-22: driver free read 0 on every iteration of a run that was
+            # entirely well.
+            "health/vram_available_mb": (float(free) + reserved) / 1e6,
             "health/vram_alloc_retries": int(stats.get("num_alloc_retries", 0)),
         }
+        if needed_mb is not None:  # pragma: no cover
+            fields["health/vram_needed_mb"] = float(needed_mb)
+        return fields  # pragma: no cover
     except Exception:  # pragma: no cover - torch is optional for everything but a run
         return {}
 

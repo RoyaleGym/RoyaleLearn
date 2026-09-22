@@ -451,6 +451,14 @@ METRICS: dict[str, MetricSpec] = {
     "health/vram_driver_free_mb": _m(
         "MB", "Free device memory the driver reports, which is what bounds a cuDNN workspace."
     ),
+    "health/vram_available_mb": _m(
+        "MB",
+        "Free device memory plus what this process holds: what it could occupy if it asked.",
+    ),
+    "health/vram_needed_mb": _m(
+        "MB",
+        "One minibatch's device peak measured at startup, plus doctor.vram_headroom_mb.",
+    ),
     "health/vram_alloc_retries": _m(
         "count",
         "Times the allocator freed its cache and retried. A retry is a synchronising stall; "
@@ -524,6 +532,7 @@ ALARM_METRICS: dict[str, tuple[str, ...]] = {
     "seat_bias": ("env/win_rate_by_seat_ci95_lo", "env/win_rate_by_seat_ci95_hi"),
     "elixir_count_inexact": ("env/elixir_count_exact_frac",),
     "shaping_dominates": ("env/reward_shaping_abs", "env/reward_terminal_abs"),
+    "vram_spilling": ("health/vram_available_mb", "health/vram_needed_mb"),
     "transitivity": ("ladder/transitivity_residual",),
     "gate_starved": ("ladder/consecutive_gate_failures",),
     "capacity_ratio": ("throughput/rollout_capacity_ratio",),
@@ -568,6 +577,8 @@ CONDITIONAL: dict[str, str] = {
     "health/vram_reserved_mb": "a CUDA device is present",
     "health/vram_inactive_split_mb": "a CUDA device is present",
     "health/vram_driver_free_mb": "a CUDA device is present",
+    "health/vram_available_mb": "a CUDA device is present",
+    "health/vram_needed_mb": "a CUDA device is present, and the preflight gate is enabled",
     "health/vram_alloc_retries": "a CUDA device is present",
 }
 
