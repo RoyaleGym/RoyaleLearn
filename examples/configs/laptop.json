@@ -82,7 +82,7 @@
     "n_epochs": 3,
     "timesteps_per_iteration": 32768,
     "batch_size": 4096,
-    "minibatch_size": 512,
+    "minibatch_size": 256,
     "clip_range": 0.2,
     "dual_clip_c": 3.0,
     "vf_coef": 1.0,
