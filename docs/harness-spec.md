@@ -1055,7 +1055,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `workers` | 3 | processes | 6-8 threads; the parent needs one for the CUDA driver and one for the loop, and the learner is the bottleneck so more workers buy little |
 | `games_per_worker` | 32 | battles | with `workers=3`, 96 battles and 192 slots |
 | `shards_per_worker` | 2 | vec envs | a worker steps one shard while the parent infers on the other. Worth `min(env, inference)` per round and no more, because the two are additive (section 2.2); `bench` prints what it is worth here, and 1 is the right value when that is under about 10% |
-| `spin_us` | 100 | microseconds | spin before blocking on the round events; a Windows Event round trip measures ~40-80 microseconds **[A]**, a spin about 2 |
+| `spin_us` | 100 | microseconds | spin, timed with `perf_counter`, before sleeping on the round's semaphore (section 7.3); a Windows Event round trip measures ~40-80 microseconds **[A]**, a spin about 2 |
 | `round_timeout_s` | 30.0 | seconds | **every** wait has a timeout; a timeout is a typed `WorkerFailure`, never a block |
 | `restart_failed_workers` | `true` | | |
 | `max_restarts_per_worker` | 3 | | three restarts of one worker in a run raises rather than silently degrading throughput |
@@ -1083,7 +1083,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `n_epochs` | 3 | | the family disagrees by three orders of magnitude (1, 10, about 1000 gradient steps per 50 k), so none of them is evidence; 3 balances reuse against the update being the wall-clock bottleneck. Watch clip fraction across epochs |
 | `timesteps_per_iteration` | 32 768 | timesteps | the compute budget and the episode arithmetic land on the same number independently |
 | `batch_size` | 4 096 | samples per optimizer step | 24 optimizer steps per iteration; about nine episodes' worth of terminal signal per step, so the advantage mean is not dominated by one battle |
-| `minibatch_size` | 256 | samples per forward | a **pure memory knob**: gradients accumulate weighted by `n/batch_size` with one `optimizer.step()` per batch, and a test proves the accumulated gradient equals the full-batch one. It was 512, chosen as "the largest that fits 4 GB", and **512 does not fit** — see below |
+| `minibatch_size` | 256 | samples per forward | a **pure memory knob**: gradients accumulate weighted by `n/batch_size` with one `optimizer.step()` per batch, and a test proves the accumulated gradient equals the full-batch one. It was 512, chosen as "the largest that fits 4 GB", and **512 does not fit** (see below). The default lives in `PPOConfig.minibatch_size` itself, because every struct default in `config.py` is the laptop column; the workstation (2 048) and many-core (8 192) profiles set their own. Until 582ce96 the struct still said 512, so `royalelearn config --profile laptop`, and `doctor` or `bench` without `--config`, built the value that spills |
 | `clip_range` | 0.2 | | the PPO paper; all three references |
 | `dual_clip_c` | 3.0 | | for a negative advantage the standard minimum does not bound the loss below, and in a 2305-way masked space a rarely-sampled action's ratio can be enormous |
 | `vf_coef` | 1.0 | | separate networks and separate optimizers, so it only scales the critic's effective learning rate |
@@ -1147,6 +1147,14 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | **`doctor`** | | | |
 | `ram_budget_mb` | 6500 | MB | of 7800 |
 | `run_mask_disagreement_gate` | `true` | | exhaustive over all 2304 non-no-op actions |
+| `vram_headroom_mb` | 256 | MB | device memory that must stay free after one minibatch's measured peak, or the run does not start (section 7.7, step 12). The same peak plus this margin is `health/vram_needed_mb`, which the `vram_spilling` alarm compares every later iteration against (section 13.3). 0 turns off both |
+
+`examples/configs/laptop.json` and `workstation.json` are their profiles written out in full.
+`tests/test_config.py::test_the_shipped_example_is_its_profile_written_out_in_full` holds each to its
+profile leaf for leaf, twice: the loaded tree must equal the profile, and the raw document must carry
+every leaf the profile dumps. Only the second can see a field the file leaves out, because loading
+fills an omitted field in from the profile. It found `doctor.vram_headroom_mb` missing from all three
+example files, and they carry it now (582ce96).
 
 `EnvFactorySpec` (`rollout/envspec.py`) is the JSON-able env description, simultaneously the thing
 sent to workers, the thing recorded in the checkpoint and the thing the ladder's `context` string is
@@ -1345,16 +1353,25 @@ Segment B   "royalelearn-ctl-<run_id>-<w>"      one per worker, covering all its
                                                 opponent_ix i8, seed hash u64
 ```
 
-Signalling: two `multiprocessing.Event`s per (worker, shard), `obs_ready` and `actions_ready`, with a
-spin-then-block wait of `rollout.spin_us` on both sides. There is no UDP, no magic float header, no
-pickling on the hot path and no length-prefixed stream to desynchronise.
+Signalling: two semaphores per (worker, shard), `obs_ready` and `actions_ready`, each released once
+per publication or command, after the control word is written. Both sides spin for `rollout.spin_us`,
+then sleep on the semaphore. The spin is timed with `perf_counter`: `time.monotonic()` is the tick
+count on Windows before Python 3.13 and moves in 15.6 ms steps, so a spin timed by it lasts until the
+next step, which is how idle workers once spun through the whole update (98ff62f). A wait that sees
+the word during its spin takes the token that announced it, so a semaphore holds one token per
+command not yet answered, and a late token only wakes a later wait that finds nothing and sleeps
+again. A worker sleeps only on the shard whose command is due next, for at most `SLEEP_S` (50 ms),
+and glances at its other shards once per pass; every command a run sends arrives in that order, and
+one sent out of turn is taken at most one sleep late. The control word is the truth, and a wake is
+never taken as the answer. There is no UDP, no magic float header, no pickling on the hot path and no
+length-prefixed stream to desynchronise.
 
 Error signalling: `err_code` 0 normal, 1 python exception with the message in `error`, 2 hard crash.
 The parent turns either into a `WorkerFailure` delivered to the coordinator, which restarts the
 worker. Both reference learners treat a dead worker as a permanent silent hang.
 
 Because the contract is bytes, a Rust worker is a drop-in: it writes the same header, the same packed
-rows and the same scalars, and flips the same events. `tests/test_rollout_farm.py` is the
+rows and the same scalars, and releases the same semaphores. `tests/test_rollout_farm.py` is the
 acceptance criterion — the process farm and the inline source must produce byte-identical buffers,
 scalars and episode records from the same seed over 30 cycles.
 
@@ -1371,7 +1388,7 @@ def worker_main(w: int, cfg: WorkerConfig, handles: Handles) -> None:
         sh.obs = sh.vec.reset(seed=seed)
         publish(sh, cycle=-1)                     # hand the parent the first observations
     while True:
-        for sh in shards:                         # strict alternation
+        for sh in shards:                         # in turn; sleeps only on the shard due next
             if not wait_actions(sh, cfg.spin_us):
                 continue
             cmd = read_command(sh)                # STEP | PLAN | SET_STATE | SPACES | DEFER | CLOSE
@@ -1536,6 +1553,15 @@ Their results go into the run identity and the checkpoint.
    instead and preflight prints that the state stream is off, because a per-process publisher binds
    the same UDP port once per env and raises `OSError` at construction. The learning-status stream of
    section 13.1 is a separate socket and is always available.
+12. **Measure one minibatch on the device.** The coordinator does this once it has built the network;
+   `doctor` does not. On CUDA, and unless `doctor.vram_headroom_mb` is 0, it runs one forward and
+   backward at `ppo.minibatch_size`, reads the peak the allocator
+   reserved, and raises `PreflightError` naming the next legal minibatch when that peak plus the
+   headroom exceeds what the driver reports free. The platform backs an oversubscribed allocation with
+   host memory rather than refusing it, so without this the run would not fail, it would be several
+   times slower for its whole life. The peak plus the headroom is kept as `health/vram_needed_mb` for
+   the `vram_spilling` alarm. A probe that raises is let through silently and leaves that key unset;
+   that is open.
 
 ---
 
@@ -1631,8 +1657,12 @@ Parameters at the worked example's values, convolution and linear weights only:
 | **actor + critic** | **~858 k** |
 
 Weights 3.4 MB fp32, Adam moments 6.9 MB. Activations dominate: about 2.36 MB per sample fp32 for the
-eight body convolutions, so minibatch 512 is 1.18 GB fp32 and **0.59 GB bf16** **[A]**. That is why
-the minibatch is 512 and the precision is bf16.
+eight body convolutions, so the laptop's minibatch of 256 is 0.59 GB fp32 and **0.30 GB bf16** **[A]**.
+That projection counts the body convolutions and nothing else, and it undercounts. It put 512 at
+0.59 GB bf16, comfortably inside a 4 GB card; measured, 512 reserved 4243 MB of the 4294 MB card and
+spilled into host memory, while 256 reserved 2198 MB **[M]** (section 6). So the minibatch is 256 by
+measurement, the precision is bf16, and a run measures one minibatch's real peak at startup rather
+than trusting this paragraph (section 7.7, step 12).
 
 `C = 96, N = 8` roughly triples the compute and is the single change to make on a bigger box.
 `arch_digest` covers `C`, `N`, the observation space, `frame_stack`, `num_cards`, `n_actions`, the
@@ -1651,14 +1681,14 @@ These are correctness rules, not performance rules.
   leaking probability onto an illegal action and keeps the entropy sum finite.
 - **The two forwards do not agree bit for bit, and the spec does not claim they do.** The rollout
   forward runs one policy group of roughly fifty to a hundred and fifty rows; the update forward runs
-  a minibatch of 512. cuDNN selects an algorithm per shape and bf16 carries about three significant
-  digits, so the fp32 logits at the end of the two paths differ at the 1e-2 level and the log-probs
-  with them. The fp32 cast fixes the masking, not the convolutions underneath it. Section 9.6 sets the
-  tolerance accordingly and says what the check still catches.
+  a minibatch of 256 at the laptop profile. cuDNN selects an algorithm per shape and bf16 carries
+  about three significant digits, so the fp32 logits at the end of the two paths differ at the 1e-2
+  level and the log-probs with them. The fp32 cast fixes the masking, not the convolutions underneath
+  it. Section 9.6 sets the tolerance accordingly and says what the check still catches.
 - **GroupNorm, never BatchNorm.** BatchNorm computes a different function at rollout (a small batch,
-  running statistics) than at update (batch 512, `train()` mode). That difference is not a rounding
-  difference — it is a different function of the same weights, so the stored log-prob would stop being
-  the log-prob of the action that was taken.
+  running statistics) than at update (a minibatch of 256, `train()` mode). That difference is not a
+  rounding difference — it is a different function of the same weights, so the stored log-prob would
+  stop being the log-prob of the action that was taken.
 
 ### 8.3 `MaskedCategorical`
 
@@ -1818,14 +1848,14 @@ Three rules, each a fix to something the references do:
 1. **Gather per minibatch, never per batch.** Fancy-indexing a whole batch materialises a 2.6 GB
    temporary at this row size.
 2. **Pinned staging with non-blocking copies**, so the transfer of minibatch `i+1` overlaps the
-   compute of minibatch `i`. The ring is four slabs of `minibatch_size x row_bytes`, 27 MB at the
-   laptop profile, allocated once.
+   compute of minibatch `i`. The ring is four slabs of `minibatch_size x row_bytes`, about 14 MB at
+   the laptop profile's minibatch of 256, allocated once.
 3. **Nothing is dropped.** Both references do `while start + batch_size <= total` and silently
    discard the remainder. Here the remainder is a smaller final batch, weighted by its true sample
    count; `health/samples_unused_frac` is in the metric stream and reads 0.
 
 At the laptop profile: 32 832 trainable samples, `batch_size = 4096`, `n_epochs = 3`, so 8 batches
-per epoch and **24 optimizer steps per iteration**, each from 8 accumulated minibatches of 512.
+per epoch and **24 optimizer steps per iteration**, each from 16 accumulated minibatches of 256.
 
 ### 9.3 GAE
 
@@ -2008,9 +2038,9 @@ if self._check_ratio_now(iteration):
 
 **The tolerance is a property of the precision, not a fudge factor.** In fp32 the two forwards agree
 to `1e-4`. Under bf16 autocast they do not: the rollout forward is one policy group of roughly fifty
-to a hundred and fifty rows and the update forward is a minibatch of 512, cuDNN picks an algorithm per
-shape, and bf16's three significant digits put the resulting fp32 logits about 1e-2 apart (section
-8.2). `ratio_atol` is therefore `1e-4` with autocast off and `2e-2` under bf16, and
+to a hundred and fifty rows and the update forward is a minibatch of 256 on the laptop, cuDNN picks an
+algorithm per shape, and bf16's three significant digits put the resulting fp32 logits about 1e-2
+apart (section 8.2). `ratio_atol` is therefore `1e-4` with autocast off and `2e-2` under bf16, and
 `royalelearn bench` measures the actual `ratio_max_abs_dev` over ten rounds on the machine it is run
 on and prints it beside the tolerance, so a user can see the margin rather than trust it.
 
@@ -2041,12 +2071,13 @@ is the cheapest possible detector for the failure mode that is otherwise silent 
 ## 10. Rewards
 
 `royalelearn/rewards.py` ships four `RewardFunction` implementations built on RoyaleGym's ABC and
-composed with RoyaleGym's `CombinedReward`. Nothing in RoyaleGym is modified; these are additions
-that live here until they are absorbed upstream (section 16, ask 4).
+composed with `PotentialCombinedReward`, which is RoyaleGym's `CombinedReward` with the discount
+forwarded to every term that takes one. Nothing in RoyaleGym is modified; these are additions that
+live here until they are absorbed upstream (section 16, ask 4).
 
 ```python
 def default_potential_reward() -> CombinedReward:
-    return CombinedReward([
+    return PotentialCombinedReward([
         (WinLossReward(draw=0.0),               1.0),    # royalegym's; the objective
         (PotentialCrownReward(),                0.2),
         (PotentialTowerHPReward(),              0.1),
@@ -2062,9 +2093,27 @@ Each potential term returns `gamma * Phi(s') - Phi(s)`, with `Phi` computed from
 | `PotentialTowerHPReward` | `(sum_s own_hp[s]/own_max[s] - sum_s foe_hp[s]/foe_max[s]) / 3` |
 | `CommittedElixirPotential` | `((own_bar + own_board) - (foe_bar + foe_board)) / scale`, where `bar` is `elixir_milli / 1000` and `board` is the sum of `Fraction(card.elixir, card.count)` over that player's live non-tower entities |
 
-`gamma` comes from the schedule: `CombinedReward.set_gamma(g)` is called once per iteration by the
-coordinator and the value rides the `Step` command to every worker, so the reward the worker applies
-and the discount the learner uses are the same number. A test asserts they agree.
+**This is the reward that ships.** `default_env_spec`, and so all three profiles, and
+`examples/configs/laptop.json`, `smoke.json` and `workstation.json` name
+`royalelearn.rewards.default_potential_reward` since 23d971c, and
+`tests/test_rewards.py::test_every_shipped_config_trains_against_the_potential_reward` holds each
+profile and each of those files to it. Before 23d971c every shipped config named RoyaleGym's
+`royalegym.reward.default_reward`, so every real iteration before it trained a different objective.
+The reward is part of the environment spec's digest, which is in the run identity and is the first
+input of the ladder's context digest (section 11.6). So runs from before 23d971c have a different
+identity and context and never pool with later ones. That separation is intended.
+
+`gamma` comes from the schedule. The coordinator builds one `ScheduleState` per iteration and hands the
+same one to collection and to the update, and every `Step` command carries its `gamma` in the control
+word. On the first step whose gamma differs from the last, `ShardRunner.set_gamma` passes it through
+the term recorder to `PotentialCombinedReward.set_gamma`, which walks the composition and gives it to
+every `PotentialReward`. A composition built with RoyaleGym's plain `CombinedReward` does not forward
+it, and its potential terms keep a discount of 1. So the reward the worker applies and the discount
+the learner's GAE uses are the same number, and
+`tests/test_rewards.py::test_the_schedule_s_discount_reaches_the_reward_during_collection` checks it
+end to end: it drives the real coordinator, inline and through worker processes, with a probe term
+that pays exactly `gamma - 1` under a schedule that steps between iterations, and every round carries
+the discount its iteration's schedule gave the learner.
 
 The reason this composition and not RoyaleGym's shipped `default_reward()`:
 
@@ -2091,8 +2140,32 @@ returns plus and minus 1.1e-19 on a perfect mirror instead of zero, which is har
 and makes the property uncheckable.
 
 Every weighted term's per-episode sum, per seat, is on the `EpisodeRecord` and in the metric stream as
-`env/reward_terms/<name>`. The acceptance criterion, checked by the `shaping_dominates` alarm, is that
+`env/reward_terms/<name>`, a signed mean, with `env/reward_terms_abs/<name>`, the mean of each seat's
+magnitude, beside it. `<name>` is the term's class name, because `CombinedReward` files each term under
+`type(term).__name__`, with one exception: `PotentialCombinedReward` says which of its terms is the
+objective (`terminal=0` by default) and files that one under `metrics.records.TERMINAL_REWARD_TERM`,
+which is `terminal`, so a class rename cannot move an alarm's arithmetic. The shipped composition
+therefore reports `terminal`, `PotentialCrownReward`, `PotentialTowerHPReward` and
+`CommittedElixirPotential`. The acceptance criterion, checked by the `shaping_dominates` alarm, is that
 the sum of the absolute shaping terms stays below the terminal term's magnitude.
+
+The two shares that alarm reads, `env/reward_shaping_abs` and `env/reward_terminal_abs`, are sums of
+those per-seat magnitudes. The signed mean is kept because it is how a term that is not antisymmetric
+shows itself. Both shares were wrong until 1065b78 and c38dc82: the absolute value was taken on the
+mean over both seats, where every zero-sum term cancels, and the objective arrived under its class name
+and was summed with the shaping. On every metric row the development machine recorded before then
+(161 rows) both shares read exactly 0.0 **[M]**, so the alarm compared two structural zeros. It has
+not yet been seen on a real run since.
+
+**Open: the potential on the terminating step.** `PotentialReward` pays `gamma * Phi(s') - Phi(s)`
+when `s'` ends the game too. The policy-invariance result above needs `Phi = 0` at an absorbing state,
+and the learner bootstraps 0 after a termination, so the terminating step pays `gamma * Phi(s')` more
+than a potential-based shaping would: up to about 0.2 from the crowns and 0.1 from the towers at their
+weights, plus 0.005 per elixir of difference. That bonus depends on how the game ended, so it can move
+the optimum, which is what choosing potentials was meant to rule out. The candidate is `Phi(s') = 0`
+when `state.game_over`, kept as it is on a truncation, where the learner bootstraps from the final
+observation's value. It changes the objective and the run identity, so it is a decision rather than
+a fix, and it has not been made.
 
 ---
 
@@ -2468,6 +2541,16 @@ class Manifest(msgspec.Struct):
 `read()` verifies every hash and raises `CheckpointFormatError` naming the first mismatch. That turns
 a truncated write from a crash six weeks ago from a silent wrong resume into an error.
 
+**A checkpoint answers to the run's metric file.** Its learner has to be one a row reports, so before
+anything is loaded, `checkpoint.check_described` reads the `metrics.jsonl` of the run the checkpoint
+sits in and refuses a checkpoint whose `state_digest` no row of its iteration carries, with a
+`CheckpointFormatError` that names both digests and says to resume an earlier checkpoint with
+`--checkpoint`. Any row of that iteration will do, because a resumed run writes the iterations after
+its checkpoint a second time and each copy describes a learner that existed. What cannot be compared
+is let through: no metric file, no row of that iteration, or a line torn by a crash. Past iteration 0
+that absence is printed, so a resume the record could not vouch for does not read like one it did
+(0839758).
+
 On resume the store diffs the loaded config against the current one and **prints every difference**
 before continuing. A difference in an identity-hashed field is a refusal, not a warning: a policy
 trained on `MockEngine`'s 229-wide vector cannot load into the 1 177-wide one of the full catalogue, and
@@ -2637,7 +2720,8 @@ own and a large one is a learner-side leak), `elixir_leak_frac`, `elixir_count_e
 of episode-seats whose count of the opponent's elixir stayed exact; below 1.0 the observation's
 enemy-elixir field was an estimate on some episodes and the alarm below says so),
 `mean_elixir_at_decision`,
-`frac_elixir_above_99`, `illegal_action_rate`, and `reward_terms/<name>` per weighted term.
+`frac_elixir_above_99`, `illegal_action_rate`, and `reward_terms/<name>` (signed) and
+`reward_terms_abs/<name>` (magnitude) per weighted term.
 
 **`ladder/`** — `rating`, `rating_se`, `rating_ci95_lo/hi` per member, `rating_above_v0`,
 `elo_readout`, `champion_id`, `champion_step`, `pool_size`, `sampler_size`, `gate_attempts`,
@@ -2648,7 +2732,11 @@ enemy-elixir field was an estimate on some episodes and the alarm below says so)
 **`health/`** — `illegal_action_rate` (**exactly zero by construction; this is an alert, not a plot**),
 `mask_disagreements` (from the start-up gate), `worker_restarts`, `worker_failures_by_kind`,
 `rows_dropped_dead_worker`, `obs_codec_clipped`, `samples_unused_frac`, `nan_guard_trips`,
-`vram_peak_mb`, `rss_peak_mb`, `buffer_fill_frac`.
+`vram_peak_mb`, `rss_peak_mb`, `buffer_fill_frac`, and the device-memory regime read at the end of
+each iteration whenever CUDA is available: `vram_reserved_mb`, `vram_inactive_split_mb`,
+`vram_driver_free_mb`, `vram_alloc_retries`, `vram_available_mb` (driver free plus what this process
+reserves) and `vram_needed_mb` (one minibatch's peak measured at startup plus
+`doctor.vram_headroom_mb`), the two the `vram_spilling` alarm compares.
 
 ### 13.3 Alarms
 
@@ -2665,6 +2753,12 @@ the threshold it crossed, the last five values of every metric the alarm reads, 
 and the resume command verbatim. The reason a halt states its own evidence is that the first question
 anyone asks on finding a stopped run is whether the stop was real, and a line reading only that a
 metric crossed a threshold costs the same morning as no run at all.
+
+The halting iteration's own row is written to `metrics.jsonl` before the alarms read it, so the
+halt's checkpoint holds the learner that row describes and passes the resume check of section 12.2
+(0839758). That iteration's alarm rows are still missing: `AlarmSet.evaluate` raises before it
+returns what fired, so neither the halt nor the warnings beside it reach `alarms.jsonl`. The halting
+alarm is in the bundle, and the warnings beside it are only printed.
 
 This is also why no halting alarm has `patience = 1` on a *learning* quantity. The four that do,
 `illegal_actions`, `ratio_invariant`, `nonfinite` and `buffer_overflow`, are correctness assertions
@@ -2693,7 +2787,7 @@ being hunted, and a false halt costs everything the run was for.
 | `draw_equilibrium` | `env/draw_rate > 0.5` and `env/episode_steps_at_cap_frac > 0.8` | 5 | warn | the turtle equilibrium |
 | `seat_bias` | `env/win_rate_by_seat`'s 95% interval excludes 0.45-0.55 | 3 | warn | an unseeded reset, a reward asymmetry, or an observation mirror bug; a few points inside that band can be the shipped engine's own seat asymmetry, which is why this warns rather than halts and why the ladder's paired evaluation swaps sides on every seed |
 | `elixir_count_inexact` | `env/elixir_count_exact_frac < 0.99` | 3 | warn | the observation's opponent-elixir field is an estimate on some episodes: a repeated card in a deck, or an engine whose elixir law is not the calibration's. The policy is reading a documented-exact slot that is not. A value near zero rather than slightly under one is the second cause and not a broken counter: it says the engine build and the card data disagree about elixir, so read `run/engine_build_digest` before anything else |
-| `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | shaping has taken over the objective |
+| `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | shaping has taken over the objective. Until 1065b78 and c38dc82 it compared two structural zeros, so it has not yet been validated on a real run (section 10) |
 | `vram_spilling` | `health/vram_available_mb < health/vram_needed_mb`: the device memory this run could occupy (driver free plus what it already reserves) is below one minibatch's peak, measured by the preflight at startup, plus `doctor.vram_headroom_mb` | 3 | warn | another process took device memory after startup, so the update is being backed by host memory over PCIe and runs several times slower. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It is the one threshold in this table measured on the machine it is applied to. It stays silent when the preflight measured nothing (no CUDA device, or `doctor.vram_headroom_mb` set to 0), because `health/vram_needed_mb` is then absent |
 | `transitivity` | `ladder/transitivity_residual > 0.10` | 3 | warn | the scalar rating is lying |
 | `gate_starved` | five consecutive gate failures | 1 | warn | the plateau signal, stated as an event |
@@ -2729,6 +2823,13 @@ against today's share is a number with an expiry date nobody will notice passing
 What a validated threshold looks like, from the two that behaved: held on the first iteration,
 cleared by the second, with patience long enough to absorb the start. A new alarm can be checked
 against that shape in a minute.
+
+`vram_spilling` has the opposite gap. It has been seen staying silent with room to move: 42 rows from
+seven runs at minibatch 256 on the 4 GB card read 2995 to 3372 MB available against 2349 MB needed
+**[M]**. Nobody has watched it fire on a card. The suite trips it on a synthetic row, and
+`tests/test_alarms.py` now fails for any built alarm that has no row to trip it or that reads a key
+the healthy row lacks, because such an alarm passes the healthy-row test by absence. The check on a
+card is a second CUDA process taking about 1.5 GB during a run, and a warning three iterations later.
 
 The other alarms have been checked against two iterations of one profile, which by the rule above
 is not validation. A metric's row population belongs in its identity rather than in its
@@ -2779,6 +2880,10 @@ while cumulative_timesteps < limit:
             buffer.record_round(round, actions, log_probs)
             episodes.extend(round.episodes)
     handle_failures(source.drain_failures())             # restart, mark rows invalid, count
+    trainable = buffer.trainable()
+    check_iteration(collection, trainable, episodes)     # raises RoundsMissing, TrainableRowsShort,
+        # NonFiniteLogProb, DeployRefused, EpisodesUnpaired, MixtureDrifted, AssignmentInsideEpisode
+    probe    = policy_probe.measure(buffer, trainable)   # raises StoredActionIllegal
     result   = update.step(buffer, sched)                # critic pass, GAE, PPO; section 9.5
     ladder.record_training_results(episodes)             # kind="train"; excluded from the fit
     if crossed(cfg.ladder.candidate_every_env_steps):
@@ -2787,14 +2892,19 @@ while cumulative_timesteps < limit:
         ladder.apply(decision)
     if iteration % cfg.ladder.refit_every_iterations == 0:
         ratings = rater.fit(results.eval_view())
-    row = merge(run_fields, throughput, time, result, episode_stats(episodes), ladder_fields)
+    row = merge(run_fields, throughput, time, result, probe, episode_stats(episodes), ladder_fields)
+    sinks.write(row); sinks.write_episodes(episodes)     # before the alarms read it
     alarms.evaluate(row)                                  # may raise AlarmHalt
-    sinks.write(row); sinks.write_episodes(episodes)
     if crossed(cfg.checkpoint.every_env_steps):
         store.write(components, manifest())
     sched.advance(cumulative_env_steps)
     iteration += 1
 ```
+
+Every invariant reads only what collection wrote, so the batch is judged before anything learns from
+it, and a refused batch is never trained on. Until 0839758 the update ran first, and a refused batch
+was trained and then refused. The row is written before the alarms read it because a halt checkpoints
+the learner that row describes, and the row has to be in `metrics.jsonl` by then (section 12.2).
 
 With `rollout.overlap = true` the collection of iteration `i` runs on a second thread and a second
 buffer while the update of iteration `i-1` runs on the default CUDA stream, against a
@@ -2804,8 +2914,8 @@ off-policyness and the clip bounds it. `ppo/behaviour_lag_iterations` is logged 
 regime is visible in the run's config panel, and because sampling is driven by name-addressed uniforms
 the trajectory is identical either way.
 
-Invariants asserted once per iteration, each raising a named exception carrying the offending slot and
-cycle:
+Invariants asserted once per iteration, before the update, each raising a named exception carrying the
+offending slot and cycle:
 
 ```python
 assert (round_counter == T * shards_per_worker)
@@ -2885,6 +2995,17 @@ explicitly, because it is not an `Exception` and a bare `except Exception` there
 emergency save on Ctrl-C — with a nested `try` around the emergency checkpoint, then a `finally` that
 closes every worker, joins **with a timeout** and terminates the stragglers.
 
+**An emergency checkpoint holds only the learner the last metric row describes.** From the update's
+first change until that iteration's row is written, the learner in memory is one no row describes, so
+a crash in that window saves nothing and prints the checkpoint to resume from. What the run did since
+the last periodic checkpoint is lost, which the cadence (`checkpoint.every_env_steps`) already allows.
+Outside that window the save is skipped when a checkpoint of the same learner is already on disk (the
+periodic one, a halt's, or the one the run resumed from), because that one was written at the
+iteration boundary and can still replay the iteration that failed. Otherwise the save is written. A
+save taken after collection carries the battles' advanced ordinals: the ordinals address battles, so a
+resume plays the next ones, none twice, and the refused iteration's episodes are skipped rather than
+trained on (0839758).
+
 ---
 
 ## 15. The test plan
@@ -2903,7 +3024,7 @@ metric.
 | file | asserts | speed |
 |---|---|---|
 | `test_package.py` | imports without torch; the public names resolve; the six seed modules are **gone**; asking for a torch-dependent name without torch raises an `ImportError` that names the missing package | fast |
-| `test_config.py` | JSON round-trip is canonical and idempotent; a typo is rejected at every nesting level; the hash is stable under key reordering; each shipped profile is internally consistent (`T * learner_rows >= timesteps_per_iteration`, `batch_size % minibatch_size == 0`) | fast |
+| `test_config.py` | JSON round-trip is canonical and idempotent; a typo is rejected at every nesting level; the hash is stable under key reordering; each shipped profile is internally consistent (`T * learner_rows >= timesteps_per_iteration`, `batch_size % minibatch_size == 0`); each shipped example file (`laptop.json`, `workstation.json`) equals its profile leaf for leaf, both loaded and as written | fast |
 | `test_seeding.py` | `derive_*` is stable across processes and platforms against pinned values; adding a new stream name does not change an existing stream; two names do not collide on their first four draws | fast |
 | `test_identity.py` | the identity is order-independent JSON; table-driven over every field, each included field changes `run_id` and each excluded field does not, `frame_stack`, `codec_table_digest` and a changed `Reveal` among the included ones | fast |
 | `test_obs_layout.py` | `hand_card_onehot`, `hand_cost` and `hand_affordable` are resolved **by name** from `vector_layout()` and the resolved slices match the environment's own, on `MockEngine` and on a synthetic full-catalogue spec whose widths differ from it; a layout missing a required name raises `PreflightError` naming that name; no offset is computed from `V` anywhere in the module | fast |
@@ -2918,10 +3039,10 @@ metric.
 | `test_frame_stack.py` | at `k = 2` the two frames of a stacked cell have consecutive `info["tick"]` values and belong to the same episode; the first cell of an episode stacks a zero history; cycle 0 of an iteration stacks the history rows carried over from the previous one; `vector` is the current frame's and is not stacked; `frame_stack` changes `arch_digest` and `obs_digest`; at `k = 1` the stacked observation is byte-identical to the unstacked one | fast |
 | `test_ppo.py` | gradient accumulation over `k` minibatches gives the **same** gradient as one full batch to 1e-5 — the property that makes `minibatch_size` a pure memory knob; clip fraction and KL match hand-computed values on a synthetic batch; dual clip binds only for a negative advantage; `ratio == 1` gives exactly `-mean(A)`; the two mask asserts fire when fed a deliberately mismatched mask; the backoff fires after exactly `patience` consecutive breaches and floors at `lr_min` | fast |
 | `test_schedules.py` | the gamma and entropy anneals hit their endpoints exactly at the stated env-step count; the whole schedule state round-trips | fast |
-| `test_rewards.py` | each potential term equals `gamma*Phi(s') - Phi(s)` on a hand-built transition; the composition is antisymmetric between seats on a mirrored transition; `set_gamma` reaches every term and matches the schedule; the committed-elixir potential is zero for a card played and negative for elixir left in the bar while the opponent's rises | fast |
+| `test_rewards.py` | each potential term equals `gamma*Phi(s') - Phi(s)` on a hand-built transition; the composition is antisymmetric between seats on a mirrored transition; `set_gamma` reaches every term; the schedule's discount reaches the reward during a real collection, inline and (slow) through worker processes; every profile and shipped example file names `default_potential_reward`; the objective is filed under the name the shaping alarm reads; the committed-elixir potential is zero for a card played and negative for elixir left in the bar while the opponent's rises | fast |
 | `test_rollout_inline.py` | an `InlineRolloutSource` run of 20 cycles: slots map to the right battles, rewards are antisymmetric on mirror battles, episode ends arrive in pairs, `deploy_status` is never in 1..11, the seven terminal scalars are read out of `final_info` and match what the worker counted, and a battle's assignment changes only on the cycle after its `episode_end` | fast |
 | `test_rollout_farm.py` | **the differential test**: `ProcessRolloutSource` and `InlineRolloutSource` with the same seed produce byte-identical buffers, scalars and episode records over 30 cycles. This is the acceptance criterion for any future Rust worker | slow |
-| `test_worker_hygiene.py` | the worker has no `torch` in `sys.modules`; the thread variables are set before numpy; a deliberately raised exception arrives as `WorkerFailure(kind="exception")` with the traceback, the farm restarts the worker with the next generation, the run continues, and `health/worker_restarts` rises; a hung worker produces `WorkerTimeout` within the timeout rather than hanging | slow |
+| `test_worker_hygiene.py` | the worker has no `torch` in `sys.modules`; the thread variables are set before numpy; a deliberately raised exception arrives as `WorkerFailure(kind="exception")` with the traceback, the farm restarts the worker with the next generation, the run continues, and `health/worker_restarts` rises; a hung worker produces `WorkerTimeout` within the timeout rather than hanging; an idle worker uses under 10% of a core; a command sent out of turn is still taken; a wait takes the token that announced its command and sleeps through one an earlier command left | slow |
 | `test_rollout_invariants.py` | the section 14.1 assertions fire on deliberately corrupted rounds: a dropped cycle, a mismatched slot count, an action illegal under its stored mask, a truncated cell with no `final_value` | fast |
 | `test_rating.py` | the Bradley-Terry-Davidson fit recovers known strengths from synthetic results within its own standard errors over 100 seeds and to within 5 Elo at n = 2000; it is invariant to result order and to a permutation of player ids; standard errors shrink as one over the square root of n; the anchor is pinned exactly; the standard error of a difference uses the 2x2 block; the Davidson term recovers a known draw rate; the residual is near zero on transitive data and large on synthetic rock-paper-scissors; `wilson_interval` matches the published table | fast |
 | `test_results_log.py` | the aggregate cache equals a rebuild from `games.jsonl`; a truncated last line is tolerated; contexts are never pooled without the flag | fast |
@@ -2931,8 +3052,9 @@ metric.
 | `test_snapshots.py` | save and load round-trip; a mismatching `arch_digest`, `obs_digest` or `codec_table_digest` is refused with the field named; `EvalRunner` refuses a pairing whose two `obs_digest`s differ and names both; the LRU evicts; a byte scan finds no pickle protocol marker in any written file | fast |
 | `test_metrics.py` | every key a run emits exists in `schema.py` and every schema key is emitted; nested keys flatten to `a/b`; the wandb sink is a pure pass-through when disabled; the decorator's checkpoint nests | fast |
 | `test_viser_sink.py` | a plain `socket` plays the viewer: nothing is sent before a hello, a hello produces one msgpack map within a second, every fixed field of the learning status is present with the right type, the three extras carry the formatted rating, `cards_per_match` and the last gate verdict, a second hello re-sends the last status unchanged, and a detached sink sends nothing over fifty iterations. Imports nothing from RoyaleViser | fast |
-| `test_alarms.py` | every alarm fires on a synthetic row and does not fire on a healthy one; patience is honoured; a halt alarm raises `AlarmHalt` and writes a bundle | fast |
-| `test_checkpoint.py` | every component round-trips; with `strict=False` a missing file prints its path and continues, with `strict=True` it raises; a flipped byte is detected by the manifest; a higher `format_version` is refused by name; pruning keeps exactly `keep` and survives a stray file and a `.partial` directory; the write is atomic under a simulated crash, on a platform where a directory handle cannot be fsynced as well as on one where it can | fast |
+| `test_alarms.py` | every alarm fires on a synthetic row and does not fire on a healthy one; a built alarm with no row to trip it, or reading a key the healthy row lacks, fails the suite; patience is honoured; a halt alarm raises `AlarmHalt` and writes a bundle | fast |
+| `test_coordinator.py` | a refused batch (short, non-finite, illegal) is never trained on; an update that raises leaves no checkpoint of the weights it moved; a crash while collecting keeps the checkpoint already on disk; a keyboard interrupt during collection saves the learner the last row describes; a halt leaves its row on disk beside its checkpoint; a resume refuses a checkpoint no metric row describes | fast |
+| `test_checkpoint.py` | every component round-trips; with `strict=False` a missing file prints its path and continues, with `strict=True` it raises; a flipped byte is detected by the manifest; a higher `format_version` is refused by name; pruning keeps exactly `keep` and survives a stray file and a `.partial` directory; the write is atomic under a simulated crash, on a platform where a directory handle cannot be fsynced as well as on one where it can; a checkpoint no metric row of its iteration describes is refused, and one with nothing to compare against is let through | fast |
 | `test_rng_roundtrip.py` | torch CPU, the numpy generator and python `random` round-trip and reproduce their next 1000 draws | fast |
 | `test_no_global_rng.py` | a source scan finds no module-level `np.random.<func>`, no bare `random.`, and no unseeded `torch.rand*` in `royalelearn/` | fast |
 | `test_env_contract.py` | every layout fact the harness relies on, **each assertion naming the RoyaleGym file it depends on**: the action space is `Discrete(1 + hand_size*tiles_y*tiles_x)` and index 0 is the no-op; `encode` matches the head's arithmetic; `mask_planes == action_mask[1:].reshape(hand_size, tiles_y, tiles_x)` wherever the key exists; `vector_layout()` is contiguous, covers the whole vector and declares the three hand fields; `spatial_layout()` declares one entry per plane and marks the static ones; `observation_space["spatial"].high` is per channel; SAME_STEP autoreset with `final_obs`; the seven terminal scalars under `final_info` with their validity masks; `info["tick"]` present and surviving into `final_info`; `mask[NOOP]` always set; episodes end in pairs; `deploy_status` present; `config()` returns every documented key after a reset. A RoyaleGym change then breaks this file loudly rather than the learner silently | fast |
