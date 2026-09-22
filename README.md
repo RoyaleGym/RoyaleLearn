@@ -13,9 +13,17 @@ piece of Python that scores what just happened in a battle. The bot plays itself
 keeps what wins. A ladder of its own older versions decides whether the new bot is actually better
 than the last one.
 
-**You cannot start a run yet.** Read that line before you install anything. Two pieces are still
-being written: the PPO update, which is the step that changes the bot's weights, and the
-coordinator that ties everything else into a loop. Those two are the whole of what is missing.
+**You can start a run, as of 2026-09-22.** The loop closed tonight, in commit 5685cad. One
+command trains:
+
+```
+python -m royalelearn train --config examples\configs\smoke.json
+```
+
+Two things to know before you try it. It needs torch, which is not in the plain install: use
+`pip install -e "RoyaleLearn[torch]"`. And the only run anyone has done so far was three
+iterations long, a smoke test to prove the loop closes, so nobody yet knows what a real run
+costs or how long one takes. The first person to do one will find out.
 
 Everything else is here and tested, and runs today. The configuration tree, the run identity,
 the networks, the observation codec, the rollout workers, the ladder, the metrics sinks and the
@@ -43,8 +51,9 @@ Six pictures. Five of them run today.
   </tr>
 </table>
 
-The one marked amber is the masked head. Its network and its action layout are built. The PPO
-update that trains it is the piece being written now.
+The one marked amber is the masked head. Its network and its action layout are built, and the
+PPO update that trains it landed tonight. What is amber about it now is evidence rather than
+code: it has run for three iterations and nothing has been trained with it.
 
 In plain words, for anyone who has not trained a bot before:
 
@@ -207,6 +216,7 @@ cd RoyaleSim && ..\.venv\Scripts\maturin develop --release && cd ..     # builds
 .venv\Scripts\python -m pip install -e RoyaleGym
 .venv\Scripts\python -m pip install -e RoyaleViser
 .venv\Scripts\python -m pip install -e RoyaleLearn
+.venv\Scripts\python -m pip install -e "RoyaleLearn[torch]"   # only if you want to train; it is a big download
 ```
 
 Run the whole block, in that order. This repo needs it. `royalelearn` lists `royalegym` as a
@@ -216,7 +226,7 @@ dependency and pip takes it from your venv, never from PyPI. If you want torch a
 ## Status (2026-09-22)
 
 <p align="center">
-  <img alt="Fast suite: 375 passed" src="https://img.shields.io/badge/fast%20suite-375%20passed-3fb950?style=flat-square">
+  <img alt="Fast suite: 375 passed" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
   <img alt="Ruff: all checks passed" src="https://img.shields.io/badge/ruff-all%20checks%20passed-3fb950?style=flat-square">
   <img alt="Torch is optional" src="https://img.shields.io/badge/torch-optional-555?style=flat-square">
   <img alt="Harness: two pieces left" src="https://img.shields.io/badge/harness-two%20pieces%20left-d29922?style=flat-square">
@@ -254,7 +264,7 @@ What is open:
 Tests:
 
 ```
-cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 375 passed, 68 skipped, 9 deselected
+cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 375 passed, 68 skipped, 9 deselected     # without torch, on 2026-09-22
 ..\.venv\Scripts\ruff check .                              # All checks passed!
 ```
 
