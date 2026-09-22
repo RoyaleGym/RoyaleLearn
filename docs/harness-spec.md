@@ -3060,13 +3060,33 @@ run with, and each is a number the harness already logs.
    The three differ on two axes and not one. On the value function: dropping a row removes it
    from the critic's targets as well as the policy's, and removes a link from the chain GAE
    walks backwards. On the wall clock: dropping at collection saves almost the whole update,
-   because the rows never reach the trunk; excluding them from the policy loss alone saves
-   nothing, because they still go through it; and raising `decision_ms` saves both while being
+   because the rows never reach the trunk; and raising `decision_ms` saves both while being
    the only one of the three that changes what the agent *is* rather than what the learner does
-   with it. Choosing between the first two on value-function grounds alone would be choosing
-   between "several times faster" and "no faster" without knowing it. That is why
-   `forced_noop_frac` and the `time/` group are in the metric list rather than constants in the
-   code.
+   with it. That is why `forced_noop_frac` and the `time/` group are in the metric list rather
+   than constants in the code.
+
+   **An earlier version of this paragraph said excluding forced rows from the policy loss alone
+   "saves nothing, because they still go through it". That is false for the shipped default and
+   it steered the reader away from the cheapest branch** **[M]**. `net.separate_trunks` defaults
+   to true and `SeparateActorCritic` gives the actor and the critic a trunk each with no shared
+   tensor, so forced rows can be dropped from the *actor's* forward and backward while the
+   critic and GAE keep every row. The saving is real but bounded — it is the actor's share of
+   the update, not the update — and it is a fourth option rather than a variant of the first.
+
+   **There is also a fifth, which is a denominator rather than a filter, and it is not about
+   speed at all.** The actor's three loss terms are means over every row in the minibatch
+   (`ppo.py`: `dual.mean()`, `result.entropy.mean()`, `result.noop_entropy.mean()`), while a
+   forced row contributes exactly zero to each numerator — its log-probability is identically
+   zero whatever the parameters, so its surrogate has no gradient and its entropies are point
+   masses. The critic's MSE is the one term where every row contributes to the numerator too.
+   So the policy gradient is divided by `1/(1 - forced_noop_frac)` more rows than contribute to
+   it: measured 2026-09-22, 10.2x on one run and 32x at `forced` 0.969 **[M]**. Two cautions
+   before anyone reaches for it. The factor **varies per iteration with the elixir economy**, so
+   it is a learning rate that moves, which is a worse problem than a learning rate that is
+   wrong. And Adam largely cancels a *uniform* rescaling — `m` and `sqrt(v)` scale together, so
+   the step changes only through `eps` and wherever `max_grad_norm` binds — which means the
+   correct test is the parameter delta after an optimizer step, not the gradient norm. A
+   gradient-norm comparison would show a clean 14x while the weights moved almost identically.
 9. **The trunk's discrimination, against its input's.** If the harness ever alarms on representation
    collapse — the encoder producing nearly the same embedding for boards that differ — the threshold
    must be **relative, never absolute**, and it must be built to three rules that a naive version of
