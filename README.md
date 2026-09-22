@@ -40,13 +40,14 @@ collected     228 cycles, 32832 timesteps in 19.0s (2305 env steps/s); updating
 ```
 
 The first round of a run is always the slow one, because the workers are spawning and nothing
-is warm. Do not size a run off it. Across three runs on this laptop the first round came in at
-46, 79 and 179 seconds depending on what else was running, and later rounds at 13 to 19
-seconds.
+is warm. That is the variable to know about, more than your hardware. Across six measurements
+on this laptop the first round came in at 46, 79 and 179 seconds, a spread of 3.9x, while every
+round after it came in at 12.6, 13 and 19 seconds, a spread of 1.5x. Once a run is warm it is
+fairly steady even on a busy machine. Wait for the second round before you believe any timing.
 
-A complete iteration was measured at 518 and 544 seconds, so about nine minutes. That is a best
-case: the same config on the same machine took over forty minutes for one iteration with other
-work resident. A useful run is many hours.
+A complete iteration was measured at 518 and 544 seconds, so about nine minutes on an idle
+machine. It degrades badly under contention: one iteration sharing eight processors with a
+second training run had still not finished after 46 minutes. A useful run is many hours.
 Two complete iterations have happened, which is a loop that works rather than a result about
 learning. Nobody knows yet whether a bot trained this way is any good, and the harness logs
 `run/cumulative_timesteps` beside the rating so the first real run measures what it costs.
