@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -314,22 +315,263 @@ def test_a_q_in_the_control_file_stops_the_run(run: Any) -> None:
 
 
 def test_a_keyboard_interrupt_saves_before_it_propagates(run: Any) -> None:
-    """``KeyboardInterrupt`` is not an ``Exception``; a bare except would skip this save."""
-    original = run.update.step
+    """``KeyboardInterrupt`` is not an ``Exception``; a bare except would skip this save.
 
-    def interrupt(*args: Any, **kwargs: Any) -> Any:
-        original(*args, **kwargs)
-        raise KeyboardInterrupt
-
-    run.update.step = interrupt
+    It arrives while the next iteration is collecting, which is where a run spends the time it
+    is not updating: the learner is still the one the last row describes, and that state is
+    not on disk yet, so the save has something to keep.
+    """
+    run.iterate()
+    _after_collection(run, 1, _interrupt)
     with pytest.raises(KeyboardInterrupt):
         run.learn(until_timesteps=10_000)
-    assert sorted((run.run_dir / "checkpoints").glob("0*"))
+    (last,) = _metric_rows(run)
+    (manifest,) = _manifests(run)
+    assert manifest.state_digest == last["run/state_digest"]
 
 
 def test_closing_twice_is_allowed(run: Any) -> None:
     run.close()
     run.close()
+
+
+# -- what a crash leaves behind ----------------------------------------------
+
+
+def _metric_rows(run: Any) -> list[dict[str, Any]]:
+    """Every row the run's metric file holds, which is the record a checkpoint answers to."""
+    path = run.run_dir / "metrics.jsonl"
+    if not path.exists():
+        return []
+    return [msgspec.json.decode(line) for line in path.read_bytes().splitlines() if line]
+
+
+def _manifests(run: Any) -> list[Any]:
+    """Every finished checkpoint's manifest, oldest first."""
+    from royalelearn.api.checkpoint import Manifest
+
+    root = run.run_dir / "checkpoints"
+    if not root.is_dir():
+        return []
+    return [
+        msgspec.json.decode((folder / "manifest.json").read_bytes(), type=Manifest)
+        for folder in sorted(root.iterdir())
+        if folder.is_dir() and (folder / "manifest.json").is_file()
+    ]
+
+
+def _after_collection(run: Any, number: int, effect: Any) -> None:
+    """Run ``effect`` once the ``number``-th collection from now has returned.
+
+    That is the moment the iteration's invariants are about to read the rectangle, so an
+    effect that corrupts the buffer here is indistinguishable, to everything after it, from a
+    collection that went wrong by itself.
+    """
+    original = run._collect
+    seen = count(1)
+
+    def collect(*args: Any, **kwargs: Any) -> Any:
+        collection = original(*args, **kwargs)
+        if next(seen) == number:
+            effect(run)
+        return collection
+
+    run._collect = collect
+
+
+def _interrupt(_run: Any) -> None:
+    raise KeyboardInterrupt
+
+
+def _short(run: Any) -> None:
+    # A worker that died for a cycle leaves that cycle's rows invalid: the real way a
+    # rectangle comes up short, and the way the run this test comes from did.
+    run.buffer.valid[0, :] = False
+
+
+def _non_finite(run: Any) -> None:
+    run.buffer.log_prob[1, 2] = -np.inf
+
+
+def _illegal(run: Any) -> None:
+    # The probe's check, which ran inside the row and so after the update.
+    run.buffer.action[: run.buffer.cycles] = run.buffer.spec.n_actions - 1
+
+
+@pytest.mark.parametrize(
+    ("corrupt", "refusal"),
+    [
+        (_short, "TrainableRowsShort"),
+        (_non_finite, "NonFiniteLogProb"),
+        (_illegal, "StoredActionIllegal"),
+    ],
+    ids=["short", "non_finite", "illegal"],
+)
+def test_a_refused_batch_is_never_trained_on(tmp_path: Path, corrupt: Any, refusal: str) -> None:
+    """The invariants judge the batch before the update sees it, and the save says so.
+
+    None of them reads anything the update produces, so there is no reason to run it first --
+    and running it first is how a real run trained a refused batch of 22,627 rows for 18
+    optimizer steps and then saved those weights under the previous iteration's counters. What
+    is asserted is the record: the learner in memory, and the emergency checkpoint on disk, are
+    both exactly the one the last metric row describes.
+    """
+    import royalelearn.coordinator as coordinator_module
+
+    error = getattr(coordinator_module, refusal)
+    with coordinator(tiny_config(tmp_path)) as run:
+        _after_collection(run, 2, corrupt)
+        with pytest.raises(error):
+            run.learn(until_timesteps=10_000)
+        (last,) = _metric_rows(run)
+        assert run.update.model_updates == last["run/cumulative_updates"], (
+            "the update ran on a batch the invariants then refused"
+        )
+        assert run.state_digest() == last["run/state_digest"]
+        (manifest,) = _manifests(run)
+        assert manifest.state_digest == last["run/state_digest"]
+        assert manifest.cumulative_model_updates == last["run/cumulative_updates"]
+        assert manifest.iteration == last["run/iteration"]
+        assert manifest.cumulative_env_steps == last["run/cumulative_env_steps"]
+        # The schedule it reports as the last one run is the last row's, not the refused one's.
+        folder = run.run_dir / "checkpoints" / f"{manifest.cumulative_env_steps:012d}"
+        schedule = msgspec.json.decode((folder / "schedules" / "state.json").read_bytes())
+        assert schedule["last"]["iteration"] == last["run/iteration"] - 1
+
+
+def test_an_update_that_raises_leaves_no_checkpoint_of_the_weights_it_moved(
+    tmp_path: Path,
+) -> None:
+    """A crash inside the update, after the weights moved and before a row said so.
+
+    The actor takes one optimizer step and then the device runs out of memory, which is the
+    crash this phase actually has on a small card. The weights in memory are then half an
+    update past the last row -- the critic has not moved and the step counter has not either --
+    and no checkpoint may hold them: every manifest on disk must carry a digest some metric row
+    carries. The one written at the end of the first iteration is the one to resume from, and
+    the run says so rather than replacing it.
+    """
+    lines: list[str] = []
+    config = tiny_config(tmp_path, checkpoint=cfg.CheckpointConfig(every_env_steps=1, keep=2))
+    with coordinator(config, printer=lines.append) as run:
+        run.iterate()
+        (saved,) = _manifests(run)
+        optimizer = run.update.actor_optimizer
+        original = optimizer.step
+
+        def step(*args: Any, **kwargs: Any) -> Any:
+            original(*args, **kwargs)
+            raise RuntimeError("out of device memory, on purpose")
+
+        optimizer.step = step
+        with pytest.raises(RuntimeError, match="on purpose"):
+            run.learn(until_timesteps=10_000)
+
+        rows = _metric_rows(run)
+        assert run.state_digest() != rows[-1]["run/state_digest"], (
+            "the premise: the weights moved inside the update before it raised"
+        )
+        described = {row["run/state_digest"] for row in rows}
+        for manifest in _manifests(run):
+            assert manifest.state_digest in described, (
+                f"checkpoint at step {manifest.cumulative_env_steps} holds a learner no metric "
+                f"row describes"
+            )
+        assert _manifests(run) == [saved]
+        assert any("no metrics row describes" in line for line in lines), lines[-5:]
+
+
+def test_a_crash_while_collecting_keeps_the_checkpoint_already_on_disk(tmp_path: Path) -> None:
+    """The same learner is already saved, and saved at the iteration boundary: keep that one.
+
+    Collection moves every battle's ordinal past the episodes that finish in it. An emergency
+    save of the same learner at the same step would replace the boundary's checkpoint with one
+    whose battles have skipped ahead -- the same weights, and no longer able to replay the
+    iteration that failed.
+    """
+    config = tiny_config(tmp_path, checkpoint=cfg.CheckpointConfig(every_env_steps=1, keep=2))
+    with coordinator(config) as run:
+        run.iterate()
+        (before,) = _manifests(run)
+        folder = run.run_dir / "checkpoints" / f"{before.cumulative_env_steps:012d}"
+        ordinals = msgspec.json.decode((folder / "rollout" / "state.json").read_bytes())
+        _after_collection(run, 1, _interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            run.learn(until_timesteps=10_000)
+        battles = range(run.geometry.n_battles)
+        moved = {str(battle): run.matchmaker.ordinal(battle) for battle in battles}
+        assert moved != ordinals["ordinals"], (
+            "the premise: an episode finished during the collection that was interrupted"
+        )
+        (after,) = _manifests(run)
+        assert after == before
+        assert msgspec.json.decode((folder / "rollout" / "state.json").read_bytes()) == ordinals
+
+
+def test_a_halt_leaves_its_row_on_disk_beside_its_checkpoint(run: Any) -> None:
+    """A halt checkpoints the iteration it halted on, so that iteration's row must be written.
+
+    The alarms read the row before the sinks did, and a halt raises out of that read: the
+    checkpoint the halt wrote held a learner whose only row was in memory and in the bundle,
+    and the run's own metric file ended one iteration earlier.
+    """
+    from royalelearn.api.metrics import AlarmResult
+    from royalelearn.errors import AlarmHalt
+
+    def halt(row: Any, *, on_halt: Any = None, on_dump: Any = None) -> Any:
+        result = AlarmResult(
+            name="on_purpose",
+            severity="halt",
+            iteration=int(row["run/iteration"]),
+            fired=True,
+            consecutive=1,
+            message="halted on purpose",
+            values={},
+        )
+        raise AlarmHalt(result.name, result.message, result.iteration, on_halt(result))
+
+    run.alarms.evaluate = halt
+    with pytest.raises(AlarmHalt):
+        run.learn(until_timesteps=10_000)
+    rows = _metric_rows(run)
+    assert len(rows) == 1, "the halting iteration's row never reached the metric file"
+    (manifest,) = _manifests(run)
+    assert manifest.state_digest == rows[0]["run/state_digest"]
+    assert manifest.iteration == rows[0]["run/iteration"]
+
+
+def test_a_resume_refuses_a_checkpoint_no_metric_row_describes(tmp_path: Path) -> None:
+    """What a checkpoint written by the old ordering looks like, refused by the resume.
+
+    Such a checkpoint's manifest carries the digest of a learner trained past its row, beside
+    the row's own iteration. Resuming it would continue a run from a state its record does not
+    contain, so the resume names both digests and stops.
+    """
+    from royalelearn.coordinator import LearningCoordinator
+    from royalelearn.errors import CheckpointFormatError
+
+    config = tiny_config(tmp_path)
+    with coordinator(config) as run:
+        run.iterate()
+        path = run.checkpoint()
+    manifest_path = path / "manifest.json"
+    raw = msgspec.json.decode(manifest_path.read_bytes())
+    raw["state_digest"] = "9d" * 32
+    manifest_path.write_bytes(msgspec.json.encode(raw))
+
+    apply_cublas_workspace_config()
+    resumed = LearningCoordinator(
+        config,
+        resume=path,
+        printer=None,
+        preflight_kwargs=PREFLIGHT,
+        install_signal_handler=False,
+    )
+    try:
+        with pytest.raises(CheckpointFormatError, match="no metrics row"):
+            resumed.__enter__()
+    finally:
+        resumed.close()
 
 
 # -- the checkpoint ----------------------------------------------------------

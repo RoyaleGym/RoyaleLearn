@@ -44,6 +44,7 @@ __all__ = [
     "DirCheckpointStore",
     "IndexEntry",
     "RngComponent",
+    "check_described",
     "check_resume",
     "config_differences",
     "sha256_of",
@@ -398,6 +399,58 @@ def check_resume(
     for name, (was, now) in differences.items():
         print(f"config differs from the checkpoint's: {name}: {was!r} -> {now!r}")
     return differences
+
+
+class _RowIdentity(msgspec.Struct):
+    """The two fields of a metric row a checkpoint answers to; the decoder skips the rest."""
+
+    iteration: int = msgspec.field(default=-1, name="run/iteration")
+    state_digest: str = msgspec.field(default="", name="run/state_digest")
+
+
+def check_described(manifest: Manifest, rows: Path) -> None:
+    """Refuse a checkpoint whose learner no metric row of its iteration describes.
+
+    A checkpoint's weights are supposed to be ones the run's record reports: the row of the
+    iteration its manifest names carries the same state digest. One that breaks this holds a
+    learner trained past its row -- which is what the emergency save wrote while the update
+    ran before the batch was judged -- and resuming it continues the run from a state its
+    record does not contain, under counters that belong to a different learner.
+
+    Any row of that iteration will do: a run resumed from an earlier checkpoint writes the
+    iterations after it a second time, and each copy describes a learner that existed. What
+    cannot be compared is let through rather than refused -- no metric file, no row of that
+    iteration, a line torn by a crash mid-write -- because an absence says nothing about the
+    weights. Past iteration zero, which never has a row, it is printed: a resume the record
+    could not vouch for should not read like one it did.
+    """
+    described: set[str] = set()
+    if rows.is_file():
+        decoder = msgspec.json.Decoder(_RowIdentity)
+        with rows.open("rb") as handle:
+            for line in handle:
+                try:
+                    row = decoder.decode(line)
+                except msgspec.DecodeError:
+                    continue
+                if row.iteration == manifest.iteration and row.state_digest:
+                    described.add(row.state_digest)
+    if manifest.state_digest in described:
+        return
+    if not described:
+        if manifest.iteration:
+            print(
+                f"no metrics row of iteration {manifest.iteration} in {rows}: the checkpoint's "
+                f"learner is not checked against the run's record"
+            )
+        return
+    recorded = ", ".join(sorted(digest[:16] for digest in described))
+    raise CheckpointFormatError(
+        f"the checkpoint of iteration {manifest.iteration} holds learner "
+        f"{manifest.state_digest[:16]} and no metrics row describes it: {rows} records "
+        f"{recorded} for that iteration. Its weights were trained past the row its counters "
+        f"belong to; resume from an earlier checkpoint with --checkpoint"
+    )
 
 
 def _fsync_file(path: Path) -> None:

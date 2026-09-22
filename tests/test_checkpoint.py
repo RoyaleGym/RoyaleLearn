@@ -20,6 +20,7 @@ from royalelearn.checkpoint import (
     MANIFEST_NAME,
     DirCheckpointStore,
     RngComponent,
+    check_described,
     check_resume,
 )
 from royalelearn.config import LadderConfig
@@ -286,6 +287,65 @@ def test_a_resume_into_another_identity_is_refused_by_field(tmp_path) -> None:
     assert "master_seed" in str(excinfo.value)
     # Drift is allowed only when it is asked for, and then it is recorded rather than refused.
     assert check_resume(manifest, moved, manifest.config, allow_drift=True) == {}
+
+
+def _metric_file(path: Path, rows: list[dict]) -> Path:
+    path.write_bytes(b"".join(msgspec.json.encode(row) + b"\n" for row in rows))
+    return path
+
+
+def test_a_checkpoint_no_metric_row_describes_is_refused(tmp_path) -> None:
+    """The learner a checkpoint holds is one its run's record describes, or it is not resumed.
+
+    Keyed on the iteration the manifest names, and satisfied by ANY row of that iteration:
+    a run resumed from an earlier checkpoint writes that iteration's row a second time, and
+    either copy describes a learner that really existed. What is refused is a digest none of
+    them carries -- which is what a checkpoint of weights trained past their row looks like.
+    """
+    rows = _metric_file(
+        tmp_path / "metrics.jsonl",
+        [
+            {"run/iteration": 1, "run/state_digest": "a" * 64},
+            {"run/iteration": 2, "run/state_digest": "b" * 64},
+        ],
+    )
+    trained_past = msgspec.structs.replace(
+        _manifest(steps=2000, iteration=2), state_digest="c" * 64
+    )
+    with pytest.raises(CheckpointFormatError) as excinfo:
+        check_described(trained_past, rows)
+    assert "c" * 16 in str(excinfo.value)
+    assert "b" * 16 in str(excinfo.value)
+    check_described(msgspec.structs.replace(trained_past, state_digest="b" * 64), rows)
+
+    # The same iteration twice, from a resume that replayed it: either copy is a description.
+    with rows.open("ab") as handle:
+        handle.write(msgspec.json.encode({"run/iteration": 2, "run/state_digest": "c" * 64}))
+        handle.write(b"\n")
+    check_described(trained_past, rows)
+
+
+def test_a_checkpoint_with_nothing_to_compare_against_is_let_through(tmp_path, capsys) -> None:
+    """Absence is not a mismatch: no row of that iteration, no metric file, a torn last line.
+
+    Iteration zero has no row by construction, and a crash mid-write leaves the last line of
+    the file cut short; neither says anything about the learner, so neither refuses it. It is
+    said, though, past iteration zero: two smoke runs on disk hold an iteration-5 checkpoint
+    beside a metric file that ends at row 4, and a resume from one should not look checked.
+    """
+    check_described(_manifest(steps=0, iteration=0), tmp_path / "missing.jsonl")
+    assert capsys.readouterr().out == ""
+
+    manifest = _manifest(steps=2000, iteration=2)
+    check_described(manifest, tmp_path / "missing.jsonl")
+    rows = _metric_file(tmp_path / "metrics.jsonl", [{"run/iteration": 1, "run/state_digest": "a"}])
+    check_described(manifest, rows)
+    with rows.open("ab") as handle:
+        handle.write(b'{"run/iteration": 2, "run/state_dig')
+    check_described(manifest, rows)
+    printed = capsys.readouterr().out.splitlines()
+    assert len(printed) == 3
+    assert all("iteration 2" in line and "not checked" in line for line in printed), printed
 
 
 def test_every_config_difference_is_printed_and_the_run_continues(tmp_path, capsys) -> None:

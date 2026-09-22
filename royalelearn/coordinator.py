@@ -3,8 +3,9 @@
 Everything else in this repository is a piece that can be replaced -- a codec, an estimator, a
 matchmaker, a sink. This file is the sentence they are read in. It holds no policy of its own
 beyond that ordering and the invariants that go with it, and it is the only module that knows
-that a critic pass comes before GAE, that a gate belongs at an env-step cadence rather than an
-iteration one, and that a checkpoint is written after the alarms have had their look at the row.
+that a critic pass comes before GAE, that a batch is judged before the update learns from it,
+that a gate belongs at an env-step cadence rather than an iteration one, and that a checkpoint
+is written after the alarms have had their look at the row.
 
 The invariants are the point of having one such place. Each of them is checked once per
 iteration over the whole rectangle and raises an exception that names the cell it failed on,
@@ -42,7 +43,12 @@ from .api.rollout import (
     Step,
 )
 from .api.schedule import ScheduleState
-from .checkpoint import CHECKPOINT_FORMAT_VERSION, DirCheckpointStore, check_resume
+from .checkpoint import (
+    CHECKPOINT_FORMAT_VERSION,
+    DirCheckpointStore,
+    check_described,
+    check_resume,
+)
 from .config import RunConfig, config_hash, dump_config, geometry, validate
 from .errors import PreflightError, RoyaleLearnError
 from .identity import RunIdentity, compute_identity, describe_device
@@ -64,7 +70,7 @@ from .metrics.records import (
     schedule_fields,
     update_fields,
 )
-from .metrics.sinks import build_sinks
+from .metrics.sinks import METRICS_NAME, build_sinks
 from .obs_layout import HAND_CARD_ONEHOT, field_slice, hand_fields
 from .rollout.inline import (
     InlineRolloutSource,
@@ -837,6 +843,12 @@ class LearningCoordinator:
         self._last_checkpoint_seconds = 0.0
         self._last_candidate_step = 0
         self._last_floor_step = 0
+        #: True from the update's first change to the learner until the row that reports the
+        #: update is written. Inside that window no metric row describes the learner in memory,
+        #: and ``_emergency`` reads this to know it must not save it.
+        self._learner_ahead_of_rows = False
+        #: The env step and folder of the last checkpoint this process wrote or resumed from.
+        self._saved_at: tuple[int, Path] | None = None
 
     # -- construction --------------------------------------------------------
 
@@ -1347,14 +1359,21 @@ class LearningCoordinator:
         return self._checkpoint()
 
     def _iterate(self, run_started: float) -> str:
-        """One whole iteration, and whatever the interactive control asked for during it."""
+        """One whole iteration, and whatever the interactive control asked for during it.
+
+        The batch is judged before anything learns from it. Every invariant, the probe's
+        legality check among them, reads only what collection wrote, so asking first costs
+        nothing -- and asking after the update is how a real run trained a refused batch of
+        22,627 rows for 18 optimizer steps and then saved the result. From the update's first
+        change until the row reporting it is written, the learner in memory is one no row
+        describes; ``_emergency`` is what that window is marked for.
+        """
         began = time.perf_counter()
         sched = self.schedules.state(
             iteration=self.iteration,
             cumulative_env_steps=self.cumulative_env_steps,
             cumulative_timesteps=self.cumulative_timesteps,
         )
-        self.schedule_component.last = sched
         self.rng.iteration = self.iteration
         self.rng.shard_streams = self.rollout_component.shard_streams()
 
@@ -1369,9 +1388,17 @@ class LearningCoordinator:
         episodes = collection["episodes"]
         self.recent_episodes = (self.recent_episodes + episodes)[-200:]
 
-        result = self.update.step(self.buffer, sched)
         trainable = self.buffer.trainable()
         self._check_iteration(collection, trainable, episodes)
+        probe = self.probe.measure(
+            self.buffer, self.inference.gather, self.buffer.action[: self.buffer.cycles], trainable
+        )
+
+        self._learner_ahead_of_rows = True
+        result = self.update.step(self.buffer, sched)
+        # "The values the last iteration actually ran at": set once it has run, so a checkpoint
+        # taken before then does not report the schedule of an iteration that never finished.
+        self.schedule_component.last = sched
 
         self.cumulative_timesteps += int(trainable.sum())
         self.cumulative_env_steps += self.geometry.cycles * self.geometry.n_battles
@@ -1388,15 +1415,20 @@ class LearningCoordinator:
             episodes=episodes,
             collection=collection,
             trainable=trainable,
+            probe=probe,
             iteration_seconds=time.perf_counter() - began,
             gate_seconds=gate_seconds,
             wall=time.perf_counter() - run_started,
         )
         self.rows.append(row)
-        fired = self.alarms.evaluate(row, on_halt=self._halt_bundle, on_dump=self._dump_bundle)
-        self.alarm_rows.extend(fired)
+        # Written before the alarms read it. A halt raises out of that read after checkpointing
+        # the learner this row describes, and the row has to be in the metric file by then: the
+        # file, not this process's memory, is what a checkpoint answers to.
         self.sinks.write(row)
         self.sinks.write_episodes(episodes)
+        self._learner_ahead_of_rows = False
+        fired = self.alarms.evaluate(row, on_halt=self._halt_bundle, on_dump=self._dump_bundle)
+        self.alarm_rows.extend(fired)
         if fired:
             self.sinks.write_alarms(fired)
         self._maybe_heatmap()
@@ -1691,11 +1723,16 @@ class LearningCoordinator:
         episodes: Sequence[EpisodeRecord],
         collection: Mapping[str, Any],
         trainable: np.ndarray,
+        probe: Mapping[str, MetricValue],
         iteration_seconds: float,
         gate_seconds: float,
         wall: float,
     ) -> dict[str, MetricValue]:
-        """One iteration as one flat row, merged from all three sources."""
+        """One iteration as one flat row, merged from all three sources.
+
+        ``probe`` is the policy probe's measurement, taken before the update because its
+        legality check is one of the invariants that decide whether the update runs at all.
+        """
         buffer = self.buffer
         geo = self.geometry
         stats = self.inference.drain_stats()
@@ -1787,9 +1824,6 @@ class LearningCoordinator:
         metrics.policy = {
             key: value for key, value in aggregate.fields.items() if key.startswith("policy/")
         }
-        probe = self.probe.measure(
-            buffer, self.inference.gather, buffer.action[: buffer.cycles], trainable
-        )
         for key, value in probe.items():
             (metrics.env if key.startswith("env/") else metrics.policy)[key] = value
         metrics.env.setdefault("env/illegal_action_rate", 0.0)
@@ -1892,6 +1926,7 @@ class LearningCoordinator:
         self.rng.iteration = self.iteration
         self.rng.shard_streams = self.rollout_component.shard_streams()
         path = self.store.write(self.components, self.manifest())
+        self._saved_at = (self.cumulative_env_steps, path)
         self.store.prune(keep=self.config.checkpoint.keep)
         self._last_checkpoint_step = self.cumulative_env_steps
         self._last_checkpoint_seconds = time.perf_counter() - started
@@ -1899,7 +1934,8 @@ class LearningCoordinator:
         return path
 
     def _load(self, path: Path) -> None:
-        """Resume from a checkpoint: refuse an identity that moved, then restore everything."""
+        """Resume from a checkpoint: refuse an identity that moved, or a learner the run's own
+        record does not contain, then restore everything."""
         assert self.identity is not None
         manifest = msgspec.json.decode(
             (Path(path) / "manifest.json").read_bytes(), type=Manifest
@@ -1911,6 +1947,9 @@ class LearningCoordinator:
             allow_drift=self.allow_identity_drift,
         )
         del drift
+        # The record is the one beside the checkpoint (``<run>/checkpoints/<step>``), not this
+        # coordinator's: a resume under a drifted identity writes to a new run directory.
+        check_described(manifest, Path(path).parent.parent / METRICS_NAME)
         from .identity import identity_differences
 
         differences = identity_differences(manifest.identity, self.identity)
@@ -1929,6 +1968,7 @@ class LearningCoordinator:
         self.cumulative_timesteps = manifest.cumulative_timesteps
         self.wall_seconds = manifest.wall_seconds
         self._last_checkpoint_step = manifest.cumulative_env_steps
+        self._saved_at = (manifest.cumulative_env_steps, Path(path))
         self._last_candidate_step = manifest.cumulative_env_steps
         self._last_floor_step = manifest.cumulative_env_steps
         self.ratings = self.rater.table
@@ -2019,12 +2059,55 @@ class LearningCoordinator:
         ]
 
     def _emergency(self, exc: BaseException) -> None:
-        """The last thing a crashing run does: save, then say where."""
+        """The last thing a crashing run does: save the learner its last row describes, or say
+        why there is nothing honest to save.
+
+        A checkpoint answers to the metric file: its weights, moments and counters are ones a
+        row reports. From the update's first change until the row reporting it is written that
+        stops being true -- partly trained if the update itself raised, trained and unreported
+        if something after it did -- and a save would put weights no row describes under the
+        previous row's counters. So inside that window nothing is written and the checkpoint to
+        resume from is named instead. What the update had done since is lost, which is the
+        trade the checkpoint cadence already sets.
+
+        Anywhere else the learner is exactly the last row's, but collection has moved each
+        battle's ordinal past the episodes that finished in it, and the save carries those.
+        That is consistent for resume by the mechanism every checkpoint already relies on
+        (``_RolloutComponent``): the ordinals say which battles are played next, so a resumed
+        run plays new ones, none twice, and the refused iteration's episodes are skipped rather
+        than trained on. The one other thing that moves while collecting is a restarted
+        worker's generation, which the save carries the same way; this package draws from no
+        global random stream, so no other stream has moved. When a checkpoint of this same
+        learner is already on disk -- the periodic one, a halt's, the one the run resumed from --
+        it is kept: it was written at the iteration boundary, so it can still replay the
+        iteration that failed, and a copy whose battles have skipped ahead would add nothing and
+        lose that.
+        """
         self.printer(f"stopping after {type(exc).__name__}: {exc}")
+        refusal = self._emergency_refusal()
+        if refusal:
+            self.printer(f"no emergency checkpoint: {refusal}")
+            return
         try:
             self._checkpoint()
         except Exception as inner:  # pragma: no cover - the save is best effort
             self.printer(f"the emergency checkpoint failed: {inner}")
+
+    def _emergency_refusal(self) -> str:
+        """Why an emergency save now would misstate the run or only repeat it; empty if neither."""
+        if self._learner_ahead_of_rows:
+            resume = (
+                f"the checkpoint at {self._saved_at[1]}"
+                if self._saved_at is not None
+                else "nowhere: this run has written no checkpoint yet"
+            )
+            return (
+                "the update had started changing the learner and no metrics row describes it "
+                f"yet; resume from {resume}"
+            )
+        if self._saved_at is not None and self._saved_at[0] == self.cumulative_env_steps:
+            return f"the checkpoint at {self._saved_at[1]} already holds this learner"
+        return ""
 
     def _maybe_heatmap(self) -> None:
         every = self.config.metrics.image_every
