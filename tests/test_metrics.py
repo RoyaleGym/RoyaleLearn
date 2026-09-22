@@ -305,6 +305,53 @@ def test_the_reward_shares_survive_a_zero_sum_reward(tmp_path) -> None:
     assert fields["env/reward_terms_abs/tower_damage"] == pytest.approx(0.25)
 
 
+def test_the_objective_is_found_when_a_reward_names_its_terms_after_their_classes() -> None:
+    """A composition assembled from RoyaleGym names every term after its class.
+
+    The shipped configs did exactly that until 23d971c, and a bot creator's own composition may.
+    The objective then arrives as ``WinLossReward`` rather than under the declared name, and until
+    2026-09-22 it was counted as shaping: a real run read shaping 1.475 against terminal 0.0, and
+    the difference was exactly the 1.0 the objective contributed. ``shaping_dominates`` then holds
+    on every row of every run.
+    """
+    terms = {"WinLossReward": 1.0, "TowerHPReward": 0.1, "ElixirTradeReward": -0.02}
+    blue = replace(_record(0, 0, WON), reward_terms=terms)
+    red = replace(_record(0, 1, LOST), reward_terms={k: -v for k, v in terms.items()})
+    fields = episode_fields([blue, red]).fields
+    assert fields["env/reward_terminal_abs"] == pytest.approx(1.0)
+    assert fields["env/reward_shaping_abs"] == pytest.approx(0.12)
+
+
+def test_an_unrecognised_objective_is_absent_rather_than_zero() -> None:
+    """A reward whose objective this module cannot name leaves the share out of the row.
+
+    Zero would be a claim -- that the objective contributed nothing -- and ``shaping_dominates``
+    compares the two, so a fabricated zero makes it hold forever. Absent is the honest answer, and
+    the alarm's missing-key rule then keeps it silent until somebody teaches the module the name.
+    """
+    terms = {"SomeonesOwnObjective": 1.0, "TheirShaping": 0.3}
+    blue = replace(_record(0, 0, WON), reward_terms=terms)
+    red = replace(_record(0, 1, LOST), reward_terms={k: -v for k, v in terms.items()})
+    fields = episode_fields([blue, red]).fields
+    assert "env/reward_terminal_abs" not in fields
+    assert fields["env/reward_shaping_abs"] == pytest.approx(1.3)
+
+
+def test_cards_per_match_is_a_count_and_its_companion_is_a_rate() -> None:
+    """The count rises with episode length; the rate is what two iterations compare on.
+
+    Measured on a real run: iteration 1 finished 28 episodes averaging 171 steps and scored 6.98
+    cards a match, iteration 2 finished 82 averaging 328 steps and scored 22.08. Read as a policy
+    improving, it was the episodes getting longer. Per decision the same two rows are 4.1 and 6.7
+    per hundred.
+    """
+    short = replace(_record(0, 0, WON, steps=100), cards_played=5)
+    long_one = replace(_record(1, 0, WON, steps=400), cards_played=20)
+    fields = episode_fields([short, long_one]).fields
+    assert fields["policy/cards_per_match"] == pytest.approx(12.5)
+    assert fields["policy/cards_per_100_decisions"] == pytest.approx(100 * 25 / 500)
+
+
 def test_a_truncated_episode_is_a_draw_and_reds_view_is_blues_negated() -> None:
     """Both are the default case rather than an edge one.
 

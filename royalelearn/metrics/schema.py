@@ -247,6 +247,12 @@ METRICS: dict[str, MetricSpec] = {
         low=10.0,
         high=30.0,
     ),
+    "policy/cards_per_100_decisions": _m(
+        "cards",
+        "Cards played per 100 decisions, over every seat-episode that finished. The companion "
+        "to cards_per_match, which is a count and therefore rises with episode length: early "
+        "iterations finish only the episodes that end early. Compare two iterations on this.",
+    ),
     "policy/noop_rate": _m(
         "fraction", "Share of decisions that were the no-op.", low=0.85, high=0.97
     ),

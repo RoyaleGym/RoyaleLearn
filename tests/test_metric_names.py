@@ -77,6 +77,7 @@ PUBLISHED_KEYS = (
     'ladder/score_vs_random_legal',
     'ladder/transitivity_residual',
     'policy/card_tile_top10_share',
+    'policy/cards_per_100_decisions',
     'policy/cards_per_match',
     'policy/forced_noop_frac',
     'policy/legal_actions_mean',

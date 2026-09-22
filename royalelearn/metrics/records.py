@@ -45,6 +45,12 @@ __all__ = [
 #: shaping, which is what the ``shaping_dominates`` alarm compares against it.
 TERMINAL_REWARD_TERM = "terminal"
 
+#: The other names an objective arrives under. A composition names its own terminal term, but a
+#: reward assembled from RoyaleGym's ``CombinedReward`` names every term after its class, and a
+#: config is free to use one: the shipped configs did until 23d971c. Matching on a class name is
+#: fragile, which is why it is a fallback and why the list is here rather than inside the loop.
+TERMINAL_REWARD_CLASSES = ("WinLossReward",)
+
 
 def flatten(values: Mapping[str, Any], prefix: str = "") -> dict[str, MetricValue]:
     """A nested mapping as ``group/name`` keys.
@@ -99,6 +105,21 @@ def _blue_outcome(record: EpisodeRecord) -> int:
     one record per battle enough to score it.
     """
     return record.outcome if record.seat == 0 else -record.outcome
+
+
+def _terminal_name(terms: Mapping[str, Any], declared: str) -> str | None:
+    """Which of these term names is the objective, or None when none of them is.
+
+    The declared name first, because a composition that names its own terminal term is saying so
+    on purpose. Then the classes a reward assembled elsewhere files its objective under. A reward
+    that carries neither leaves the objective unidentified, which is a different answer from zero.
+    """
+    if declared in terms:
+        return declared
+    for name in TERMINAL_REWARD_CLASSES:
+        if name in terms:
+            return name
+    return None
 
 
 def episode_fields(
@@ -166,6 +187,20 @@ def episode_fields(
     fields["policy/cards_per_match"] = float(
         np.mean([record.cards_played for record in records])
     )
+    # The same count over the decisions it had to spend, because the count alone is a length
+    # measurement wearing a policy's name. Iteration 1 can only finish the episodes that end
+    # early, so its mean episode ran 171 steps and scored 6.98 cards; iteration 2 reached 328
+    # steps and 22.08, and the integration log read the jump as the policy learning to play.
+    # It was the episode length, and a near-uniform policy scores about 22 as soon as episodes
+    # run their length. Per decision the two iterations are 0.041 and 0.068, which is a real
+    # move and a much smaller one. Both are published: the count is what a reader of a battle
+    # recognises, and the rate is what two iterations can be compared on.
+    decisions = float(sum(record.episode_steps for record in records))
+    fields["policy/cards_per_100_decisions"] = (
+        100.0 * float(sum(record.cards_played for record in records)) / decisions
+        if decisions
+        else 0.0
+    )
 
     # Two numbers per term, because one of them is zero by construction. Every shipped reward is
     # zero sum, and both seats of a battle are in this batch, so a term's signed mean is zero
@@ -179,18 +214,26 @@ def episode_fields(
     for record in records:
         for name, value in record.reward_terms.items():
             terms.setdefault(name, []).append(float(value))
+    # Which term is the objective, before anything is added up. If none of the names is one this
+    # module recognises, the objective is NOT zero: it is unknown, and the two shares are
+    # published without it, so shaping_dominates stays silent under the missing-key rule instead
+    # of comparing the shaping against a zero it invented. That is what it did until 2026-09-22:
+    # the name never matched, the objective was added into the shaping, and the comparison was
+    # 1.379 > 0.0 on every row of every run.
+    objective = _terminal_name(terms, terminal_term)
     shaping = 0.0
     terminal = 0.0
     for name, values in sorted(terms.items()):
         fields[f"env/reward_terms/{name}"] = float(np.mean(values))
         magnitude = float(np.mean(np.abs(values)))
         fields[f"env/reward_terms_abs/{name}"] = magnitude
-        if name == terminal_term:
+        if name == objective:
             terminal += magnitude
         else:
             shaping += magnitude
     fields["env/reward_shaping_abs"] = shaping
-    fields["env/reward_terminal_abs"] = terminal
+    if objective is not None:
+        fields["env/reward_terminal_abs"] = terminal
     return EpisodeAggregate(battles=len(battles), seats=len(records), fields=fields)
 
 
