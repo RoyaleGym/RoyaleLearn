@@ -241,7 +241,10 @@ class PPOUpdate(Update):
         backoff: LrBackoff | None = None,
         device: torch.device | str | None = None,
         optimizer_factory: Callable[..., Optimizer] | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> None:
+        #: Said once per epoch while the update runs, because nothing else is said during it.
+        self.progress = progress
         self.model = model
         self.gae = gae
         self.config = config
@@ -358,8 +361,21 @@ class PPOUpdate(Update):
             config.n_epochs,
             self._rng_for_epoch(sched.iteration),
         )
+        started_at = time.perf_counter()
+        said_epoch = -1
         for index, batch in enumerate(batches):
             epoch = index // per_epoch if per_epoch else 0
+            if self.progress is not None and epoch != said_epoch:
+                # The update is the long quiet phase -- on a contended machine it has run for
+                # three quarters of an hour -- and its own timing only reaches the metric
+                # stream once the iteration ends, so a run interrupted inside it can say
+                # nothing about how long it was. One line per epoch is enough to tell a
+                # waiting run from a stopped one and to size the phase from outside.
+                said_epoch = epoch
+                self.progress(
+                    f"updating      epoch {epoch + 1}/{config.n_epochs}, "
+                    f"{n_samples} samples, {time.perf_counter() - started_at:.0f}s in"
+                )
             for optimizer in self.optimizers:
                 optimizer.zero_grad(set_to_none=True)
             for position, minibatch in enumerate(batch):

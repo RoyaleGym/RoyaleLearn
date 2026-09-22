@@ -912,6 +912,7 @@ class LearningCoordinator:
             master_seed=config.master_seed,
             backoff=self.schedules.backoff,
             device=self.device,
+            progress=self.printer,
         )
         self._build_ladder()
         self.inference = BatchedInference(
