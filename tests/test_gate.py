@@ -385,3 +385,34 @@ def _anchor_games(a: str, b: str, *, wins: int, losses: int):
     return [game(1.0, index) for index in range(wins)] + [
         game(0.0, wins + index) for index in range(losses)
     ]
+
+
+def test_a_candidate_that_is_already_the_champion_is_not_played_against_itself(tmp_path) -> None:
+    """The snapshot store is content-addressed, so a policy that has not moved keeps its id.
+
+    When it does, the champion and the candidate are one snapshot and there is nothing to
+    decide. Asking anyway sends a battle of a snapshot against itself to the result log, which
+    refuses it several frames further down -- a correct guard reporting a caller's mistake, and
+    the first thing a stranger running `verify-resume` on the shipped smoke config met.
+    """
+
+    real = _runner(QuotaPlayer(_rates(0.6)), tmp_path)
+
+    class Runner:
+        """A runner that fails if the gate asks it to play anything."""
+
+        seeds = real.seeds
+
+        def compare(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("the gate evaluated a snapshot against itself")
+
+        def against_scripted(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("the gate evaluated a snapshot against itself")
+
+    pool = _pool(tmp_path)
+    pool.promote(CHAMPION)
+    decision = _gate(tmp_path).evaluate(CHAMPION, pool, Runner())
+
+    assert decision.candidate == decision.champion == CHAMPION
+    assert decision.admit and decision.promote and not decision.cycle
+    assert decision.conditions == {}, "there is nothing to decide, so nothing is recorded"

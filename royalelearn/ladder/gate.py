@@ -120,6 +120,25 @@ class WilsonGate(PromotionGate):
                 )
             )
 
+        if candidate == champion:
+            # The snapshot store is content-addressed, so a policy that has not moved since the
+            # last candidate produces the same id -- and then the champion and the candidate are
+            # one snapshot. There is nothing to decide: it is already in the pool and already
+            # the champion. Asking anyway sends a battle of a snapshot against itself to the
+            # result log, which refuses it, correctly, several frames further down.
+            return self._record(
+                GateDecision(
+                    candidate=candidate,
+                    champion=champion,
+                    admit=True,
+                    promote=True,
+                    cycle=False,
+                    conditions={},
+                    eval_seed_set_sha=runner.seeds.sha(),
+                    wall_seconds=time.perf_counter() - started,
+                )
+            )
+
         conditions: dict[str, ConditionResult] = {}
         conditions[CONDITION_CHAMPION] = self._beats_champion(candidate, champion, runner)
         for anchor in self.anchors:
