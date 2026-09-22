@@ -114,7 +114,13 @@ def test_an_iteration_produces_a_row_the_schema_knows_in_full(run: Any) -> None:
     run.iterate()
     row = run.rows[-1]
     assert unknown_keys(row) == ()
-    assert set(schema.METRICS) <= set(row)
+    # Every key the schema declares, except the ones it declares conditional and says why.
+    # A key may be absent only by being on that list: absence is how this harness reports
+    # "nothing to say", and an undeclared absence would be a silently dropped measurement.
+    assert set(schema.METRICS) - set(schema.CONDITIONAL) <= set(row)
+    assert set(schema.CONDITIONAL) <= set(schema.METRICS), (
+        "a key is declared conditional that the schema does not declare at all"
+    )
     for key, value in row.items():
         if isinstance(value, bool | str):
             continue

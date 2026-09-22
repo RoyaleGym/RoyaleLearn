@@ -1712,9 +1712,23 @@ class LearningCoordinator:
         for key, value in probe.items():
             (metrics.env if key.startswith("env/") else metrics.policy)[key] = value
         metrics.env.setdefault("env/illegal_action_rate", 0.0)
-        for key, default in _ENV_DEFAULTS.items():
-            metrics.env.setdefault(key, default)
-        metrics.policy.setdefault("policy/cards_per_match", 0.0)
+        # The per-episode group is filled ONLY when an episode finished. ``alarms.py`` states
+        # the rule these two lines used to break: a missing key is never a firing, because a row
+        # from an iteration in which no episode finished carries no ``env/`` group at all and an
+        # alarm reading that absence as a zero would halt a healthy run. Filling the group with
+        # defaults, and ``cards_per_match`` with 0.0, handed the alarms exactly the zeros the
+        # rule exists to keep away from them.
+        #
+        # It had already happened. 74 of the 124 metric rows on disk completed zero episodes and
+        # every one of them carries cards_per_match = 0.0; on one run ``noop_collapse`` fired at
+        # iterations 7, 9 and 10 reporting a policy that played no cards in iterations where no
+        # episode ended, and ``noop_collapse_severe`` -- a HALT with patience 5 -- held at
+        # iterations 1 to 4 and broke at 5 only because the value happened to read exactly 3.0
+        # against a strict ``< 3.0``. One iteration from halting a healthy run on a sentinel.
+        if metrics.env.get("env/episodes_completed"):
+            for key, default in _ENV_DEFAULTS.items():
+                metrics.env.setdefault(key, default)
+            metrics.policy.setdefault("policy/cards_per_match", 0.0)
 
         metrics.ladder = dict(
             ladder_fields(

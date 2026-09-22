@@ -519,6 +519,22 @@ RENAMED: dict[str, str] = {
 }
 
 
+#: Keys a healthy row may legitimately omit, with the condition that governs each.
+#:
+#: Absence is already how this harness says "there is nothing to report": ``episode_fields([])``
+#: returns ``env/episodes_completed`` and nothing else, and ``alarms.py`` guarantees that a
+#: missing key never fires. What was missing was a way to say WHICH keys that applies to, so the
+#: distinction lived in whichever function happened to fill a default. Declaring it here makes
+#: the row contract checkable: every other key must be present in every row.
+CONDITIONAL: dict[str, str] = {
+    # Written only when the pair was actually played. The learner is never evaluated under its
+    # own id -- every eval game is a snapshot against something -- so publishing the absent
+    # pair's 0.5 made "never played" indistinguishable from "even contest".
+    "ladder/score_vs_noop": "the learner-vs-anchor pair has games",
+    "ladder/score_vs_random_legal": "the learner-vs-anchor pair has games",
+}
+
+
 def current_name(key: str) -> str:
     """What a key from an older run is called now, or the key itself if it has not moved."""
     return RENAMED.get(key, key)
