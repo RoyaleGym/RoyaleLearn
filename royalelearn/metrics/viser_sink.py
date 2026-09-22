@@ -71,6 +71,11 @@ VISER_ATTACH_TIMEOUT_S = 3.0
 VISER_MAX_DATAGRAM = 65507
 #: Copies of one status per viewer, a heartbeat apart, because nothing is acknowledged.
 VISER_REPEATS = 3
+
+#: How often a learner that could not take the learning port tries again. Another run holding
+#: it is the ordinary cause, and that run ends; a panel that stays dark for the rest of a
+#: fourteen-hour run because of a collision in its first second is not a trade worth making.
+VISER_REBIND_S = 10.0
 #: The one-key envelope. Its first bytes are msgpack for a one-key map named ``learning``,
 #: which is what lets the viewer tell a status from a frame with one comparison and no decode.
 LEARNING_TAG = "learning"
@@ -138,7 +143,7 @@ FIELD_SOURCES: dict[str, str] = {
 #: The panel fits about three rows under the fixed ones, so these are the three worth having:
 #: the fitted rating with its interval, the no-op collapse metric, and how the last gate went.
 EXTRA_SOURCES: tuple[tuple[str, str], ...] = (
-    ("cards_per_match", "policy/cards_per_match"),
+    ("cards / match", "policy/cards_per_match"),
     ("gate", "ladder/gate_failed_condition"),
 )
 
@@ -185,6 +190,7 @@ class ViserSink(MetricsSink):
         self.sent = 0
         self.dropped = 0
         self.unavailable: str | None = None
+        self._retry_at = 0.0
         self.run = ""
         self._status: dict[str, Any] | None = None
         self._lock = threading.RLock()
@@ -206,6 +212,7 @@ class ViserSink(MetricsSink):
 
     def write(self, row: MetricRow) -> None:
         status = self.status_of(row)
+        self._bind()
         with self._lock:
             self._status = status
             self._sent_to, self._repeats = None, VISER_REPEATS
@@ -308,25 +315,40 @@ class ViserSink(MetricsSink):
     # -- the socket ---------------------------------------------------------
 
     def _bind(self) -> None:
-        """Bind the learning port, or give up on the panel and say so once.
+        """Bind the learning port, and keep trying if something else holds it.
 
         A panel nobody can see is a nuisance; a training run that will not start because
-        something else holds a UDP port is not a trade worth making.
+        something else holds a UDP port is not a trade worth making. Neither is giving up
+        for good: the usual holder is another training run, and that run ends. Until it
+        does, the viewer draws a live battle under a panel that reads as no learner
+        attached, which is indistinguishable from a learner that is not there -- so this
+        retries rather than leaving a run dark for its whole length over a collision in
+        its first second.
         """
         with self._lock:
-            if self._socket is not None or self.unavailable:
+            if self._socket is not None:
+                return
+            now = time.monotonic()
+            if self.unavailable is not None and now < self._retry_at:
                 return
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 sock.bind((self.host, self.port))
             except OSError as exc:
                 sock.close()
-                self.unavailable = str(exc)
-                print(
-                    f"the learning status port {self.host}:{self.port} is not available "
-                    f"({exc}); this run publishes no learning panel"
-                )
+                first, self.unavailable = self.unavailable is None, str(exc)
+                self._retry_at = now + VISER_REBIND_S
+                if first:
+                    print(
+                        f"the learning status port {self.host}:{self.port} is not available "
+                        f"({exc}); this run publishes no learning panel until it frees, which "
+                        f"it retries every {VISER_REBIND_S:.0f}s. Another training run is the "
+                        f"usual holder."
+                    )
                 return
+            if self.unavailable is not None:
+                self.unavailable = None
+                print(f"the learning status port {self.host}:{self.port} is free; panel live")
             sock.setblocking(False)
             self._socket = sock
             if self._want_thread and self._thread is None:

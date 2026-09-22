@@ -47,7 +47,7 @@ def test_every_field_the_sink_fills_is_a_field_the_viewer_draws() -> None:
 
 def test_the_extras_map_exists_on_both_sides() -> None:
     assert "extra" in model.Learning.__dataclass_fields__
-    assert {name for name, _key in viser_sink.EXTRA_SOURCES} == {"cards_per_match", "gate"}
+    assert {name for name, _key in viser_sink.EXTRA_SOURCES} == {"cards / match", "gate"}
 
 
 # -- the envelope and the transport ------------------------------------------
@@ -106,7 +106,7 @@ def test_a_status_this_package_encodes_decodes_as_the_viewers_own_type() -> None
     assert learning.pool_size == 7
     assert learning.games_vs_pool == 2200
     assert learning.extra["rating"] == "1183 ± 22"
-    assert learning.extra["cards_per_match"] == 21.5
+    assert learning.extra["cards / match"] == 21.5
     assert learning.extra["gate"] == "beats_champion"
     for field in _learning_fields():
         assert getattr(learning, field) is not None, f"{field} arrived empty"

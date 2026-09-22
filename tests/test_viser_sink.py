@@ -7,6 +7,7 @@ watching -- so that a change on either side fails here rather than in somebody's
 
 from __future__ import annotations
 
+import contextlib
 import socket
 
 import msgspec
@@ -126,7 +127,7 @@ def test_the_extras_are_the_three_worth_the_space(sink, viewer) -> None:
     extra = _receive(viewer)["extra"]
     assert len(extra) <= 3
     assert extra["rating"] == "1183 ± 22"
-    assert extra["cards_per_match"] == 21.5
+    assert extra["cards / match"] == 21.5
     assert extra["gate"] == "pool_collapse"
     assert set(extra) == {"rating", *(name for name, _key in EXTRA_SOURCES)}
 
@@ -225,3 +226,34 @@ def test_the_sink_does_not_import_the_viewer() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "False"
+
+
+def test_a_taken_port_is_retried_rather_than_given_up_on() -> None:
+    """The usual holder of the learning port is another training run, and that run ends.
+
+    A sink that gave up for good would leave a fourteen-hour run with a dark panel because
+    of a collision in its first second, and the viewer cannot tell that from no learner.
+    """
+    import socket as _socket
+
+    held = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    held.bind(("127.0.0.1", 0))
+    host, port = held.getsockname()[:2]
+    sink = ViserSink(host=host, port=port, pump_thread=False)
+    try:
+        sink._bind()
+        assert sink.unavailable is not None, "the port was free after all"
+        assert sink._retry_at > 0.0
+
+        sink._bind()  # too soon: the clock holds it off without touching the socket
+        assert sink._socket is None
+
+        held.close()
+        sink._retry_at = 0.0
+        sink._bind()
+        assert sink._socket is not None, "the port was free and the sink stayed dark"
+        assert sink.unavailable is None
+    finally:
+        sink.close()
+        with contextlib.suppress(OSError):
+            held.close()
