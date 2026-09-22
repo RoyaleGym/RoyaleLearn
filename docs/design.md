@@ -99,8 +99,20 @@ failures this design has actually had were both a region read in its unwritten s
 observation cell nobody had filled, and a control word still idle -- so these two deserve the
 same treatment as `valid`: a guard rather than an argument.
 
-**Four behaviours that work but are not pinned by a test.** A resume that reproduces the
-original's metric rows byte for byte, the ratio invariant under a deliberately corrupted mask,
-an episode replayed from its shard seed against `royalegym.replay.verify_trace`, and the smoke
-configuration as a test rather than as a command somebody runs. All four have been driven by
-hand and all four passed, which is not the same thing.
+**Three workers spin through the update.** Sampled during an iteration's update phase, each
+of three rollout workers burned 92% of a core waiting with nothing to do, against the one core
+the update itself was using -- for the phase that is 97.7% of an iteration. `_wait_command`'s
+own docstring says it sleeps on a semaphore rather than burning a core while the parent works,
+so this is a defect against a stated intent. The likely mechanism is that
+`semaphore.acquire(timeout=...)` returns at once on a count left over from a release nobody
+consumed, which turns the sleep into a no-op and the wait into a pure spin; the cheapest
+confirmation is to log how long the acquire actually blocks for. It is left unfixed rather than
+guessed at, because a wrong change to a wait loop is how a run hangs instead of how it slows
+down.
+
+**Three behaviours that work but are not pinned by a test.** The ratio invariant under a deliberately
+corrupted mask, an episode replayed from its shard seed against
+`royalegym.replay.verify_trace`, and the smoke configuration as a test rather than as a command
+somebody runs. All three have been driven by hand and all three passed, which is not the same
+thing. The fourth, a resume, now has `tests/test_resume.py` -- and writing it is what found the
+unread ordinal and the environment gap above.
