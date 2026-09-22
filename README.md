@@ -122,7 +122,7 @@ GitHub organization [RoyaleGym](https://github.com/RoyaleGym).
 | Repo | What it does | Package |
 |---|---|---|
 | [RoyaleSim](https://github.com/RoyaleGym/RoyaleSim) | deterministic integer-tick battle engine (Rust + PyO3): pathfinding, targeting, combat, spells, elixir, win conditions | `royalesim` |
-| [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) | environment API over the engine: observations, actions and masks, rewards, state setters, terminals; Gymnasium, PettingZoo and self-play vec envs | `royalegym` |
+| [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) | environment API over the engine: observations, actions and masks, rewards, state mutators, done conditions; Gymnasium, PettingZoo and self-play vec envs | `royalegym` |
 | **RoyaleLearn** | this repo: the training harness | `royalelearn` |
 | [RoyaleViser](https://github.com/RoyaleGym/RoyaleViser) | out-of-process viewer for traces, captures and a running env | `royaleviser` |
 | RoyaleLive (private) | the client instrument that records ground-truth traces from the real game | scripts |
