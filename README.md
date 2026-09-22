@@ -20,10 +20,21 @@ command trains:
 python -m royalelearn train --config examples\configs\smoke.json
 ```
 
-Two things to know before you try it. It needs torch, which is not in the plain install: use
-`pip install -e "RoyaleLearn[torch]"`. And the only run anyone has done so far was three
-iterations long, a smoke test to prove the loop closes, so nobody yet knows what a real run
-costs or how long one takes. The first person to do one will find out.
+Two things to know before you try it.
+
+It needs torch, which is an extra rather than part of the plain install:
+`pip install -e "RoyaleLearn[torch]"`. Skip it and `train`, `doctor` and `bench` all stop with
+`ModuleNotFoundError: No module named 'torch'`. Everything else works without torch on purpose,
+and the suite checks that it does.
+
+And read `smoke.json` for what it is. It runs on `MockEngine`, the pure-Python stand-in engine,
+with a limit of 96 timesteps. It proves the loop closes and it is not a training run. The run
+above finished at iteration 3 and left a checkpoint carrying the network, the advantage scaler
+and the ladder's pool. `laptop.json` and `workstation.json` are the real thing, on the Rust
+engine with a limit of 100,000,000 timesteps, and **nobody has run one of those to the end**.
+So there is no honest figure yet for how long a useful run takes or whether the bot comes out
+any good. The harness logs `run/cumulative_timesteps` beside the rating, so the first real run
+measures it.
 
 Everything else is here and tested, and runs today. The configuration tree, the run identity,
 the networks, the observation codec, the rollout workers, the ladder, the metrics sinks and the
