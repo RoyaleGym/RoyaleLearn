@@ -55,6 +55,8 @@ from royalegym.protocol import (
 )
 from royalegym.reward import CombinedReward, RewardFunction, WinLossReward
 
+from .metrics.records import TERMINAL_REWARD_TERM
+
 __all__ = [
     "CROWNS",
     "CommittedElixirPotential",
@@ -191,10 +193,49 @@ class PotentialCombinedReward(CombinedReward):
     The worker calls ``set_gamma`` on whatever reward function its environment holds, once per
     iteration, so the composition has to be the thing that forwards it. A term that does not
     take a discount -- the terminal one -- is left alone.
+
+    It also says WHICH of its terms is the objective. ``CombinedReward`` files each term in the
+    logged breakdown under its class name, and the metrics group has to tell the objective from
+    the shaping to publish either one: ``shaping_dominates`` is the alarm that watches for the
+    shaping taking the objective over, and it compares those two sums. Matching on a class name
+    would put a rename of a class into the arithmetic of an alarm, so the composition names the
+    objective instead, and the breakdown carries it under ``TERMINAL_REWARD_TERM``.
     """
+
+    def __init__(
+        self,
+        terms: Sequence[tuple[RewardFunction, float]],
+        *,
+        terminal: int = 0,
+    ) -> None:
+        super().__init__(terms)
+        if terms and not 0 <= terminal < len(terms):
+            raise ValueError(
+                f"terminal is term {terminal} of a composition with {len(terms)} terms"
+            )
+        self.terminal = int(terminal)
+
+    @property
+    def terminal_class(self) -> str | None:
+        """The class name the objective's term would otherwise be filed under."""
+        return type(self.terms[self.terminal][0]).__name__ if self.terms else None
 
     def set_gamma(self, gamma: float) -> None:
         set_gamma(self, gamma)
+
+    def get_reward(
+        self,
+        team: int,
+        prev: BattleState,
+        state: BattleState,
+        results: Sequence[DeployResult],
+    ) -> float:
+        total = super().get_reward(team, prev, state, results)
+        breakdown = self.last_terms.get(team)
+        name = self.terminal_class
+        if breakdown is not None and name is not None and name in breakdown:
+            breakdown[TERMINAL_REWARD_TERM] = breakdown.pop(name)
+        return total
 
 
 def set_gamma(reward: RewardFunction, gamma: float) -> None:

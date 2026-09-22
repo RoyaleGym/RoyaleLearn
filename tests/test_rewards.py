@@ -565,14 +565,6 @@ def test_every_shipped_config_trains_against_the_potential_reward(build: Any) ->
     assert config.env.reward_fn.kwargs == {}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "metrics/records.py looks for a term named 'terminal', and CombinedReward files every "
-        "term under its class name, so the objective arrives as 'WinLossReward' and is counted "
-        "as shaping"
-    ),
-)
 def test_the_terminal_term_is_filed_where_the_shaping_alarm_looks_for_it(engine: Any) -> None:
     """The ``shaping_dominates`` alarm compares the shaping terms with the terminal one, and it
     finds the terminal one by name. That name has to be one the shipped reward emits.
