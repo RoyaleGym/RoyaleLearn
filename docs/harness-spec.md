@@ -204,6 +204,24 @@ RoyaleGym's planned Rust-backed default observation and mask would take the roll
 298 µs/transition to about 110 µs **[A]**, i.e. 9 000 timesteps/s. It is not a prerequisite: it is
 what later lets `K` drop to one or two and frees cores.
 
+**What the shipped schedules assume about the clock, measured rather than budgeted.** The table
+above is the design's estimate; the machine gives about 295 timesteps/s at minibatch 256 and about
+304 env steps/s **[M]**, so an iteration of 32 832 timesteps takes close to two minutes rather than
+41 seconds. Every schedule in `laptop.json` is written in env steps, and at that rate they are:
+
+| schedule | over | at 304 env steps/s |
+|---|---|---|
+| `ppo.ent_coef` 0.01 to 0.003 | 30 M env steps | about 27 hours |
+| `ppo.ent_coef_noop` 0.02 to 0 | 10 M env steps | about 9 hours |
+| `advantage.gamma` 0.997 to 0.999 | 20 M env steps | about 18 hours |
+| `ladder.candidate_every_env_steps` | 4 M env steps | about 3.7 hours to the first gate |
+
+So the profile named for this laptop assumes a run of a day or more, and a run stopped after a few
+hours has not seen its own entropy schedule. That is a statement about the schedules and not about
+the hardware: anyone judging a short run should read where on these curves it stopped, and anyone
+shortening a run should shorten the schedules with it rather than leave them and read the result as
+a policy that would not settle.
+
 ### 2.4 The RAM ledger, printed by `royalelearn doctor`
 
 ```
@@ -2781,7 +2799,7 @@ being hunted, and a false halt costs everything the run was for.
 | `kl_dead` | `ppo/kl < 1e-5` | 10 | warn | nothing is moving: dead entropy, learning rate too low, or a frozen head |
 | `ev_negative` | `ppo/explained_variance < 0` | 50 | warn | the most likely cause of a plateau |
 | `noop_collapse` | `policy/cards_per_match < 8` | 5 | warn | about 22 is healthy |
-| `noop_collapse_severe` | `policy/cards_per_match < 3` | 5 | **halt** | |
+| `noop_collapse_severe` | `policy/cards_per_match < 3` | 5 | **halt** | until bbf83f3 this threshold could not be reached, and not because of its value. See below |
 | `noop_entropy_floor` | `ppo/noop_entropy < 0.02` | 5 | warn | the leading indicator; it watches after `ent_coef_noop` has annealed to zero, which is when it matters most |
 | `tile_spam` | `policy/tile_top1_share > 0.25` | 5 | warn | |
 | `artefact_exploit` | `policy/card_tile_top10_share > 0.5` | 5 | warn, and dump five winning traces | a real meta is not that concentrated |
@@ -2824,6 +2842,23 @@ against today's share is a number with an expiry date nobody will notice passing
 What a validated threshold looks like, from the two that behaved: held on the first iteration,
 cleared by the second, with patience long enough to absorb the start. A new alarm can be checked
 against that shape in a minute.
+
+**A threshold can also be unreachable because of the population it is computed over, and no amount
+of tuning it would help.** `policy/cards_per_match` was a mean over every seat that finished,
+including the opponents'. Before the first snapshot is admitted, about one seat in eight is
+`scripted:random_legal`, which plays a card whenever it can afford one and scores about 31 an
+episode **[M]**, so the blended mean could not fall below about 3.9 however completely the learner
+stopped playing. The halt at 3.0 was therefore arithmetically unable to fire for the first gate's
+worth of iterations, about 3.7 hours at laptop geometry, which is most of the period the collapse
+it guards against actually happens in. The repair was to the metric's population and not to its
+threshold: since bbf83f3 these are the learner's own seats. Measured and worked out by the train
+session, 2026-09-22.
+
+That is the second alarm in this table to have been unreachable by construction, after
+`shaping_dominates` compared two structural zeros, and the third if the spill alarm above is
+counted. The shape they share is a threshold on a quantity whose population nobody stated. Section
+13.4's rule, that a metric's row population belongs in its identity, is the systemic answer, and it
+is still not built.
 
 `vram_spilling` is the cautionary one, and it is worth reading before anyone writes another alarm
 about memory. The first version compared the memory this process could still take -- driver free plus
