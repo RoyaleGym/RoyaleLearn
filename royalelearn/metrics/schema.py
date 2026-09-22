@@ -428,15 +428,22 @@ METRICS: dict[str, MetricSpec] = {
         high=0.0,
     ),
     "health/vram_peak_mb": _m("MB", "Peak device memory this iteration."),
-    # The three that separate the memory regimes, plus the retry counter. An update that slows
-    # down across iterations on a fixed configuration -- measured 2026-09-22, +16.7% and +15.7%
-    # on two replications of the same run -- has four candidate explanations and these tell them
-    # apart without an argument: reservation growth squeezing the workspace (reserved grows,
+    # The three that separate the memory regimes, plus the retry counter. An update that appears
+    # to slow down across iterations has four candidate explanations and these tell them apart
+    # without an argument: reservation growth squeezing the workspace (reserved grows,
     # inactive_split flat, driver free shrinks), fragmentation inside a fixed reservation
     # (reserved flat, inactive_split grows), something outside the caching allocator holding
     # memory (all flat but driver free shrinking), or no memory mechanism at all (all three
     # flat). The last is the one worth being able to rule out: without it a plausible story
     # about fragmentation can be refined indefinitely against data that never supported it.
+    #
+    # That is not hypothetical. These four keys were added to explain an apparent 16% slowdown
+    # between the two iterations of a fixed configuration, seen twice an hour apart. Their first
+    # run returned reserved and inactive_split identical to a tenth of a megabyte across both
+    # iterations, with zero retries -- and the same run did not slow down at all. The two
+    # "replications" had been taken under the same machine load, so they agreed with each other
+    # and not with the truth. Four lines of measurement ended a mechanism two people had spent
+    # an hour refining.
     "health/vram_reserved_mb": _m("MB", "Device memory the caching allocator holds."),
     "health/vram_inactive_split_mb": _m(
         "MB", "Non-releasable memory inside the allocator's blocks: fragmentation."
