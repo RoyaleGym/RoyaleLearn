@@ -25,8 +25,10 @@ __all__ = [
     "ALARM_METRICS",
     "METRICS",
     "PATTERNS",
+    "RENAMED",
     "MetricPattern",
     "MetricSpec",
+    "current_name",
     "groups",
     "is_known",
     "lookup",
@@ -498,8 +500,32 @@ ALARM_METRICS: dict[str, tuple[str, ...]] = {
 }
 
 
+#: Keys this schema used to publish, and what they are called now.
+#:
+#: A metric name is written into every row of every run that was made while it was live, and
+#: those rows outlive the name: two iterations of this project's first real training data are
+#: addressed by ``throughput/worker_idle_frac``, which the schema no longer has. Nothing can
+#: rewrite a file that is already on disk, so what is offered instead is the mapping -- one
+#: place that says what an old name became, so a reader plotting several runs together does not
+#: have to know the history to line them up.
+#:
+#: An entry is added in the same commit as the rename. ``tests/test_metric_names.py`` holds
+#: every value here to being a key the schema currently publishes.
+RENAMED: dict[str, str] = {
+    # It measured the parent blocked on workers that had not published, and rose when the
+    # workers could not keep up -- the opposite of what a reader would do about a worker idling.
+    "throughput/worker_idle_frac": "throughput/parent_wait_frac",
+}
+
+
+def current_name(key: str) -> str:
+    """What a key from an older run is called now, or the key itself if it has not moved."""
+    return RENAMED.get(key, key)
+
+
 def lookup(key: str) -> MetricSpec | None:
     """The spec for one key, fixed or patterned, or None if the schema does not know it."""
+    key = current_name(key)
     spec = METRICS.get(key)
     if spec is not None:
         return spec

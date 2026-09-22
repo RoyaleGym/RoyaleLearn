@@ -161,8 +161,10 @@ def test_the_published_metric_keys_are_the_ones_written_down() -> None:
         "the published metric keys changed.\n"
         f"  added:   {added}\n"
         f"  removed: {removed}\n"
-        "If that is intended, update PUBLISHED_KEYS in this file in the same commit. Anything "
-        "reading a run's rows -- a plot, a watcher, the viewer's panel -- reads these names."
+        "If that is intended, update PUBLISHED_KEYS in this file in the same commit, and if it "
+        "is a rename rather than a new key, add it to schema.RENAMED so that rows already on "
+        "disk still resolve. Anything reading a run's rows -- a plot, a watcher, the viewer's "
+        "panel -- reads these names."
     )
 
 
@@ -181,3 +183,24 @@ def test_every_pinned_key_has_a_unit_and_a_description() -> None:
         spec = schema.METRICS[key]
         assert spec.unit, f"{key} has no unit"
         assert spec.description.strip().endswith("."), f"{key}'s description is not a sentence"
+
+
+def test_every_renamed_key_points_at_one_that_exists() -> None:
+    """A rename map that names a key nobody publishes is worse than none at all."""
+    for old, new in schema.RENAMED.items():
+        assert new in schema.METRICS, f"{old} is mapped to {new}, which the schema does not have"
+        assert old not in schema.METRICS, f"{old} is both published and marked as renamed"
+
+
+def test_a_key_from_an_older_run_still_resolves() -> None:
+    """The point of the map: rows written under the old name are still readable.
+
+    A run's file carries whatever the name was when it ran, and nothing rewrites a file that is
+    already on disk. So the schema answers for both, and a reader lining several runs up does
+    not have to know the history.
+    """
+    for old, new in schema.RENAMED.items():
+        assert schema.current_name(old) == new
+        assert schema.is_known(old), f"{old} was published once and no longer resolves"
+        assert schema.lookup(old) is schema.METRICS[new]
+    assert schema.current_name("ppo/kl") == "ppo/kl", "a key that never moved must not move"
