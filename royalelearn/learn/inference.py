@@ -241,13 +241,22 @@ class BatchedInference:
         group = np.asarray(round_.group)
         actions = np.zeros(slots.size, dtype=np.int64)
         log_probs = np.zeros(slots.size, dtype=np.float32)
+        # A row is routed on what its worker REPORTED, never on what the plan intended for it.
+        # `valid` is false where the worker wrote nothing this round -- it died, it timed out,
+        # or it is being restarted -- and the cell it did not write holds whatever the
+        # rectangle held before, which for a fresh iteration is zeros. Reading one of those
+        # would hand the policy an observation with no legal action in it, including the no-op
+        # the environment always sets, and the first thing to notice would be an assertion
+        # inside the distribution rather than the worker that stopped. The action left behind
+        # is the no-op, which is what a seat that could not be asked should do.
+        live = np.asarray(round_.valid, dtype=bool)
         forwards = 0
-        for gid in sorted(int(value) for value in np.unique(group)):
+        for gid in sorted(int(value) for value in np.unique(group[live])):
             if gid in (GROUP_SCRIPTED, GROUP_DEAD):
                 # The worker fills its own scripted seats, and a dead worker's slots have no
                 # observation to read. Neither is a policy the parent holds.
                 continue
-            rows = np.flatnonzero(group == gid)
+            rows = np.flatnonzero((group == gid) & live)
             if rows.size == 0:  # pragma: no cover - np.unique only reports values that occur
                 continue
             forwards += 1

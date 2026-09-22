@@ -358,3 +358,29 @@ class _OneActorStore:
 
     def list(self) -> list[str]:  # pragma: no cover
         return sorted(set(self.asked))
+
+
+def test_a_row_its_worker_never_wrote_is_not_handed_to_a_policy(rect: Fixture) -> None:
+    """A worker that dies mid-round leaves its cells holding whatever was there before.
+
+    The flag that says so is ``valid``. Routing on the plan's intent instead would read those
+    cells, and a cell nobody wrote has no legal action in it -- not even the no-op the
+    environment sets unconditionally -- so the first symptom would be an assertion inside the
+    distribution rather than the worker that stopped.
+    """
+    engine = inference_for(rect)
+    groups = np.full(SLOTS, GROUP_LEARNER)
+    built = round_with(groups, cycle=0, buffer=rect.buffer)
+
+    dead = np.zeros(SLOTS, dtype=bool)
+    dead[[1, 4]] = True
+    built.valid = ~dead
+    for slot in np.flatnonzero(dead):
+        row = rect.buffer.layout.row_index(0, int(slot))
+        rect.buffer.obs_view[row] = 0  # what an unwritten cell looks like
+
+    answer = engine.act(built)
+
+    assert list(answer.actions[dead]) == [0, 0], "a seat that could not be asked plays the no-op"
+    assert not answer.log_probs[dead].any(), "an unwritten row carries no log-probability"
+    assert answer.actions[~dead].sum() >= 0

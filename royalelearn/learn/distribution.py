@@ -34,6 +34,39 @@ from ..api.policy import ActionDistribution
 __all__ = ["MaskedCategorical"]
 
 
+def _noop_violation(mask: Tensor) -> str:
+    """What to say when a row arrives with its no-op masked out.
+
+    The environment sets the no-op unconditionally, so a row without it did not come from the
+    environment: it was read from somewhere that was never written, or written by something
+    other than the codec. Which of those it is shows in whether the row has any legal action
+    at all -- a row of zeros is a cell nobody filled, and a row with legal actions but no no-op
+    is a corruption of one that was.
+    """
+    bad = (~mask[:, NOOP]).nonzero(as_tuple=False).flatten().tolist()
+    legal = mask.sum(dim=-1)
+    empty = [row for row in bad if int(legal[row]) == 0]
+    lines = [
+        "mask[NOOP] must be True on every row "
+        "(royalegym.action.GridActionParser.action_mask sets it unconditionally); "
+        f"{len(bad)} of {mask.shape[0]} rows in this batch do not have it",
+        f"  rows without the no-op:    {bad[:16]}{' ...' if len(bad) > 16 else ''}",
+        f"  of those, entirely empty:  {len(empty)} "
+        f"{empty[:16]}{' ...' if len(empty) > 16 else ''}",
+    ]
+    if empty:
+        lines.append(
+            "  an entirely empty row is a cell that was never written rather than a bad mask: "
+            "look at which slots those rows belong to and whether their worker reported them"
+        )
+    else:
+        lines.append(
+            "  every offending row has legal actions but not the no-op, which the environment "
+            "cannot produce: suspect the codec or the bit order rather than an unwritten cell"
+        )
+    return "\n".join(lines)
+
+
 class MaskedCategorical(ActionDistribution):
     """A categorical over ``(B, A)`` logits with the illegal actions removed.
 
@@ -55,10 +88,8 @@ class MaskedCategorical(ActionDistribution):
         # No row can be fully masked, because the action mask sets the no-op unconditionally --
         # including after game over (royalegym.action.GridActionParser.action_mask). A row that
         # violates it produces NaN everywhere downstream, so it is caught at the boundary.
-        assert bool(mask[:, NOOP].all()), (
-            "mask[NOOP] must be True on every row "
-            "(royalegym.action.GridActionParser.action_mask sets it unconditionally)"
-        )
+        if not bool(mask[:, NOOP].all()):
+            raise AssertionError(_noop_violation(mask))
         self._mask = mask
         self._logp = torch.log_softmax(
             logits.masked_fill(~mask, torch.finfo(logits.dtype).min), dim=-1
