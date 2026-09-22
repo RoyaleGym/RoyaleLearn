@@ -163,10 +163,9 @@ $ python -c "import royalelearn, sys; print(royalelearn.RunConfig, 'torch' in sy
 Anything that does need torch pulls it in only when you ask for that name, and if torch is missing
 you get an `ImportError` that tells you what to install.
 
-## What you will type, once the loop lands
+## What you type
 
-None of the four commands below works yet. They are written down so you can see the shape of the
-thing and tell us it is wrong before it is finished.
+All four of these work. `train` needs the torch extra; so do `doctor` and `bench`.
 
 ```
 python -m royalelearn train --config examples/configs/laptop.json
