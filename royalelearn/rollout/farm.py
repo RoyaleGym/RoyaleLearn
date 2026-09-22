@@ -255,32 +255,45 @@ class ProcessRolloutSource(RolloutSourceBase):
         return CONTROL.unpack_from(view, 0)
 
     def _await_publication(self, shard: int, timeout_s: float) -> None:
-        deadline = time.monotonic() + timeout_s
+        """Wait until every live worker has published this shard, or turn the wait into a failure.
+
+        Every clock here is ``perf_counter``. ``monotonic`` moves in steps of 15.6 ms on Windows
+        before Python 3.13, which makes a spin of a hundred microseconds last until the next
+        step. A worker releases one token per publication, after writing the word; a spin that
+        sees the word takes its token too, so the next wait on this shard sleeps rather than
+        waking on it. One the spin could not take yet is drained by a later wait, which wakes,
+        reads a word that is not ready, and sleeps again.
+        """
+        started_ns = time.perf_counter_ns()
+        deadline = time.perf_counter() + timeout_s
         spin_s = max(0.0, self.config.rollout.spin_us / 1e6)
-        started = time.perf_counter_ns()
         for worker in self.workers:
             if not self._alive(worker.index):
                 continue
             semaphore = worker.obs_ready[shard]
-            spin_until = time.monotonic() + spin_s
+            spin_until = time.perf_counter() + spin_s
+            woke = False
             while True:
                 if int(self._control_word(worker, shard)["state"]) == STATE_OBS_READY:
+                    if not woke:
+                        semaphore.acquire(False)
                     break
-                now = time.monotonic()
-                if now >= spin_until:
-                    if now >= deadline:
-                        self._timeout(worker, shard, timeout_s)
-                    semaphore.acquire(timeout=POLL_S)
-                    if not worker.process.is_alive():
-                        # A child that has gone is not going to publish, so the round does not
-                        # wait out the deadline for it. The state word is read once more
-                        # first: a worker can publish and exit inside one wake, and that
-                        # publication is as good as any other.
-                        state = int(self._control_word(worker, shard)["state"])
-                        if state == STATE_OBS_READY:
-                            break
-                        self._timeout(worker, shard, timeout_s)
-        self._wait_ns += time.perf_counter_ns() - started
+                now = time.perf_counter()
+                if now < spin_until:
+                    continue
+                if now >= deadline:
+                    self._timeout(worker, shard, timeout_s)
+                woke = semaphore.acquire(timeout=POLL_S)
+                if not worker.process.is_alive():
+                    # A child that has gone is not going to publish, so the round does not
+                    # wait out the deadline for it. The state word is read once more first: a
+                    # worker can publish and exit inside one wake, and that publication is as
+                    # good as any other.
+                    state = int(self._control_word(worker, shard)["state"])
+                    if state == STATE_OBS_READY:
+                        break
+                    self._timeout(worker, shard, timeout_s)
+        self._wait_ns += time.perf_counter_ns() - started_ns
 
     def _timeout(self, worker: _Worker, shard: int, timeout_s: float) -> None:
         """Turn a deadline into a typed failure, and say what the child was doing."""

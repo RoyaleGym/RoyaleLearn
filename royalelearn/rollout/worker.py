@@ -14,14 +14,18 @@ The loop is the whole protocol:
     apply it -- a plan, an assignment table and a step, a state, a deferral, a close
     publish the result
 
-Shards alternate strictly, and a shard whose command has not arrived is skipped rather than
-waited on, so a worker holding two of them steps one while the parent runs inference on the
-other.
+Shards alternate strictly, so a worker holding two of them steps one while the parent runs
+inference on the other. The worker sleeps only on the shard whose turn it is -- the one the
+parent answers next when it answers them in order, which is every command of a run -- and
+glances at the others on its way round, so a command that arrives out of turn is still taken,
+at most ``SLEEP_S`` late.
 
 The control word is the signal and the semaphores are only a way of sleeping until it changes.
-A semaphore may be left with a token when the spin sees the word first, so a wait can return
-without a command having arrived; the word is re-read after every wake and the wait is never
-taken as the answer.
+The parent releases one token per command, after writing the word, and a wait that sees the
+word takes that token with it, so a semaphore holds one token per command not yet answered. A
+spin can see the word between the parent's write and its release, and then the token arrives
+after the wait has returned; it wakes a later wait with no new command in the word. So the word
+is re-read after every wake, and a wake is never taken as the answer.
 
 The child holds no policy and never imports torch. ``tests/test_worker_hygiene.py`` asserts
 both from the report this file sends once its environments are up.
@@ -45,6 +49,14 @@ from ..determinism import BLAS_THREAD_VARS, apply_blas_thread_env
 #: How often a worker asks whether its parent is still there. Often enough that a killed run
 #: does not leave a tree behind for long, rarely enough to cost nothing in a round.
 PARENT_CHECK_S = 2.0
+
+#: The longest a worker sleeps on one shard's semaphore before it looks at its other shards
+#: and at its parent again. The parent's release ends the sleep at once, so this is not the
+#: latency of a command on the shard being slept on; it is what an out-of-turn command waits at
+#: most, and what an idle worker pays one wake and one spin for. The update leaves every worker
+#: idle for most of an iteration, and at fifty milliseconds an idle worker wakes at most twenty
+#: times a second.
+SLEEP_S = 0.05
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from multiprocessing.queues import Queue
@@ -162,6 +174,10 @@ def worker_main(
 
     spin_s = max(0.0, config.spin_us / 1e6)
     pending: dict[int, list[bytes]] = {shard: [] for shard in range(len(shards))}
+    # The shard whose command the parent sends next when it answers in order. Every command of
+    # a run is in order -- the plans of an iteration go out shard by shard, and so do the steps
+    # -- so this is the one worth sleeping on.
+    turn = 0
     running = True
     parent = multiprocessing.parent_process()
     next_parent_check = time.monotonic() + PARENT_CHECK_S
@@ -180,10 +196,20 @@ def worker_main(
                 break
         for shard, runner in enumerate(shards):
             parity = runner.open_parity()
+            # Sleeping on a shard whose turn it is not would leave the command that is due on
+            # the other one waiting out the sleep; a glance costs one read.
+            due = shard == turn
             if not _wait_command(
-                runner, parity, actions_ready[shard], spin_s, STATE_OBS_READY, STATE_IDLE
+                runner,
+                parity,
+                actions_ready[shard],
+                spin_s if due else 0.0,
+                STATE_OBS_READY,
+                STATE_IDLE,
+                sleep_s=SLEEP_S if due else 0.0,
             ):
                 continue
+            turn = (shard + 1) % len(shards)
             command, gamma = runner.read_command(parity)
             try:
                 message: PlanMessage | None = None
@@ -226,6 +252,7 @@ def _wait_command(
     spin_s: float,
     published_state: int,
     idle_state: int,
+    sleep_s: float = SLEEP_S,
 ) -> bool:
     """True once the parent has written a command into this shard's open control word.
 
@@ -238,17 +265,39 @@ def _wait_command(
     violation and should be loud, an idle cell means keep waiting.
 
     Spin first -- a round trip through the operating system is tens of microseconds and a spin
-    is about two -- and then sleep briefly on the semaphore rather than burning a core while
-    the parent is running inference.
+    is about two -- and then sleep on the semaphore until the parent's release, for at most
+    ``sleep_s``; zero looks once and does not sleep. The spin's deadline is read off
+    ``perf_counter``. ``monotonic`` is the tick count on Windows before Python 3.13 and moves
+    in steps of 15.6 ms, so a spin of a hundred microseconds timed by it lasts until the next
+    step. With a one-millisecond sleep after it, an idle worker spun for about half its time on
+    the default system timer and for about 94% of it on a one-millisecond one.
+
+    A command's token is taken along with the command, so it cannot wake a later wait. Taking
+    one never steals the next command's: the parent writes that only once it has read the
+    publication answering this one. A token can still arrive late -- the spin saw the word
+    between the parent's write and its release -- and then it wakes the next wait on this
+    shard with no command in the word, which sleeps again rather than giving up its turn.
     """
-    deadline = time.monotonic() + spin_s
+    deadline = time.perf_counter() + spin_s
     while True:
-        state, _ = runner.read_command(parity)
-        if state not in (published_state, idle_state):
+        if _answered(runner, parity, published_state, idle_state):
+            semaphore.acquire(False)
             return True
-        if time.monotonic() >= deadline:
+        if time.perf_counter() >= deadline:
             break
-    semaphore.acquire(timeout=0.001)
+    if sleep_s <= 0.0:
+        return False
+    while semaphore.acquire(timeout=sleep_s):
+        if _answered(runner, parity, published_state, idle_state):
+            return True
+    # The sleep ran out, and the command may have landed as it did.
+    if _answered(runner, parity, published_state, idle_state):
+        semaphore.acquire(False)
+        return True
+    return False
+
+
+def _answered(runner: Any, parity: int, published_state: int, idle_state: int) -> bool:
     state, _ = runner.read_command(parity)
     return state not in (published_state, idle_state)
 

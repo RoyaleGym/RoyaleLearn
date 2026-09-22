@@ -1,25 +1,29 @@
 """What a worker process must be, and what the farm must do when one stops being it.
 
 Two subjects. The first is hygiene: a worker holds environments and no policy, it pinned its
-BLAS threads before numpy loaded, and the only way to know either is to ask the child itself.
-The second is failure: both reference learners treat a dead worker as a permanent silent hang,
-and everything below exists so that this one does not -- an exception becomes a typed failure
-with the child's traceback, a restart is deterministic and counted, and a wait that would never
-end ends at its deadline instead.
+BLAS threads before numpy loaded, and the only way to know either is to ask the child itself;
+and a worker with nothing to do sleeps, which only the operating system can say. The second is
+failure: both reference learners treat a dead worker as a permanent silent hang, and everything
+below exists so that this one does not -- an exception becomes a typed failure with the child's
+traceback, a restart is deterministic and counted, and a wait that would never end ends at its
+deadline instead.
 
 Marked ``slow``: every test here spawns processes and builds environments inside them.
 """
 
 from __future__ import annotations
 
+import os
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 
 from rollout_support import CODEC, SUPPORT_MODULE, SharedRectangle, preflight, rollout_config
-from royalelearn.api.rollout import GROUP_DEAD, Step
+from royalelearn.api.rollout import GROUP_DEAD, Defer, Step
 from royalelearn.determinism import BLAS_THREAD_VARS
 from royalelearn.errors import WorkerTimeout
 from royalelearn.rollout.envspec import ComponentSpec
@@ -31,8 +35,56 @@ pytestmark = pytest.mark.slow
 CYCLES = 12
 MAX_STEPS = 40
 
+#: How long a worker is left with nothing to do, and the share of a core it may spend on that.
+#: A worker that sleeps through the wait uses a fraction of a percent; one that spins uses
+#: whatever the machine will give it.
+IDLE_S = 2.0
+IDLE_CPU_SHARE = 0.10
 
-def _sources(reward: ComponentSpec | None = None, **overrides: Any) -> tuple[Any, Any, Any, Any]:
+#: The access right that lets one process read another's times and nothing else.
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _cpu_seconds(pid: int) -> float:
+    """The user and kernel time another process has used so far, in seconds.
+
+    Read from the operating system, because a worker that spins is in no position to report
+    that it does. No dependency the suite already has reads another process's times, and the
+    two platforms that matter take a few lines each: Windows answers ``GetProcessTimes`` on a
+    handle opened for querying, Linux keeps the ticks in ``/proc``. Anywhere else the test that
+    needs this is skipped rather than guessed at.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        opened = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not opened:
+            raise ctypes.WinError(ctypes.get_last_error())
+        handle = wintypes.HANDLE(opened)
+        times = [wintypes.FILETIME() for _ in range(4)]
+        try:
+            if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            kernel32.CloseHandle(handle)
+        _created, _exited, kernel, user = times
+        ticks = sum(t.dwHighDateTime << 32 | t.dwLowDateTime for t in (kernel, user))
+        return ticks / 1e7  # FILETIME counts 100 ns intervals
+    stat = Path(f"/proc/{pid}/stat")
+    if not stat.exists():
+        pytest.skip("this platform has no dependency-free way to read another process's times")
+    # The command name in field two may hold spaces and parentheses; everything after its
+    # closing parenthesis is space-separated, starting at field three.
+    fields = stat.read_text().rsplit(")", 1)[1].split()
+    return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+
+
+def _sources(
+    reward: ComponentSpec | None = None, shards: int = 1, **overrides: Any
+) -> tuple[Any, Any, Any, Any]:
     """A farm and the rectangle it writes into, plus the report its workers were built from.
 
     Preflight runs against the healthy environment even when the farm is given a broken one:
@@ -43,8 +95,8 @@ def _sources(reward: ComponentSpec | None = None, **overrides: Any) -> tuple[Any
     """
     healthy = rollout_config(
         workers=2,
-        games_per_worker=1,
-        shards_per_worker=1,
+        games_per_worker=shards,
+        shards_per_worker=shards,
         max_steps=MAX_STEPS,
         stagger_first_reset=False,
         **overrides,
@@ -52,8 +104,8 @@ def _sources(reward: ComponentSpec | None = None, **overrides: Any) -> tuple[Any
     report = preflight(healthy)
     config = rollout_config(
         workers=2,
-        games_per_worker=1,
-        shards_per_worker=1,
+        games_per_worker=shards,
+        shards_per_worker=shards,
         max_steps=MAX_STEPS,
         reward=reward,
         stagger_first_reset=False,
@@ -76,6 +128,12 @@ def _sources(reward: ComponentSpec | None = None, **overrides: Any) -> tuple[Any
 def _step(source: Any, timeout: float = 30.0) -> Any:
     """One round, answered with no-ops."""
     round_ = source.next_round(timeout)
+    _step_answer(source, round_)
+    return round_
+
+
+def _step_answer(source: Any, round_: Any) -> None:
+    """Answer a round already taken with no-ops."""
     source.submit(
         Step(
             actions=np.zeros(round_.slots.size, dtype=np.int16),
@@ -85,7 +143,6 @@ def _step(source: Any, timeout: float = 30.0) -> Any:
             learner_seat=np.zeros(0, dtype=np.int8),
         )
     )
-    return round_
 
 
 def test_a_worker_holds_no_policy_and_pinned_its_threads() -> None:
@@ -110,6 +167,80 @@ def test_a_worker_holds_no_policy_and_pinned_its_threads() -> None:
             assert said.shards == report.geometry.shards_per_worker
             assert said.pid > 0
         assert len({said.pid for said in reports}) == len(reports)
+    finally:
+        source.close()
+        buffer.close()
+
+
+def test_a_worker_with_nothing_to_do_sleeps() -> None:
+    """A worker waiting for a command that is not coming yet costs next to no CPU.
+
+    That wait is where every worker sits through the update, which is most of an iteration,
+    and a worker that spins through it takes a core the update's own threads would have had.
+    Two shards, because that is the shape a run uses and the one whose wait moves from one
+    shard's semaphore to the other's. The farm is then asked for another iteration, because a
+    wait that sleeps well and misses the command that ends it is worse than one that spins.
+    """
+    source, buffer, report, planner = _sources(shards=2)
+    try:
+        source.begin_iteration(planner.mirror_plan(0), buffer, 0)
+        for _ in range(report.geometry.shards_per_worker):
+            _step(source)
+        # Every shard has published its trailing round, and every worker is now waiting for a
+        # plan: exactly where a run leaves them while it updates the policy.
+        source.finish_iteration()
+        pids = [child.process.pid for child in source.workers]
+        before = [_cpu_seconds(pid) for pid in pids]
+        started = time.perf_counter()
+        time.sleep(IDLE_S)
+        wall = time.perf_counter() - started
+        after = [_cpu_seconds(pid) for pid in pids]
+        shares = [(end - start) / wall for start, end in zip(before, after, strict=True)]
+        assert max(shares) < IDLE_CPU_SHARE, (
+            "workers with nothing to do used "
+            + ", ".join(f"{share:.0%}" for share in shares)
+            + f" of a core each over {wall:.1f}s"
+        )
+
+        source.begin_iteration(planner.mirror_plan(1), buffer, 1)
+        answered = _step(source, timeout=5.0)
+        assert answered.cycle == 0
+        assert answered.valid.all(), "a worker that had been idle did not answer its plan"
+    finally:
+        source.close()
+        buffer.close()
+
+
+def test_a_command_out_of_turn_is_still_taken() -> None:
+    """A worker sleeps on the shard whose command is due, and still takes one sent to another.
+
+    A run sends its commands in turn, shard after shard, so that is the semaphore a worker
+    sleeps on. A deferral breaks the turn: it hands the same shard back. A second one goes to
+    that shard while the worker is asleep on the other, and the parent then waits on that shard
+    and on nothing else, so nothing it sends will wake the worker. A worker that only ever
+    watched the shard whose turn it was would never take that deferral, and the round would end
+    at its deadline instead of one sleep later.
+    """
+    source, buffer, _report, planner = _sources(shards=2, round_timeout_s=5.0)
+    try:
+        source.begin_iteration(planner.mirror_plan(0), buffer, 0)
+        # A shard's rounds are refilled in place, so what is compared is read off as it arrives.
+        first = source.next_round(5.0)
+        shard, cycle = first.shard, first.cycle
+        source.submit(Defer())
+        source.next_round(5.0)
+        source.submit(Defer())
+        again = source.next_round(5.0)
+        assert (again.shard, again.cycle) == (shard, cycle)
+        assert again.valid.all()
+
+        # And the turn comes back: the step goes to the same shard, the next to the other.
+        _step_answer(source, again)
+        other = _step(source, timeout=5.0)
+        assert other.shard != shard
+        stepped = source.next_round(5.0)
+        assert (stepped.shard, stepped.cycle) == (shard, cycle + 1)
+        assert stepped.valid.all()
     finally:
         source.close()
         buffer.close()
@@ -271,3 +402,77 @@ def test_an_idle_control_word_is_not_read_as_a_command() -> None:
         Word(STATE_ACTIONS_READY), 0, NoWait(), 0.0, STATE_OBS_READY, STATE_IDLE
     )
     assert real is True, "a command the parent really wrote must still be taken"
+
+
+class _Word:
+    """A shard whose control word holds whatever the test puts in it."""
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def read_command(self, _parity: int) -> tuple[int, float]:
+        return self.value, 0.0
+
+
+class _Tokens:
+    """A semaphore's count, and what the parent does while the worker is asleep on it."""
+
+    def __init__(self, count: int, while_asleep: Any = None) -> None:
+        self.count = count
+        self.sleeps = 0
+        self.while_asleep = while_asleep
+
+    def acquire(self, block: bool = True, timeout: float | None = None) -> bool:
+        if block:
+            self.sleeps += 1
+            if self.while_asleep is not None:
+                self.while_asleep(self)
+        if self.count:
+            self.count -= 1
+            return True
+        return False
+
+
+def test_a_command_takes_the_token_that_announced_it() -> None:
+    """The parent releases one token per command; a wait that sees the command takes it.
+
+    Left behind, the token wakes the next wait on the shard with nothing in the word. That wake
+    is survivable -- the word is re-read -- but a semaphore that gains a token each round a spin
+    answers is a sleep that has stopped sleeping.
+    """
+    from royalelearn.rollout.layout import STATE_ACTIONS_READY, STATE_IDLE, STATE_OBS_READY
+    from royalelearn.rollout.worker import _wait_command
+
+    tokens = _Tokens(1)
+    seen = _wait_command(
+        _Word(STATE_ACTIONS_READY), 0, tokens, 0.0, STATE_OBS_READY, STATE_IDLE
+    )
+    assert seen is True
+    assert tokens.count == 0, "the token that announced a command was left for a later wait"
+    assert tokens.sleeps == 0, "a command already in the word was slept on"
+
+
+def test_a_token_left_by_an_earlier_command_is_slept_through() -> None:
+    """A wake with nothing in the word is not an answer, and the wait goes back to sleep.
+
+    A spin can see a command between the parent's write and its release, so a token can
+    arrive after the wait it belonged to has returned, and wake the next one early. That wait
+    sleeps again on the same shard until its own command or the end of ``SLEEP_S``. Returning
+    at the wake would report that no command came in a sleep that was cut short, and send the
+    worker round its other shards and through another spin for nothing.
+    """
+    from royalelearn.rollout.layout import STATE_ACTIONS_READY, STATE_IDLE, STATE_OBS_READY
+    from royalelearn.rollout.worker import _wait_command
+
+    word = _Word(STATE_OBS_READY)
+
+    def parent_answers_during_the_second_sleep(tokens: _Tokens) -> None:
+        if tokens.sleeps == 2:
+            word.value = STATE_ACTIONS_READY
+            tokens.count += 1
+
+    tokens = _Tokens(1, parent_answers_during_the_second_sleep)
+    seen = _wait_command(word, 0, tokens, 0.0, STATE_OBS_READY, STATE_IDLE)
+    assert seen is True, "a stale token's wake was taken as the answer"
+    assert tokens.sleeps == 2
+    assert tokens.count == 0
