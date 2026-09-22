@@ -47,7 +47,9 @@ round after it came in at 12.6, 13 and 19 seconds, a spread of 1.5x. Once a run 
 fairly steady even on a busy machine. Wait for the second round before you believe any timing.
 
 A complete iteration was measured at 518 and 544 seconds, so about nine minutes on an idle
-machine. It degrades badly under contention: one iteration sharing eight processors with a
+machine. Read that with its settings attached: 2026-09-22, the laptop profile at a minibatch of
+512, which is not the default any more. 256 is, because 512 does not fit a 4 GB card. Nobody has
+timed a full laptop iteration at 256. It degrades badly under contention: one iteration sharing eight processors with a
 second training run had still not finished after 46 minutes. A useful run is many hours.
 Two complete iterations have happened, which is a loop that works rather than a result about
 learning. Nobody knows yet whether a bot trained this way is any good, and the harness logs
@@ -81,10 +83,11 @@ Six pieces, and all six run today.
 
 Running is not the same as trained. The masked head and the PPO update that trains it run end to
 end, but nobody has trained a bot with them yet, so there is no evidence yet that they produce a
-good one. As of 2026-09-22 there is more to say than that: a defect is open in the path that
-carries collected experience into the update, and no run so far shows the bot getting better.
-Until that is fixed and this line changes, treat every run here as a loop that completes rather
-than as training.
+good one, and there is more to say than that. On 2026-09-22 we found that a reward reached the
+buffer one cycle late, so it sat beside the action after the one that earned it. Every training
+number this project had produced to that point described a different objective than the one we
+meant. The fix landed the same evening (`87c97ae`), and nothing has been trained since, so the
+honest position is that the loop is correct as far as we can tell and entirely unproven.
 
 In plain words, for anyone who has not trained a bot before:
 
