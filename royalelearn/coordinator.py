@@ -354,7 +354,16 @@ class _RolloutComponent:
         # them back leaves every battle on episode zero, so a resumed run replays the opening
         # battles under weights that have moved on -- a divergence that shows in the
         # environment's numbers while every learner digest still matches.
-        self.matchmaker.restore_ordinals(payload.get("ordinals", {}))
+        ordinals = payload.get("ordinals", {})
+        self.matchmaker.restore_ordinals(ordinals)
+        # The same counters reach the workers, where they decide which episode each battle
+        # starts. The matchmaker's copy decides who that episode is played against; without
+        # both, a resumed run either plays the right battles against the wrong opponents or
+        # the wrong battles against the right ones.
+        self.source.ordinals = tuple(
+            int(ordinals.get(str(battle), ordinals.get(battle, 0)))
+            for battle in range(self.source.geometry.n_battles)
+        )
 
 
 class _GroupComponent:

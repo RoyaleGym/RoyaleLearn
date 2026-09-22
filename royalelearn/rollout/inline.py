@@ -63,7 +63,7 @@ from ..api.rollout import (
 )
 from ..config import Geometry
 from ..errors import PreflightError
-from ..seeding import ENV_STAGGER, derive_generator, stream_path
+from ..seeding import ENV_EPISODE, ENV_STAGGER, derive_generator, derive_int, stream_path
 from .envspec import EnvFactorySpec, resolve_component
 from .layout import (
     ASSIGN,
@@ -224,6 +224,10 @@ class WorkerConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: env in a run may: the publisher binds one UDP port, and a second one raises at
     #: construction.
     viser: bool = False
+    #: Where each battle's episode counter stood when a checkpoint was written, empty on a
+    #: fresh run. The counter names the next episode, which is what makes a resumed run play
+    #: the battles the original was about to play rather than the ones it began with.
+    ordinals: tuple[int, ...] = ()
 
 
 def build_codec(
@@ -327,7 +331,10 @@ class ShardRunner:
         self.games = config.geometry.games_per_shard
         self.battles = planner.shard_battles(config.worker, shard)
         self.vec = config.env.build_vec(
-            self.games, tuple(config.extra_component_modules), viser=viser
+            self.games,
+            tuple(config.extra_component_modules),
+            viser=viser,
+            autoreset_seed_fn=self._episode_seed,
         )
         self.scripted = ScriptedSeats(planner, config.worker, self.slots, config.generation)
         self.noop = int(self.vec.envs[0].action_parser.noop())
@@ -367,6 +374,18 @@ class ShardRunner:
 
     # -- start-up -----------------------------------------------------------
 
+    def _episode_seed(self, game: int, ordinal: int) -> int:
+        """The seed of one episode, addressed by its battle and which episode of it this is.
+
+        A pure function of the master seed and that pair: it carries no offset from where the
+        shard happens to be, so a worker rebuilt at any point produces the battle the original
+        played at the same ordinal.
+        """
+        return derive_int(
+            self.config.master_seed,
+            stream_path(ENV_EPISODE, battle=int(self.battles[game]), ordinal=int(ordinal)),
+        )
+
     def start(self) -> None:
         """Reset the shard's battles and leave it holding the first observation.
 
@@ -380,11 +399,28 @@ class ShardRunner:
             seats = {int(BLUE): 2 * index, int(RED): 2 * index + 1}
             env.reward_fn = _TermRecorder(env.reward_fn, self.reward_terms, seats)
         seed = self.planner.env_seed(self.worker, self.shard, self.config.generation)
-        obs, infos = self.vec.reset(seed=seed)
+        if self.config.ordinals:
+            # A resume. The counter names the NEXT episode of each battle, so the shard starts
+            # the one the original was about to start rather than replaying from zero, and the
+            # reset carries no seed of its own: an explicit one would win over the hook and
+            # re-seed that first episode, which is the whole thing being restored. The episode
+            # half played when the checkpoint was taken is not replayed -- its transitions were
+            # already in the original run's buffer, and resuming inside an episode is not
+            # offered.
+            mine = tuple(int(self.config.ordinals[b]) for b in self.battles)
+            self.vec.set_episode_ordinals(mine)
+            self.ordinal[:] = np.asarray(mine, dtype=np.int64)
+            obs, infos = self.vec.reset()
+        else:
+            obs, infos = self.vec.reset(seed=seed)
         self.obs = obs
         self._clear_round()
         self.tick[:] = np.asarray(infos["tick"], dtype=np.int32)
-        if self.config.stagger_first_reset:
+        # Not on a resume: the warm-up exists to spread the first episodes' phases apart, and
+        # the episodes a resumed shard starts are already spread by wherever the original run
+        # left them. Advancing them again would move every battle off the episode it is
+        # supposed to be continuing.
+        if self.config.stagger_first_reset and not self.config.ordinals:
             self._stagger(seed)
 
     def _stagger(self, seed: int) -> None:
@@ -875,6 +911,10 @@ class RolloutSourceBase(RolloutSource):
         self.plan: SlotPlan | None = None
         self.generation = [0] * self.geometry.workers
         self.restarts = [0] * self.geometry.workers
+        #: Where each battle's episode counter stood when a checkpoint was written. Empty on a
+        #: fresh run; set by the coordinator before the workers are built on a resume, and
+        #: handed to each one so it starts the episodes the original was about to start.
+        self.ordinals: tuple[int, ...] = ()
         #: Whether a worker's slots take part in rounds, and whether it is waiting to. A
         #: restarted worker has reset its battles from a new seat of the seed, so the match its
         #: slots were collecting is gone: it rejoins at the next iteration boundary, and until
@@ -1428,6 +1468,7 @@ class InlineRolloutSource(RolloutSourceBase):
             spin_us=rollout.spin_us,
             stagger_first_reset=rollout.stagger_first_reset,
             viser=self.viser and worker == 0,
+            ordinals=self.ordinals,
         )
 
     def _parity(self, worker: int, shard: int) -> int:

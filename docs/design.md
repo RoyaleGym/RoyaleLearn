@@ -59,12 +59,14 @@ The conventions the harness is held to are the family's, and will be familiar fr
   this repo.
 - **Determinism is preserved end to end.** The engine is deterministic and seedable, and a
   trace recorded from an env re-verifies bit for bit (`royalegym.replay`). Seeds go into
-  checkpoints, so a run can be replayed rather than approximated. What that buys today is
-  exact: two runs of one identity agree row for row, and a checkpoint restores the whole
-  learner byte for byte in a fresh process. What it does not yet buy is a resumed run
-  reproducing the original's *environment*, because the vectorised env autoresets without a
-  seed and a battle's generator cannot be rewound without replaying it; `docs/harness-spec.md`
-  section 12.4 states the gap and a test measures it.
+  checkpoints, so a run can be replayed rather than approximated. Two runs of one identity
+  agree row for row; a checkpoint restores the whole learner byte for byte in a fresh process;
+  and a resume from an episode boundary continues the original's rows field for field, because
+  an episode is addressed by its battle and its ordinal rather than by how many came before it.
+  A checkpoint written mid-episode does not replay the episode in flight -- those transitions
+  were already counted -- so the battles are the right ones and their phase is not.
+  `docs/harness-spec.md` section 12.4 states exactly where the line falls, and two tests draw
+  it from either side.
 - **Layering.** This repo imports `royalegym` and nothing from `royalesim` directly, and it
   never touches calibration data. The direction is `RoyaleLearn -> RoyaleGym -> RoyaleSim`.
 
@@ -117,9 +119,10 @@ confirmation is to log how long the acquire actually blocks for. It is left unfi
 guessed at, because a wrong change to a wait loop is how a run hangs instead of how it slows
 down.
 
-**Three behaviours that work but are not pinned by a test.** The ratio invariant under a deliberately
-corrupted mask, an episode replayed from its shard seed against
-`royalegym.replay.verify_trace`, and the smoke configuration as a test rather than as a command
-somebody runs. All three have been driven by hand and all three passed, which is not the same
-thing. The fourth, a resume, now has `tests/test_resume.py` -- and writing it is what found the
-unread ordinal and the environment gap above.
+**Two behaviours that work but are not pinned by a test.** The ratio invariant under a
+deliberately corrupted mask, and an episode replayed from its shard seed against
+`royalegym.replay.verify_trace`. Both have been driven by hand and both passed, which is not the
+same thing. The smoke configuration and the resume now have tests -- `tests/test_engine_contract.py`
+runs an iteration end to end on the real engine, and `tests/test_resume.py` holds the resume
+guarantee from both sides of the episode boundary. Writing that one is what found the unread
+ordinal, the environment gap, and the crash in `verify-resume`.

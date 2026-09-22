@@ -910,7 +910,9 @@ function of its shard seed and its reset ordinal rather than of a seed of its ow
 deterministic and sufficient: the worker records the shard seed path and the reset ordinal on every
 `EpisodeRecord`, which is what `royalegym.replay` needs to re-simulate one battle. What it is not is
 episode-addressable without replaying the battles before it, which is what the
-`autoreset_seed_fn(game_index, ordinal)` hook of section 16 buys.
+`autoreset_seed_fn(game_index, ordinal)` hook gives it: an episode's seed is
+`derive_int(master_seed, "env/battle/{b}/ordinal/{k}")`, so it is addressed by name rather than
+by how many episodes came before it.
 
 ### 5.3 Run identity
 
@@ -980,16 +982,25 @@ After loading a checkpoint written at the end of iteration `k`:
    the return scaler and the schedule positions, so it is the whole learner rather than a curve
    that resembles one.
 
-**What a resume does not restore, measured rather than assumed.** Iteration `k+1` of a resumed
-run does **not** reproduce the original's metric row, and the reason is one level below this
-repository. `ClashSelfPlayVecEnv` autoresets without a seed, so a battle's generator has advanced
-once for every episode it has played, and a worker starting fresh cannot arrive at that state
-without replaying every episode before it. The learner resumes exactly and the battles do not, so
-the rows diverge in the environment's numbers — `env/*` and `policy/*` — while every learner byte
-matches. `tests/test_resume.py` asserts the three clauses above and measures the fourth as a gap,
-with a test written to fail the day it closes. It closes when `ClashSelfPlayVecEnv` gains the
-seeded autoreset of section 16, which makes an episode addressable by name rather than by how
-many came before it; nothing in this repository can close it alone.
+5. Iteration `k+1` reproduces the original's metric row, field for field, **when the checkpoint
+   was written at an episode boundary**.
+
+**Where that last clause stops, and why it stops there.** An episode is addressed by its battle
+and its ordinal: `ClashSelfPlayVecEnv` takes an `autoreset_seed_fn`, the harness gives it
+`derive_int(master_seed, "env/battle/{b}/ordinal/{k}")`, and a resumed worker is put back on the
+ordinal the original was about to play through `set_episode_ordinals`. Both counters are restored
+— the environment's, which decides which battle is played, and the matchmaker's, which decides who
+plays it — because restoring one without the other gives the right battles against the wrong
+opponents or the reverse.
+
+What is not restored is an episode that was *half finished* when the checkpoint was written. Its
+transitions were already in the original run's buffer, and replaying it would count them twice, so
+a resumed run starts the next episode instead. The battles it then plays are the right ones and
+their phase is not: the rows differ in how many episodes completed, never in which were played.
+Two tests draw that line — one asserts the row-for-row continuation from a boundary, the other
+measures the phase difference from inside an episode, and the second fails if resuming mid-episode
+is ever offered. The warm-up that spreads first-episode phases apart is skipped on a resume for
+the same reason: it would move every battle off the episode it is continuing.
 
 `state_digest`, defined once in `royalelearn/checkpoint.py`, is a sha256 over, in this fixed order:
 the actor `state_dict` tensors (name-sorted, `.cpu().numpy()` bytes), the critic `state_dict`, each
@@ -2924,7 +2935,6 @@ metric stream; and `ClashSelfPlayVecEnv(..., viser=...)` for the state stream. W
 | 2 | `ClashSelfPlayVecEnv(..., copy=False)` — drop the per-step `copy.deepcopy` of the whole batch | 14 microseconds per transition, 387 KB per step | one line |
 | 3 | `PlacementOracle` grid reuse between the mask's grids and the observation's | up to 7 of 14 `point_grid` calls per step, about 80 microseconds per game-step | small |
 | 4 | `selfplay._Record` gains separate `wins`/`draws`/`losses`; `record_result(..., eval=False, context=...)`; atomic `save`; `fit_ratings` and `is_stronger`; an `EvictionPolicy` ABC whose default is not oldest-first; `_evict` stops leaking `records`. Plus the potential-based reward terms of section 10 | draws are lossy, which breaks every binomial interval; `_evict` deletes exactly the diverse opponents the uniform floor protects; `ElixirTradeReward` rewards turtling at a magnitude comparable to the terminal reward | medium; the harness ships its own until then |
-| 5 | `autoreset_seed_fn(game_index, ordinal) -> int` on `ClashSelfPlayVecEnv` | an episode is reproducible only by replaying its predecessors within its shard. With it every episode is seed-addressable, `replay --episode` stops needing the battle's history, and the matchmaker's `match/battle/{b}/ordinal/{k}` path gains an env seed addressed the same way | small |
 | 6 | `call`/`get_attr`/`set_attr` on the vec env; a counter for entities dropped past `max_entities` | reaching into `vec.envs[i]` is undocumented; a silent truncation during training is the class of bug `docs/design.md` warns about | small |
 
 Ask 1 lands as a **drop-in speed-up, not a rewrite**, because nothing in this design touches the

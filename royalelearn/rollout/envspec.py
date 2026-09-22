@@ -163,6 +163,7 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         extra_modules: tuple[str, ...] = (),
         *,
         viser: str | None = None,
+        autoreset_seed_fn: Any = None,
     ) -> ClashSelfPlayVecEnv:
         """``ClashSelfPlayVecEnv(num_games)`` built from this spec.
 
@@ -172,7 +173,14 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         """
         from royalegym.env import ClashSelfPlayVecEnv
 
-        return ClashSelfPlayVecEnv(num_games, self.factory(extra_modules), viser=viser)
+        kwargs: dict[str, Any] = {"viser": viser}
+        if autoreset_seed_fn is not None:
+            # Without it an episode is reachable only by replaying the ones before it, because
+            # the autoreset draws from the generator the shard's own seed set. With it, an
+            # episode is addressed by its battle and its ordinal, which is what lets a resumed
+            # run start the episode the original was about to start.
+            kwargs["autoreset_seed_fn"] = autoreset_seed_fn
+        return ClashSelfPlayVecEnv(num_games, self.factory(extra_modules), **kwargs)
 
     @staticmethod
     def _condition(specs: list[ComponentSpec], extra_modules: tuple[str, ...]) -> Any:

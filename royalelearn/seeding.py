@@ -22,6 +22,7 @@ import numpy as np
 
 __all__ = [
     "ACT_CYCLE",
+    "ENV_EPISODE",
     "ENV_SHARD",
     "ENV_STAGGER",
     "EVAL_BOOTSTRAP",
@@ -81,6 +82,11 @@ class Stream(NamedTuple):
 
 #: The one ``ClashSelfPlayVecEnv.reset(seed=...)`` of a shard; ``generation`` counts respawns.
 ENV_SHARD = "env/worker/{worker}/shard/{shard}/gen/{generation}"
+#: One battle's episode, addressed by the battle and which episode of it this is. A shard's own
+#: seed sets the generator every episode after the first would otherwise draw from, which makes
+#: an episode reachable only by replaying the ones before it; this names it instead, so a
+#: resumed run can start the episode the original was about to start.
+ENV_EPISODE = "env/battle/{battle}/ordinal/{ordinal}"
 #: How far each battle of a shard is advanced before the run starts, so that episodes end apart
 #: rather than in spikes. A stream of its own and not the shard's: drawing the warm-up from the
 #: env seed's own sequence would make the two move together for no reason.
@@ -115,6 +121,7 @@ TORCH_CUDA = "torch/cuda"
 #: from is here; a path that is not is a bug, and ``stream_path`` refuses one.
 STREAMS: tuple[Stream, ...] = (
     Stream(ENV_SHARD, "the vec env reset of one shard, once per respawn generation"),
+    Stream(ENV_EPISODE, "one episode of one battle, so a resume can start the next one"),
     Stream(ENV_STAGGER, "the warm-up that spreads one shard's episode boundaries"),
     Stream(MATCH_BATTLE, "the matchmaker's assignment for one episode of one battle"),
     Stream(ACT_CYCLE, "the uniforms that drive action sampling at one cycle"),

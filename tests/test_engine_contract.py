@@ -73,8 +73,8 @@ def test_the_real_catalogue_is_wider_than_the_one_the_fast_suite_uses(rust_spec:
     A harness that passed the fast suite on a literal would fail here, which is exactly the
     failure this asserts cannot happen by construction.
     """
-    from royalelearn import config as cfg
     from royalegym.mock_engine import MockEngine
+    from royalelearn import config as cfg
 
     assert rust_spec.num_cards > len(MockEngine().cards())
     assert rust_spec.vector_size > 30 + 5 * len(MockEngine().cards())
@@ -106,9 +106,8 @@ def test_the_codec_round_trips_real_observations_exactly(rust_env: Any, rust_spe
     the only place the decision is made against data that has anything in it.
     """
     pytest.importorskip("torch")
-    from test_codec import pack_all, unpack
-
     from royalelearn.rollout.codec import SpatialObsCodec
+    from test_codec import pack_all, unpack
 
     sample = played_out(rust_env, 260)
     codec = SpatialObsCodec()
@@ -140,9 +139,8 @@ def test_a_real_engine_iteration_completes(tmp_path: Any) -> None:
     real observations, the workers hold real battles, and the update runs on what they collect.
     """
     pytest.importorskip("torch")
-    from test_coordinator import coordinator, tiny_config
-
     from royalelearn import config as cfg
+    from test_coordinator import coordinator, tiny_config
 
     try:
         config = tiny_config(

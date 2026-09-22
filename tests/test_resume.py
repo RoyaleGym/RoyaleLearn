@@ -6,13 +6,12 @@ for byte in a fresh process, a run is a pure function of its identity, and an id
 drifted is refused by name rather than continued.
 
 The fourth clause -- that the iterations after a resume reproduce the original's metric rows --
-does **not** hold, for a reason outside this repository. ``ClashSelfPlayVecEnv`` autoresets
-without a seed, so a battle's RNG advances with every episode it has played, and a worker that
-starts fresh cannot arrive at that state without replaying every episode before it. The
-environment therefore continues from a different point even though every learner byte matches.
-``test_the_environment_does_not_resume_and_says_so`` measures that gap rather than papering over
-it, and it is section 16's ask of RoyaleGym: an ``autoreset_seed_fn`` makes an episode
-addressable, and the clause becomes true the day it lands.
+holds from an episode boundary and not from inside an episode, and the two tests below draw that
+line. ``ClashSelfPlayVecEnv`` now takes an ``autoreset_seed_fn``, so an episode is addressed by
+its battle and its ordinal rather than by how many came before it, and a resumed worker is put
+back on the ordinal the original was about to play. What is not restored is an episode that was
+half finished when the checkpoint was written: its transitions were already in the original's
+buffer, and replaying it would count them twice.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import msgspec
 import pytest
 
 import royalelearn.config as cfg
@@ -48,6 +48,19 @@ def resumable_config(tmp_path: Path) -> cfg.RunConfig:
         # measure a policy; this file measures whether a resume reproduces one.
         alarms=cfg.AlarmConfig(enabled=False),
     )
+
+
+def aligned_config(tmp_path: Path) -> cfg.RunConfig:
+    """``resumable_config`` with every episode ending on an iteration boundary.
+
+    Four-decision episodes against four cycles an iteration, and no warm-up, so a checkpoint is
+    never written while a battle is mid-episode. That is the condition the row-for-row
+    guarantee is stated under, and the next test measures what happens without it.
+    """
+    config = resumable_config(tmp_path)
+    config.env = cfg.default_env_spec(cfg.MOCK_ENGINE, max_steps=4)
+    config.rollout = msgspec.structs.replace(config.rollout, stagger_first_reset=False)
+    return config
 
 
 def rows(run_dir: Path) -> list[dict[str, Any]]:
@@ -127,45 +140,76 @@ def test_a_resume_restores_the_learner_byte_for_byte(tmp_path: Path) -> None:
     )
 
 
-def test_the_environment_does_not_resume_and_says_so(tmp_path: Path) -> None:
-    """The gap, measured: the learner comes back and the battles do not.
+def test_a_resume_continues_the_original_row_for_row(tmp_path: Path) -> None:
+    """Six iterations straight through against three then three, compared field by field.
 
-    ``ClashSelfPlayVecEnv`` autoresets without a seed, so a battle's generator has advanced once
-    per episode it has played and a fresh worker cannot arrive there without replaying them.
-    The first iteration after a resume therefore collects different battles, and the run
-    diverges from the one it is continuing -- in the environment's numbers, never in the
-    learner's restoration.
+    Episodes are four decisions and an iteration is four cycles, so every episode ends on an
+    iteration boundary and the checkpoint is never taken mid-episode -- which is the condition
+    the guarantee is stated under. The warm-up is off for the same reason: it exists to spread
+    the first episodes' phases apart, and a phase that differs is the one thing that cannot be
+    restored.
 
-    This test exists to fail the day that stops being true, which is the day RoyaleGym gives
-    ``ClashSelfPlayVecEnv`` a seeded autoreset. Delete it then, and assert the row-for-row
-    continuation section 12.4 describes.
+    What is compared is every metric row of the second half and the state digest inside it, so
+    a curve that merely looked similar would not pass.
     """
-    config = resumable_config(tmp_path / "gap")
-    whole = rows(run_to(resumable_config(tmp_path / "whole"), SPLIT + AFTER))
+    whole = rows(run_to(aligned_config(tmp_path / "whole"), SPLIT + AFTER))
 
+    config = aligned_config(tmp_path / "split")
     split_dir = run_to(config, SPLIT)
     done = resume(split_dir, until=timesteps_for(config, SPLIT + AFTER))
     assert done.returncode == 0, f"resume failed:\n{done.stdout}\n{done.stderr}"
     continued = rows(split_dir)
-    assert len(continued) == SPLIT + AFTER
+    assert len(continued) == len(whole) == SPLIT + AFTER
+
+    for index in range(SPLIT, SPLIT + AFTER):
+        original, resumed = whole[index], continued[index]
+        assert resumed["run/state_digest"] == original["run/state_digest"], (
+            f"iteration {index + 1} of a resumed run reached a different state than the same "
+            f"iteration of a straight run"
+        )
+        differing = {
+            key: (original.get(key), resumed.get(key))
+            for key in sorted(set(original) | set(resumed))
+            if not key.startswith(("time/", "throughput/", "run/wall_seconds"))
+            and original.get(key) != resumed.get(key)
+        }
+        assert not differing, f"iteration {index + 1} differs in {differing}"
+
+
+def test_an_episode_in_flight_is_not_replayed(tmp_path: Path) -> None:
+    """The limit, stated by measuring it rather than by asserting it in prose.
+
+    A checkpoint taken while battles are mid-episode restores the ordinal each battle is about
+    to play, not the episode it was in the middle of: those transitions were already in the
+    original's buffer and replaying them would count them twice. So the battles a resumed run
+    plays are the right ones and their phase is not, and the rows differ in how many episodes
+    completed rather than in which were played.
+
+    If this ever stops being true -- if resuming inside an episode is offered -- this test says
+    so by failing, and the guarantee above can be widened.
+    """
+    whole = rows(run_to(resumable_config(tmp_path / "whole"), SPLIT + AFTER))
+
+    config = resumable_config(tmp_path / "gap")
+    split_dir = run_to(config, SPLIT)
+    done = resume(split_dir, until=timesteps_for(config, SPLIT + AFTER))
+    assert done.returncode == 0, f"resume failed:\n{done.stdout}\n{done.stderr}"
+    continued = rows(split_dir)
 
     for index in range(SPLIT):
         assert continued[index]["run/state_digest"] == whole[index]["run/state_digest"], (
-            f"the two runs disagreed at iteration {index + 1}, before the checkpoint, which is "
-            f"a determinism failure rather than the resume gap this test measures"
+            "the two runs disagreed before the checkpoint, which is a determinism failure "
+            "rather than the phase difference this test measures"
         )
 
-    after = continued[SPLIT]
-    original = whole[SPLIT]
-    environmental = {
+    phase = {
         key
-        for key in set(original) | set(after)
-        if key.startswith(("env/", "policy/")) and original.get(key) != after.get(key)
+        for key in ("env/episodes_completed", "env/episode_steps_mean")
+        if whole[SPLIT].get(key) != continued[SPLIT].get(key)
     }
-    assert environmental, (
-        "the environment reproduced through a resume. If RoyaleGym has gained a seeded "
-        "autoreset, this test has done its job: replace it with the row-for-row comparison "
-        "of section 12.4 and update the spec."
+    assert phase, (
+        "a resume taken mid-episode reproduced the original's episode phase. If resuming "
+        "inside an episode is now offered, widen the guarantee above and delete this test."
     )
 
 

@@ -199,6 +199,7 @@ class ProcessRolloutSource(RolloutSourceBase):
             spin_us=rollout.spin_us,
             stagger_first_reset=rollout.stagger_first_reset,
             viser=self.viser and worker.index == 0,
+            ordinals=self.ordinals,
         )
 
     def _await_report(self, worker: _Worker) -> StartupReport:
