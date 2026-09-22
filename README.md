@@ -52,7 +52,7 @@ print({k: v.shape for k, v in obs.items()})
 ```
 8
 Discrete(2305)
-{'action_mask': (8, 2305), 'spatial': (8, 21, 32, 18), 'vector': (8, 355)}
+{'action_mask': (8, 2305), 'mask_planes': (8, 4, 32, 18), 'spatial': (8, 20, 32, 18), 'vector': (8, 1177)}
 ```
 
 Eight rows: two players per battle, both feeding one policy, each seeing its own king at the bottom.

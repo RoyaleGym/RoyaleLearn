@@ -45,7 +45,7 @@ worker that writes these bytes and flips these events is a drop-in; the Python w
 reference implementation and the differential test against it is the acceptance criterion.
 
 **D4. Observations are quantised in the worker and written straight into their final resting place in
-the experience buffer.** 13 443 B per row against 53 957 B as float32 **[A]**, section 7.2. The learner never
+the experience buffer.** 14 163 B per row against 55 397 B as float32 **[A]**, section 7.2. The learner never
 copies an observation on the CPU except into a small pinned staging ring.
 
 **D5. The policy acts on `decode(encode(obs))`, never on the raw float32.** The bytes that are stored
@@ -101,8 +101,8 @@ package has today and keeps.
 | split of that 1.21 ms | 0.31 ms engine (26%), 0.90 ms Python obs + mask for both seats (74%) | **[A]** from the two rows above |
 | one network forward | 378 MFLOP/sample at C=64, N=4, 32×18 board | **[A]** section 8.1 |
 | RTX 3050 Laptop, achieved on convs | ~3 TFLOP/s fp32, ~9 TFLOP/s bf16 | **[A]** 40% of the 6 / 24 peak |
-| observation row, as the environment hands it over | 53 957 B | **[M]** shapes from `single_observation_space` |
-| observation row, this codec | 13 443 B | section 7.2 |
+| observation row, as the environment hands it over | 55 397 B | **[M]** shapes from `single_observation_space` |
+| observation row, this codec | 14 163 B | section 7.2 |
 
 Both row figures are arithmetic on the observation space rather than constants, so the next layout
 change is a recomputation and not a rewrite. With `S` spatial planes of `H·W` cells of which `s` are
@@ -113,10 +113,10 @@ row_bytes  = H*W * ( (S - s - f) * 1 + f * 2 )  +  2 * V  +  ceil(A / 8)
 float_row  = 4 * ( H*W * S + V )  +  A  +  H*W * hand_size
 ```
 
-On the 65-card catalogue that is `S = 20`, `s = 2` static planes held once per seat, `f = 2` hit-point
-planes, `H·W = 576`, `V = 817`, `A = 2305`, `hand_size = 4`, giving
-`576*(16 + 2*2) + 2*817 + 289 = 9 216 + 2 304 + 1 634 + 289 = 13 443 B` against
-`4*(576*20 + 817) + 2 305 + 2 304 = 53 957 B`, 4.01 times smaller **[A]**. The final term of
+On the catalogue the engine ships today, 95 cards, that is `S = 20`, `s = 2` static planes held once
+per seat, `f = 2` hit-point planes, `H·W = 576`, `V = 1177`, `A = 2305`, `hand_size = 4`, giving
+`576*(16 + 2*2) + 2*1177 + 289 = 9 216 + 2 304 + 2 354 + 289 = 14 163 B` against
+`4*(576*20 + 1177) + 2 305 + 2 304 = 55 397 B`, 3.91 times smaller **[A]**. The final term of
 `float_row` is the four mask planes, which the environment emits and the codec never stores: they are
 the bit-packed mask reshaped, and the learner reshapes it back at unpack.
 
@@ -138,7 +138,7 @@ One config block per machine class; only numbers change.
 | `net.channels` C / `net.blocks` N | 64 / 4 | 96 / 8 | 128 / 12 |
 | `ppo.batch_size` | 4 096 | 16 384 | 32 768 |
 | `ppo.minibatch_size` | 512 | 2 048 | 8 192 |
-| buffer bytes (observations) | 591 MB | 4.7 GB | 9.5 GB |
+| buffer bytes (observations) | 623 MB | 5.0 GB | 10.0 GB |
 | `rollout.overlap` | false | true | true |
 | `ladder.candidate_every_env_steps` | 4 000 000 | 2 000 000 | 2 000 000 |
 
@@ -169,9 +169,9 @@ worker instead.
 
 The buffer row is `(T + obs.frame_stack) × R × row_bytes`: `T+1` cycles for the bootstrap row plus
 `frame_stack - 1` history cycles carried over from the previous iteration (section 9.1). At the laptop
-profile that is `229 × 192 × 13 443 B = 591 MB` **[A]**. The two larger profiles run
+profile that is `229 × 192 × 14 163 B = 623 MB` **[A]**. The two larger profiles run
 `rollout.overlap = true`, which costs a second rectangle, so their figures are twice
-`115 × 1 536 × 13 443 B` and twice `115 × 3 072 × 13 443 B`.
+`115 × 1 536 × 14 163 B` and twice `115 × 3 072 × 14 163 B`.
 
 ### 2.3 The laptop budget
 
@@ -189,13 +189,13 @@ so `228 × 144 = 32 832` timesteps and `228 × 96 = 21 888` game-steps.
 
 At `determinism.tier = "run_exact"` subtract 10-20%: **~680-720 timesteps/s**, so 100 M timesteps is
 **39-41 hours**. With `rollout.overlap = true` the rollout hides under the update and the figure is
-~1 100 timesteps/s, 25 hours; that costs a second buffer (591 MB) and is off by default on 8 GB.
+~1 100 timesteps/s, 25 hours; that costs a second buffer (623 MB) and is off by default on 8 GB.
 
 Two consequences, stated so nobody re-derives them:
 
 - **The learner is the bottleneck on this machine, by about 2.5×.** Rollout capacity is ~3 300
   timesteps/s against an update capacity of ~1 330. That inverts the usual RLGym situation and it is
-  why `K = 3` and not 32, and why the network is 400 k parameters and not 4 M.
+  why `K = 3` and not 32, and why the network is 430 k parameters and not 4 M.
 - **"The harness is never the bottleneck" is an invariant with a number:** rollout capacity ≥ 2 ×
   update capacity on every shipped profile. `royalelearn bench` prints both, the run logs
   `throughput/rollout_capacity_ratio` every iteration, and start-up warns below 1.5.
@@ -207,7 +207,7 @@ what later lets `K` drop to one or two and frees cores.
 ### 2.4 The RAM ledger, printed by `royalelearn doctor`
 
 ```
-experience buffer (pinned)      229 x 192 x 13 443 B      591 MB
+experience buffer (pinned)      229 x 192 x 14 163 B      623 MB
 parent torch + CUDA host allocations                    ~1 400 MB
 3 workers x (32 RustEngine battles, no torch)      3 x ~250 =  750 MB
 3 workers x shard staging and scalars                3 x ~40 =  120 MB
@@ -1037,11 +1037,11 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `max_restarts_per_worker` | 3 | | three restarts of one worker in a run raises rather than silently degrading throughput |
 | `launch_delay_s` | 0.5 | seconds | three `RustEngine` constructions at once each decode `calibration.json` and `arena.json` |
 | `stagger_first_reset` | `true` | | desynchronise episode phase across battles at run start, so episode ends spread across cycles |
-| `overlap` | `false` | | lag-1 collection under the update: about 1.37x wall clock for a second 591 MB buffer. Off on 8 GB; on in the workstation profile |
+| `overlap` | `false` | | lag-1 collection under the update: about 1.37x wall clock for a second 623 MB buffer. Off on 8 GB; on in the workstation profile |
 | `eval_workers` | 2 | processes | the gate's farm, built at gate time and closed after |
 | `eval_games_per_worker` | 24 | battles | |
 | **`net`** (`ArchSpec`) | | | |
-| `channels` C | 64 | | about 400 k parameters per network; 223 TFLOP per iteration is about 25 s bf16 on a 3050 |
+| `channels` C | 64 | | about 430 k parameters per network; 223 TFLOP per iteration is about 25 s bf16 on a 3050 |
 | `blocks` N | 4 | residual blocks | |
 | `norm_groups` | 8 | | GroupNorm, never BatchNorm: BatchNorm computes a different function at rollout than at update, which breaks the stored-log-prob contract |
 | `vector_embed` | 32 | channels | the scalar vector is broadcast into the map so elixir can modulate every tile |
@@ -1210,12 +1210,12 @@ The rule, applied per key:
 | `vector` | bounded in [0, 1] by the builder | `float16`, 2 B per element |
 | `action_mask` | | bit-packed `uint8`, LSB first, `ceil(n_actions / 8)` B, **exact** |
 
-On the 65-card catalogue with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
+On today's 95-card catalogue with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
 `uint8` planes, the two hit-point planes as `float16`, and the two static planes. The hit-point planes
 are the only ones whose declared `high` reaches 64 — every other plane is a small integer count or an
 indicator in [0, 1] — and they are also the only ones that fail the integer test, because they carry
 a fraction of full health; it is the second fact and not the first that sends them to `float16`. The
-vector is 817 wide. Turning on `Reveal.enemy_spell_aim` adds a spatial plane, and with it one more
+vector is 1 177 wide. Turning on `Reveal.enemy_spell_aim` adds a spatial plane, and with it one more
 `uint8` row; the table below is then recomputed from the rule rather than patched.
 
 | part | stored as | bytes | exact? |
@@ -1224,9 +1224,9 @@ vector is 817 wide. Turning on `Reveal.enemy_spell_aim` adds a spatial plane, an
 | 2 hit-point planes | `float16` | 2 304 | exact to fp16; the values are hit points scaled into a small range, so the granularity is below the engine's own |
 | 2 static planes | **not stored** | 0 | exact |
 | 4 mask planes | **not stored**, derived from the mask | 0 | exact |
-| vector, V = 817 | `float16` | 1 634 | exact to fp16; the builder clips the whole vector to [0, 1] (`obs.py:181`) |
+| vector, V = 1177 | `float16` | 2 354 | exact to fp16; the builder clips the whole vector to [0, 1] (`obs.py:181`) |
 | action mask | bit-packed `uint8` | 289 | exact |
-| **row total** | | **13 443 B** | 4.01x smaller than what the env hands over |
+| **row total** | | **14 163 B** | 3.91x smaller than what the env hands over |
 
 The same rule on `MockEngine`'s 16-card catalogue gives `9 216 + 2 304 + 2*229 + 289 = 12 267 B`, and
 the whole test suite runs there precisely because its widths are not the Rust catalogue's.
@@ -1238,7 +1238,7 @@ Notes an implementer needs:
   are not comparable and the digest is what says so.
 - **`mask_planes` is never stored.** RoyaleGym guarantees
   `mask_planes == action_mask[1:].reshape(hand_size, tiles_y, tiles_x)` exactly, with its own test;
-  the learner does `mask[1:].view(...)` at unpack. Storing them would be 2 304 B of a 13 443 B row
+  the learner does `mask[1:].view(...)` at unpack. Storing them would be 2 304 B of a 14 163 B row
   spent on a reshape.
 - **A static plane is one the layout declares static, and nothing else.** On this catalogue those are
   the water and no-deploy masks. There is no sampling fallback and there must not be: the tower planes
@@ -1529,8 +1529,8 @@ vfeat    cat([pooled_c, Linear(V, E)(vector), legal_frac])        (B, 2C + E + P
 value    Linear(2C+E+P, value_hidden) ReLU Linear(value_hidden, 1) -> squeeze   (B,)
 ```
 
-*Worked example, the shipped defaults on the 65-card catalogue:* `k = 1`, `S = 20`, `P = 4`, `E = 32`,
-`C = 64`, `H x W = 32 x 18`, `V = 817`, `A = 2305`, so `spatial` is `(B, 20, 32, 18)`, the trunk takes
+*Worked example, the shipped defaults on today's 95-card catalogue:* `k = 1`, `S = 20`, `P = 4`, `E = 32`,
+`C = 64`, `H x W = 32 x 18`, `V = 1177`, `A = 2305`, so `spatial` is `(B, 20, 32, 18)`, the trunk takes
 `1*(20 + 4) + 2 + 32 = 58` input channels and the stem is `Conv2d(58, 64, 3)`. Those numbers are an
 illustration of the expressions above and never appear in the code: on `MockEngine`'s 16-card
 catalogue the same expressions give a 229-wide vector and the same 58 channels, and a plane added
@@ -1550,7 +1550,7 @@ channels and nothing else, because it is a reshape of bytes the row already carr
 The head's shape is not a choice. `royalegym/action.py:272` is
 `encode(slot, x_idx, y_idx) = 1 + slot*576 + y_idx*18 + x_idx`, so the non-no-op actions **are** a
 `(P, H, W)` C-order tensor aligned pixel for pixel with the spatial planes, and index 0 is the no-op.
-A flat `Linear(512, A)` head is 1 180 160 parameters against the pointer head's ~8.5 k, and it is the
+A flat `Linear(512, A)` head is 1 180 160 parameters against the pointer head's ~10.5 k, and it is the
 structural cause of tile spam, because a shared-weight head cannot memorise one output unit the way a
 flat head can. Conditioning on a **card embedding** rather than the slot index is the other half:
 slot 0 holds a different card every cycle, so a slot-indexed head has to learn a card-agnostic
@@ -1567,14 +1567,14 @@ Parameters at the worked example's values, convolution and linear weights only:
 |---|---|
 | stem 58 -> 64, 3x3 | 33 408 |
 | 4 residual blocks (8 convs 64 -> 64, 3x3) | 294 912 |
-| vector embedding `Linear(817, 32)` | 26 144 |
-| policy conv + card table 66x64 + query MLPs | 45 500 |
-| value head, with its second `Linear(817, 32)` | 67 600 |
-| **actor** | **~400 k** |
-| **critic** | **~422 k** |
-| **actor + critic** | **~822 k** |
+| vector embedding `Linear(1177, 32)` | 37 664 |
+| policy conv + card table 96x64 + query MLPs | 47 400 |
+| value head, with its second `Linear(1177, 32)` | 79 120 |
+| **actor** | **~413 k** |
+| **critic** | **~445 k** |
+| **actor + critic** | **~858 k** |
 
-Weights 3.3 MB fp32, Adam moments 6.6 MB. Activations dominate: about 2.36 MB per sample fp32 for the
+Weights 3.4 MB fp32, Adam moments 6.9 MB. Activations dominate: about 2.36 MB per sample fp32 for the
 eight body convolutions, so minibatch 512 is 1.18 GB fp32 and **0.59 GB bf16** **[A]**. That is why
 the minibatch is 512 and the precision is bf16.
 
@@ -1702,7 +1702,7 @@ Cycle `T` holds observations only — it is the bootstrap row, and its scalars a
 rows below cycle 0 are history: at the end of every iteration the last `k - 1` cycles are copied down
 into them, so cycle 0 of the next iteration has a full stack and an iteration boundary is not a
 discontinuity in what the policy sees. At `k = 1` there are none and the block is `(T+1) x R`. At the
-laptop profile that is `229 x 192 x 13 443 B = 591 MB` **[A]**.
+laptop profile that is `229 x 192 x 14 163 B = 623 MB` **[A]**.
 
 Every row of the rectangle is stored, including the seats a frozen or scripted opponent played. That
 costs 25% more memory than storing only learner rows and it buys a buffer index that is the slot
@@ -2414,7 +2414,7 @@ a truncated write from a crash six weeks ago from a silent wrong resume into an 
 
 On resume the store diffs the loaded config against the current one and **prints every difference**
 before continuing. A difference in an identity-hashed field is a refusal, not a warning: a policy
-trained on `MockEngine`'s 229-wide vector cannot load into the 817-wide one of the full catalogue, and
+trained on `MockEngine`'s 229-wide vector cannot load into the 1 177-wide one of the full catalogue, and
 today nothing announces that mismatch.
 
 `load_checkpoint(folder, strict)` defaults to `strict=True` for a resume and is only `False` for
