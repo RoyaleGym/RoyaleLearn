@@ -395,6 +395,7 @@ class AlarmSet:
         *,
         on_halt: Callable[[AlarmResult], str | None] | None = None,
         on_dump: Callable[[AlarmResult], str | None] | None = None,
+        on_fired: Callable[[list[AlarmResult]], None] | None = None,
     ) -> list[AlarmResult]:
         """Every alarm that fired on this row, and a halt if one of them was one.
 
@@ -402,6 +403,13 @@ class AlarmSet:
         a halting iteration carries the other alarms that were firing beside it. That is
         usually where the cause is: a halt on the clip fraction beside a warning on the KL is a
         different story from a halt on the clip fraction alone.
+
+        ``on_fired`` is how that reaches the file, and it is not optional decoration. The halt
+        is raised from inside this method, so a caller that wrote the file from the RETURN value
+        never wrote the halting iteration at all -- the one iteration anybody reading
+        ``alarms.jsonl`` afterwards is looking for. It is called once, with every result, before
+        ``on_halt``, so the checkpoint and the bundle that ``on_halt`` writes are assembled from
+        a run directory that already has the alarms in it.
         """
         if not self.config.enabled:
             return []
@@ -433,6 +441,8 @@ class AlarmSet:
                 on_dump(result)
             if alarm.severity == HALT and halting is None:
                 halting = result
+        if fired and on_fired is not None:
+            on_fired(fired)
         if halting is not None:
             bundle = on_halt(halting) if on_halt is not None else None
             raise AlarmHalt(halting.name, halting.message, halting.iteration, bundle)

@@ -1349,13 +1349,25 @@ class LearningCoordinator:
         real minibatch size, and reads what it cost.
         """
         headroom = self.config.doctor.vram_headroom_mb
-        if not headroom or not torch.cuda.is_available():
+        # THIS run's device, not the machine's. A CPU run on a machine that happens to hold a
+        # card would measure a card it never touches: the peak reads near zero, the gate passes
+        # whatever the run needs, and every health/vram_* key afterwards describes somebody
+        # else's process. `cuda.is_available()` answers a question about the machine.
+        if not headroom or not str(self.device).startswith("cuda"):
             return
         free_before, _total = torch.cuda.mem_get_info()  # pragma: no cover - no GPU in the suite
         torch.cuda.reset_peak_memory_stats()  # pragma: no cover
         try:  # pragma: no cover
             self._probe_backward(torch)
-        except Exception:  # pragma: no cover - a failure here is the update's to report
+        except Exception as exc:  # pragma: no cover - a failure here is the update's to report
+            # Not silent. The gate not running is survivable; what is not is that vram_needed_mb
+            # is then never set, so `vram_spilling` -- which compares against it -- stays quiet
+            # for the whole run and the row looks healthy because nothing measured it.
+            self.printer(
+                f"the VRAM gate did not run: the probe raised {type(exc).__name__}: {exc}. "
+                "health/vram_needed_mb will be absent and the vram_spilling alarm cannot fire "
+                "for this run"
+            )
             return
         peak = torch.cuda.max_memory_reserved()  # pragma: no cover
         torch.cuda.reset_peak_memory_stats()  # pragma: no cover
@@ -1543,10 +1555,15 @@ class LearningCoordinator:
         self.sinks.write(row)
         self.sinks.write_episodes(episodes)
         self._learner_ahead_of_rows = False
-        fired = self.alarms.evaluate(row, on_halt=self._halt_bundle, on_dump=self._dump_bundle)
-        self.alarm_rows.extend(fired)
-        if fired:
-            self.sinks.write_alarms(fired)
+        # Through on_fired rather than the return value: a halt is raised from inside evaluate,
+        # so anything written from what it returns is written for every iteration EXCEPT the one
+        # that halted the run.
+        self.alarms.evaluate(
+            row,
+            on_halt=self._halt_bundle,
+            on_dump=self._dump_bundle,
+            on_fired=self._record_alarms,
+        )
         self._maybe_heatmap()
         command = collection["command"]
         if command in ("c", "q") or self._checkpoint_due():
@@ -2067,7 +2084,9 @@ class LearningCoordinator:
             "health/samples_unused_frac": float(result.samples_unused_frac),
             "health/nan_guard_trips": _nan_guard_trips(result),
             "health/vram_peak_mb": _vram_peak_mb(),
-            **_vram_regime(getattr(self, "vram_needed_mb", None)),
+            **_vram_regime(
+                getattr(self, "vram_needed_mb", None), device=str(self.device)
+            ),
             **_optional("health/rss_peak_mb", _rss_peak_mb()),
             "health/buffer_fill_frac": _fill_frac(buffer, collection["rounds"], geo),
         }
@@ -2198,6 +2217,15 @@ class LearningCoordinator:
         return digest.hexdigest()
 
     # -- what a halt leaves behind -------------------------------------------
+
+    def _record_alarms(self, fired: list[AlarmResult]) -> None:
+        """Everything that fired this iteration, to the run's own file and to the bundle's list.
+
+        Called from inside ``AlarmSet.evaluate`` and before the halt, because a halting
+        iteration's alarms are the ones worth having.
+        """
+        self.alarm_rows.extend(fired)
+        self.sinks.write_alarms(fired)
 
     def _halt_bundle(self, alarm: AlarmResult) -> str | None:
         """A checkpoint and a diagnostic bundle, in that order, before the halt is raised."""
@@ -2466,7 +2494,9 @@ def _gpu_util() -> float | None:  # pragma: no cover - there is no GPU in the su
 _GPU_UTIL_COMPLAINED = False
 
 
-def _vram_regime(needed_mb: float | None = None) -> dict[str, MetricValue]:
+def _vram_regime(
+    needed_mb: float | None = None, *, device: str | None = None
+) -> dict[str, MetricValue]:
     """The three numbers that say which memory regime a slowing update is in, plus retries.
 
     Read together at the end of an iteration they separate reservation growth, fragmentation
@@ -2474,6 +2504,10 @@ def _vram_regime(needed_mb: float | None = None) -> dict[str, MetricValue]:
     zeros without a device, like every other health figure here, because a gap is better than a
     guess and the doctor projects a run from these.
     """
+    # Before torch is even imported: a run on the CPU has no device readings to take, and
+    # taking the machine's would publish another process's memory under this run's name.
+    if device is not None and not str(device).startswith("cuda"):
+        return {}
     try:
         import torch
 

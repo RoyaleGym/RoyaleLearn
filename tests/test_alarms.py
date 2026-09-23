@@ -13,7 +13,7 @@ from pathlib import Path
 import msgspec
 import pytest
 
-from royalelearn.api.metrics import Alarm, MetricRow
+from royalelearn.api.metrics import Alarm, AlarmResult, MetricRow
 from royalelearn.config import AlarmConfig
 from royalelearn.errors import AlarmHalt
 from royalelearn.metrics import schema
@@ -339,3 +339,53 @@ def test_a_severity_override_turns_a_warning_into_a_halt() -> None:
 def test_alarms_can_be_turned_off_wholesale() -> None:
     alarms = _set(enabled=False)
     assert alarms.evaluate(_row(**TRIPS["illegal_actions"])) == []
+
+
+# -- what a halting iteration leaves behind ----------------------------------
+
+
+def test_a_halting_iteration_hands_over_its_alarms_before_it_raises() -> None:
+    """The one iteration a reader most wants is the one that used to be missing.
+
+    ``evaluate`` raised ``AlarmHalt`` before RETURNING the fired list, and the coordinator wrote
+    ``alarms.jsonl`` from that return value. So a halting iteration's alarms -- the halting one
+    and every warning beside it -- never reached the file. This module's own docstring promised
+    the opposite ("the alarms.jsonl row of a halting iteration carries the other alarms that
+    were firing beside it"), and the promise was broken one step downstream of where it is made.
+
+    The order matters as well as the fact. The alarms go to the writer BEFORE ``on_halt`` runs,
+    because ``on_halt`` writes the checkpoint and the diagnostic bundle, and a bundle assembled
+    from a run directory ought to find the alarms in it.
+    """
+    alarms = _set(patience_overrides={"kl_high": 1, "clip_pinned": 1})
+    order: list[str] = []
+    written: list[AlarmResult] = []
+
+    def on_fired(results: list[AlarmResult]) -> None:
+        order.append("fired")
+        written.extend(results)
+
+    def on_halt(result: AlarmResult) -> str | None:
+        order.append("halt")
+        return None
+
+    with pytest.raises(AlarmHalt):
+        alarms.evaluate(
+            _row(**TRIPS["clip_pinned"], **TRIPS["kl_high"]),
+            on_halt=on_halt,
+            on_fired=on_fired,
+        )
+
+    assert order == ["fired", "halt"], (
+        "the alarms must reach the writer before the bundle is assembled from the run directory"
+    )
+    assert {result.name for result in written} == {"clip_pinned", "kl_high"}
+    assert [result.severity for result in written if result.name == "clip_pinned"] == [HALT]
+
+
+def test_a_quiet_iteration_hands_over_nothing() -> None:
+    """No firing is not an empty firing: a writer called with [] would append an empty batch."""
+    alarms = _set()
+    calls: list[list[AlarmResult]] = []
+    assert alarms.evaluate(_row(), on_fired=calls.append) == []
+    assert calls == []

@@ -739,14 +739,21 @@ CONDITIONAL: dict[str, str] = {
     # and "no free memory" on a machine that simply has no GPU to report either about, which is
     # the same sentinel this file exists to stop. ``vram_peak_mb`` predates the rule and still
     # returns 0.0.
+    #
+    # "The RUN is on a CUDA device", not "the machine has one". They came apart on this machine,
+    # which holds a card that the suite's CPU runs never touch: every CPU run was publishing
+    # that card's driver-free figure as its own, and test_resume's row-for-row comparison flaked
+    # on it whenever a sibling session was using the GPU.
     "throughput/gpu_util_frac": "a CUDA device is present and its utilisation can be read",
     "health/rss_peak_mb": "the platform reports a peak working set",
-    "health/vram_reserved_mb": "a CUDA device is present",
-    "health/vram_inactive_split_mb": "a CUDA device is present",
-    "health/vram_driver_free_mb": "a CUDA device is present",
-    "health/vram_available_mb": "a CUDA device is present",
-    "health/vram_needed_mb": "a CUDA device is present, and the preflight gate is enabled",
-    "health/vram_alloc_retries": "a CUDA device is present",
+    "health/vram_reserved_mb": "the RUN is on a CUDA device",
+    "health/vram_inactive_split_mb": "the RUN is on a CUDA device",
+    "health/vram_driver_free_mb": "the RUN is on a CUDA device",
+    "health/vram_available_mb": "the RUN is on a CUDA device",
+    "health/vram_needed_mb": (
+        "the RUN is on a CUDA device, the preflight gate is enabled, and its probe did not raise"
+    ),
+    "health/vram_alloc_retries": "the RUN is on a CUDA device",
     # An iteration whose every decision was forced measured nothing about the policy. A lift of
     # 1.0 would read as "exactly uniform", a hold rate of 1.0 as "it never plays", and both are
     # statements about the elixir bar.

@@ -538,7 +538,7 @@ def test_a_halt_leaves_its_row_on_disk_beside_its_checkpoint(run: Any) -> None:
     from royalelearn.api.metrics import AlarmResult
     from royalelearn.errors import AlarmHalt
 
-    def halt(row: Any, *, on_halt: Any = None, on_dump: Any = None) -> Any:
+    def halt(row: Any, *, on_halt: Any = None, on_dump: Any = None, on_fired: Any = None) -> Any:
         result = AlarmResult(
             name="on_purpose",
             severity="halt",
@@ -548,6 +548,11 @@ def test_a_halt_leaves_its_row_on_disk_beside_its_checkpoint(run: Any) -> None:
             message="halted on purpose",
             values={},
         )
+        # In the real AlarmSet the fired list reaches the writer before the bundle is built,
+        # so the stub does it too: a stub that skipped it would be testing a contract the code
+        # does not have.
+        if on_fired is not None:
+            on_fired([result])
         raise AlarmHalt(result.name, result.message, result.iteration, on_halt(result))
 
     run.alarms.evaluate = halt
@@ -558,6 +563,43 @@ def test_a_halt_leaves_its_row_on_disk_beside_its_checkpoint(run: Any) -> None:
     (manifest,) = _manifests(run)
     assert manifest.state_digest == rows[0]["run/state_digest"]
     assert manifest.iteration == rows[0]["run/iteration"]
+
+
+def test_a_halt_leaves_its_alarms_on_disk_too(run: Any) -> None:
+    """The halting iteration's alarms, in the run's own alarms file, through the real AlarmSet.
+
+    ``evaluate`` raises the halt from inside itself, and this loop used to write the alarms file
+    from what it RETURNED. So every iteration's alarms were recorded except the one that stopped
+    the run -- the halting alarm and every warning firing beside it, which is the pair a reader
+    opens the file for. The alarm below always holds, so what is under test is the wiring rather
+    than a threshold.
+    """
+    import json
+
+    from royalelearn.api.metrics import Alarm
+    from royalelearn.errors import AlarmHalt
+    from royalelearn.metrics.alarms import HALT, AlarmSet
+    from royalelearn.metrics.sinks import ALARMS_NAME
+
+    class _Always(Alarm):
+        name = "on_purpose"
+        severity = HALT
+        patience = 1
+        keys = ("run/iteration",)
+
+        def holds(self, row: Any) -> bool:
+            return True
+
+    run.alarms = AlarmSet(cfg.AlarmConfig(), alarms=[_Always()], printer=None)
+    with pytest.raises(AlarmHalt):
+        run.learn(until_timesteps=10_000)
+
+    path = Path(run.run_dir) / ALARMS_NAME
+    assert path.exists(), "the halting iteration's alarms never reached the run's alarms file"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    assert [row["name"] for row in rows] == ["on_purpose"]
+    assert rows[0]["severity"] == HALT
+    assert rows[0]["iteration"] == 1
 
 
 def test_a_resume_refuses_a_checkpoint_no_metric_row_describes(tmp_path: Path) -> None:
