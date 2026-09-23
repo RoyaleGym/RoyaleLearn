@@ -57,9 +57,9 @@ from .ladder.evaluate import EvalRunner, SeedSet, eval_seed_set
 from .ladder.eviction import HallOfFameEviction
 from .ladder.gate import WilsonGate, floor_decision
 from .ladder.matchmaker import MixMatchmaker
-from .ladder.pool import LEARNER_ID, LadderPool
+from .ladder.pool import LEARNER_ID, LadderPool, is_learner, learner_probe_id
 from .ladder.rating import BradleyTerryDavidsonRater, EloReadout
-from .ladder.results import ResultLog, context_digest
+from .ladder.results import KIND_PROBE, ResultLog, context_digest
 from .ladder.snapshots import DiskSnapshotStore, SnapshotSpec
 from .metrics.alarms import AlarmSet
 from .metrics.bundle import RatioOutlier, replay_episode, write_bundle
@@ -836,6 +836,11 @@ class LearningCoordinator:
         self.ratings: RatingTable | None = None
         self.last_gate_seconds = 0.0
         self.gate_seconds_total = 0.0
+        #: The last probe of the live policy, by rung. Emptied at the top of every iteration, so
+        #: a row publishes a score only when that iteration measured one: a probe's numbers are
+        #: about the weights it played, and the weights move every iteration.
+        self.last_rungs: dict[str, Any] = {}
+        self.rung_seconds_total = 0.0
         self._entered = False
         self._closed = False
         self._last_checkpoint_step = 0
@@ -1111,6 +1116,24 @@ class LearningCoordinator:
             release_mode=config.ladder.release_mode,
             obs_digest=self._snapshot_obs_digest,
         )
+        # A second runner over the same player, the same seeds and the same log. It is separate
+        # for two reasons. Its results carry ``kind="probe"`` and the kind belongs to the
+        # runner, so that one object cannot write two cuts of the log. And the gate's runner
+        # keeps its last comparison, which is what ``ladder/paired_rho`` reports: a probe
+        # writing into that would publish the probe's correlation under a key whose description
+        # says it is the one setting the gate's effective sample size.
+        self.probe_runner = EvalRunner(
+            self.player,
+            self.seeds,
+            master_seed=config.master_seed,
+            context=self.context,
+            run_id=self.run_id,
+            log=self.results,
+            bootstrap_resamples=config.ladder.gate.bootstrap_resamples,
+            release_mode=config.ladder.release_mode,
+            obs_digest=self._snapshot_obs_digest,
+            kind=KIND_PROBE,
+        )
         self.gate = WilsonGate(
             config.ladder.gate,
             self.rater,
@@ -1136,7 +1159,7 @@ class LearningCoordinator:
         answers with this run's own digest rather than with an empty string that would read as
         a disagreement.
         """
-        if member in self.pool.anchors or member == LEARNER_ID:
+        if member in self.pool.anchors or is_learner(member):
             return self.spec.obs_digest
         try:
             return self.snapshot_store.obs_digest(member)
@@ -1144,9 +1167,18 @@ class LearningCoordinator:
             return self.spec.obs_digest
 
     def _eval_actor(self, member: str) -> Callable[[dict[str, Any], float, Any], int]:
-        """One evaluation seat's policy: a script, or a frozen actor from the archive."""
+        """One evaluation seat's policy: a script, the live learner, or a frozen actor.
+
+        ``learner@{step}`` is the live model itself rather than a copy of it, which is the
+        whole point of the probe: the question it answers is what the policy does NOW, and the
+        most recent snapshot lags that by the candidate cadence -- four million env steps on
+        the shipped laptop profile. Nothing here mutates the model, and evaluation happens
+        between updates, so the seat reads the same weights the next update will change.
+        """
         if member.startswith("scripted:"):
             return _scripted_policy(member.split(":", 1)[1])
+        if is_learner(member):
+            return self._actor_policy(self.model)
         actor = self.snapshot_store.get(member, self.device)
         return self._actor_policy(actor)
 
@@ -1407,6 +1439,7 @@ class LearningCoordinator:
         self._record_training_results(episodes)
         gate_seconds = self._maybe_gate()
         self._maybe_refit()
+        rung_seconds = self._maybe_probe_rungs()
 
         row = self._row(
             sched=sched,
@@ -1417,6 +1450,7 @@ class LearningCoordinator:
             probe=probe,
             iteration_seconds=time.perf_counter() - began,
             gate_seconds=gate_seconds,
+            rung_seconds=rung_seconds,
             wall=time.perf_counter() - run_started,
         )
         self.rows.append(row)
@@ -1702,6 +1736,45 @@ class LearningCoordinator:
         )
         return seconds
 
+    def _maybe_probe_rungs(self) -> float:
+        """Play the LIVE policy against the fixed rungs, on its own cadence in iterations.
+
+        What it is: the one measurement in a run that is about the policy being trained. Every
+        other evaluation is a frozen snapshot against something, because the gate hands
+        ``snap:v{n}`` to the runner, so without this a run publishes no score for the thing it
+        is changing.
+
+        What it is not: the gate. Nothing here admits, promotes or evicts anything, and the
+        games are written under ``kind="probe"`` so that the authoritative fit, the gate's
+        anchor reference and ``ladder/eval_games_total`` do not see them. Two reasons for that,
+        one statistical and one about the scale. The rungs are fixed and the learner is not, so
+        a probe is a measurement against a ruler rather than a game between two rated players;
+        and each probe is its own id, so pooling them would add a column per probe, every one
+        of them with too few games to place, to the fit every ladder decision is made on.
+
+        The cost is real and is why the default is off: a probe plays ``probe_games`` battles
+        per rung, one at a time, in the parent, between the update and the metric row.
+        """
+        config = self.config.ladder
+        self.last_rungs = {}
+        every = config.probe_every_iterations
+        if every <= 0 or self.iteration % every:
+            return 0.0
+        started = time.perf_counter()
+        member = learner_probe_id(self.cumulative_env_steps)
+        for opponent in config.probe_opponents:
+            self.last_rungs[opponent] = self.probe_runner.compare(
+                member, opponent, games=config.probe_games, iteration=self.iteration
+            )
+        seconds = time.perf_counter() - started
+        self.rung_seconds_total += seconds
+        scores = ", ".join(
+            f"{opponent.split(':', 1)[-1]} {comparison.score_a:.3f}"
+            for opponent, comparison in self.last_rungs.items()
+        )
+        self.printer(f"probe         {member}: {scores} in {seconds:.1f}s")
+        return seconds
+
     def _evict(self) -> None:
         if self.ratings is None:
             return
@@ -1741,6 +1814,7 @@ class LearningCoordinator:
         probe: Mapping[str, MetricValue],
         iteration_seconds: float,
         gate_seconds: float,
+        rung_seconds: float,
         wall: float,
     ) -> dict[str, MetricValue]:
         """One iteration as one flat row, merged from all three sources.
@@ -1786,11 +1860,21 @@ class LearningCoordinator:
             "time/update": update_seconds,
             "time/checkpoint": self._take_checkpoint_seconds(),
             "time/gate": gate_seconds,
+            "time/probe": rung_seconds,
             "time/overlap_saved": 0.0,
         }
+        # The probe is in the attributed sum rather than in the residual. It plays battles one
+        # at a time in the parent, so at the cadences worth running it is minutes, and a
+        # residual carrying minutes nobody can name is how a run's wall clock stops adding up.
         attributed = sum(
             float(metrics.time[key])
-            for key in ("time/collection", "time/update", "time/checkpoint", "time/gate")
+            for key in (
+                "time/collection",
+                "time/update",
+                "time/checkpoint",
+                "time/gate",
+                "time/probe",
+            )
         )
         metrics.time["time/residual"] = max(0.0, iteration_seconds - attributed)
 
@@ -1868,6 +1952,14 @@ class LearningCoordinator:
                 elo=self.elo.rating(LEARNER_ID),
                 paired_rho=self._paired_rho(),
                 gate_seconds_frac=self.gate_seconds_total / max(1e-9, wall),
+                rungs=self.last_rungs or None,
+                # Absent until a probe has run, rather than a zero that reads as "probing is
+                # free" on a run that never probes.
+                probe_seconds_frac=(
+                    self.rung_seconds_total / max(1e-9, wall)
+                    if self.rung_seconds_total
+                    else None
+                ),
             )
         )
 

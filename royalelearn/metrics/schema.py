@@ -147,6 +147,9 @@ METRICS: dict[str, MetricSpec] = {
     "time/update": _m("s", "Seconds in the PPO update."),
     "time/checkpoint": _m("s", "Seconds writing checkpoints this iteration."),
     "time/gate": _m("s", "Seconds in the promotion gate this iteration."),
+    "time/probe": _m(
+        "s", "Seconds playing the live policy against the scripted rungs this iteration."
+    ),
     "time/overlap_saved": _m(
         "s", "Seconds of collection hidden under the update by rollout.overlap."
     ),
@@ -375,10 +378,21 @@ METRICS: dict[str, MetricSpec] = {
         "count", "Gates failed in a row: the plateau signal, stated as an event.", dtype="int"
     ),
     "ladder/score_vs_noop": _m(
-        "fraction", "Score rate against the scripted no-op anchor.", low=0.9, high=1.0
+        "fraction",
+        "The live policy's score rate against the scripted no-op anchor, from the last probe.",
+        low=0.9,
+        high=1.0,
     ),
     "ladder/score_vs_random_legal": _m(
-        "fraction", "Score rate against the random-legal anchor.", low=0.7, high=1.0
+        "fraction",
+        "The live policy's score rate against the random-legal anchor, from the last probe.",
+        low=0.7,
+        high=1.0,
+    ),
+    "ladder/probe_seconds_frac": _m(
+        "fraction",
+        "Share of wall clock spent probing the live policy against the scripted rungs.",
+        high=0.1,
     ),
     "ladder/transitivity_residual": _m(
         "fraction",
@@ -504,6 +518,28 @@ PATTERNS: tuple[MetricPattern, ...] = (
         "env/reward_terms_abs/{term}",
         _m("units", "One weighted reward term's mean magnitude per episode."),
     ),
+    _pattern(
+        "ladder/score_vs/{opponent}",
+        _m("fraction", "The live policy's score rate against one scripted rung."),
+    ),
+    _pattern(
+        "ladder/score_vs_n/{opponent}",
+        _m(
+            "count",
+            "Seeds behind that score rate. Each seed is two battles, one from each side, and "
+            "the seed is the unit: the two are correlated and counting them separately would "
+            "overstate the sample.",
+            dtype="int",
+        ),
+    ),
+    _pattern(
+        "ladder/score_vs_ci95_lo/{opponent}",
+        _m("fraction", "Lower end of that score rate's 95% bootstrap interval over seeds."),
+    ),
+    _pattern(
+        "ladder/score_vs_ci95_hi/{opponent}",
+        _m("fraction", "Upper end of that score rate's 95% bootstrap interval over seeds."),
+    ),
     _pattern("ladder/rating/{member}", _m("Elo", "One pool member's fitted rating.")),
     _pattern("ladder/rating_se/{member}", _m("Elo", "The standard error of that rating.")),
     _pattern(
@@ -579,11 +615,15 @@ RENAMED: dict[str, str] = {
 #: distinction lived in whichever function happened to fill a default. Declaring it here makes
 #: the row contract checkable: every other key must be present in every row.
 CONDITIONAL: dict[str, str] = {
-    # Written only when the pair was actually played. The learner is never evaluated under its
-    # own id -- every eval game is a snapshot against something -- so publishing the absent
-    # pair's 0.5 made "never played" indistinguishable from "even contest".
-    "ladder/score_vs_noop": "the learner-vs-anchor pair has games",
-    "ladder/score_vs_random_legal": "the learner-vs-anchor pair has games",
+    # Written only on the iterations that probed the live policy, which is none of them unless
+    # ladder.probe_every_iterations is set. Carrying the last probe's number forward would
+    # publish a score for weights that have moved since, and a 0.5 for a rung nobody played is
+    # indistinguishable from an even contest, which is what these two used to do.
+    "ladder/score_vs_noop": "a probe measured the live policy against this anchor this iteration",
+    "ladder/score_vs_random_legal": (
+        "a probe measured the live policy against this anchor this iteration"
+    ),
+    "ladder/probe_seconds_frac": "a probe has run in this run",
     # The same rule for the rest of the ladder group. Every one of these had a neutral value that
     # reads as a measurement: an Elo of zero, uncorrelated seats, a gate that cost nothing, a
     # perfectly transitive rating, and a learner exactly as good as the first snapshot.

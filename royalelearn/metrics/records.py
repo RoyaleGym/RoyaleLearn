@@ -29,6 +29,7 @@ from . import schema
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.schedule import ScheduleState
     from ..api.update import UpdateResult
+    from ..ladder.evaluate import Comparison
     from ..ladder.pool import LadderPool
 
 __all__ = [
@@ -308,12 +309,20 @@ def ladder_fields(
     gate_seconds_frac: float | None = None,
     learner_id: str = "learner",
     members: Iterable[str] | None = None,
+    rungs: Mapping[str, Comparison] | None = None,
+    probe_seconds_frac: float | None = None,
 ) -> dict[str, MetricValue]:
-    """The ``ladder/`` group: the fit, the pool's shape and the last gate.
+    """The ``ladder/`` group: the fit, the pool's shape, the last gate and the last probe.
 
     The per-member ratings are written for the members named, which is the sampler rather than
     the archive: an archive of five hundred would be five hundred columns a run after run, and
     every one of them is still in the result log where the fit can be redone.
+
+    ``rungs`` is the live policy's last probe, one comparison per scripted opponent, and it is
+    passed only on the iterations that ran one. Carrying the previous probe's numbers forward
+    would publish a score for weights that have since moved, and the whole reason these keys
+    were empty before the probe existed is that a number which lags the policy is worse than a
+    missing one: the absence is visible.
     """
     from ..ladder.gate import failed_condition
     from ..ladder.pool import SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL
@@ -347,29 +356,38 @@ def ladder_fields(
         fields["ladder/paired_rho"] = float(paired_rho)
     if gate_seconds_frac is not None:
         fields["ladder/gate_seconds_frac"] = float(gate_seconds_frac)
+    if probe_seconds_frac is not None:
+        fields["ladder/probe_seconds_frac"] = float(probe_seconds_frac)
     view = pool.eval_view()
-    # Emitted only when the pair was actually played. ``PairRecord.score_a`` answers 0.5 for a
-    # pair with no games (results.py), and 0.5 is also what a genuine draw looks like -- so an
-    # unplayed pair published as a number is indistinguishable from an even contest. Measured
-    # 2026-09-22: exactly 0.5 in all 124 metric rows on disk, including one run that had played
-    # 24 real evaluation battles, because the learner is never evaluated under its own id. Every
-    # eval game is snapshot-against-something (the gate hands ``snap:v{n}`` to the runner), so
-    # the ("learner", anchor) pair the reader asks for is one the evaluator cannot write.
+    # The two anchor keys, and the same score with its n and its interval for every rung the
+    # probe played. Both exist because the anchors are the two rungs a reader already knows by
+    # name and the older rows address them that way, while the family is what lets a run add a
+    # rung without adding a key nobody declared.
     #
-    # Keying the lookup to the latest snapshot instead is TEMPTING AND WRONG: it would report
-    # the most recently gated candidate rather than the live policy, and those diverge by the
-    # gate cadence -- 4,000,000 env steps on the shipped laptop profile. A number that silently
-    # lags the policy by that much is worse than an absent one, because the absence is visible.
-    # Making these real needs the live learner evaluated against the anchors, which is a new
-    # pairing and a cost per iteration rather than a rename; until that is decided, the honest
-    # row carries no score at all. ``alarms.py`` already guarantees a missing key never fires.
+    # These used to be read out of the result log, off the ("learner", anchor) pair, which is a
+    # pair no evaluator could write: every game in that log is a frozen snapshot against
+    # something, because the gate hands ``snap:v{n}`` to the runner. Measured 2026-09-22:
+    # exactly 0.5 in all 124 metric rows on disk -- the value ``PairRecord.score_a`` answers for
+    # a pair with no games, and also what a genuine even contest looks like -- including on a
+    # run that had played 24 real evaluation battles. Reading the latest SNAPSHOT's record
+    # instead would have been tempting and wrong: those weights lag the live policy by the
+    # candidate cadence, 4,000,000 env steps on the shipped laptop profile, and a number that
+    # silently lags by that much is worse than an absent one. So the score now comes from a
+    # measurement of the live policy or from nowhere. ``alarms.py`` guarantees that a missing
+    # key never fires.
+    for opponent, comparison in sorted((rungs or {}).items()):
+        rung = opponent.split(":", 1)[-1]
+        fields[f"ladder/score_vs/{rung}"] = float(comparison.score_a)
+        fields[f"ladder/score_vs_n/{rung}"] = int(comparison.n_seeds)
+        fields[f"ladder/score_vs_ci95_lo/{rung}"] = float(comparison.lo)
+        fields[f"ladder/score_vs_ci95_hi/{rung}"] = float(comparison.hi)
     for key, anchor in (
         ("ladder/score_vs_noop", SCRIPTED_NOOP),
         ("ladder/score_vs_random_legal", SCRIPTED_RANDOM_LEGAL),
     ):
-        pair = view.record(learner_id, anchor)
-        if pair.games:
-            fields[key] = pair.score_a
+        anchor_probe = (rungs or {}).get(anchor)
+        if anchor_probe is not None:
+            fields[key] = float(anchor_probe.score_a)
     fields["ladder/draw_rate_eval"] = (
         float(draw_rate_eval) if draw_rate_eval is not None else view.draw_rate()
     )
@@ -379,8 +397,17 @@ def ladder_fields(
         # is a snapshot against something, so ``rating.get(learner_id, 0.0)`` returned the default
         # and the key published MINUS the first snapshot's rating -- read as -93.9, -146.2,
         # -191.7 and -129.6 on one run, which looks like a learner falling behind its own opening
-        # snapshot and is nothing of the kind. It comes back when the live learner is evaluated
-        # under its own id.
+        # snapshot and is nothing of the kind.
+        #
+        # The probe does NOT bring it back, and that is a choice rather than an oversight. A
+        # probe names the live policy ``learner@{step}``, a player that exists for one moment,
+        # and its games are ``kind="probe"`` and outside the fit; putting them in would grow the
+        # fit by a column per probe, each too thinly played to place, and would let the rating
+        # scale move because the run measured itself. What this key wants instead is a rated
+        # player: the difference between the newest snapshot and v0 is that number, one gate
+        # cadence stale, and it is not this key. Until it is decided, the row carries the probe's
+        # score against the fixed rungs, which is a measurement of the live policy that needs no
+        # fit at all.
         learner_rating = ratings.rating.get(learner_id)
         v0_rating = ratings.rating.get(pool.v0 or "")
         if learner_rating is not None and v0_rating is not None:

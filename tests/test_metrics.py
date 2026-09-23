@@ -20,6 +20,7 @@ from royalelearn.api.rollout import EpisodeRecord
 from royalelearn.api.schedule import ScheduleState
 from royalelearn.api.update import UpdateResult
 from royalelearn.identity import EngineBuild, RunIdentity
+from royalelearn.ladder.evaluate import Comparison
 from royalelearn.ladder.pool import SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL, LadderPool
 from royalelearn.ladder.results import GameResult, ResultLog
 from royalelearn.metrics import schema
@@ -235,6 +236,41 @@ def _pool(tmp_path) -> LadderPool:
     return pool
 
 
+def _probe() -> dict[str, Comparison]:
+    """One probe of the live policy: a comparison per scripted rung.
+
+    The scores in a row come from here and not from the result log. The log holds games between
+    frozen snapshots, so the pair a reader asks about -- the live policy against an anchor -- is
+    one no evaluator ever wrote, and reading it answered 0.5 for "never played".
+    """
+    return {
+        SCRIPTED_NOOP: Comparison(
+            a="learner@4000000",
+            b=SCRIPTED_NOOP,
+            n_seeds=20,
+            n_games=40,
+            score_a=0.975,
+            lo=0.93,
+            hi=1.0,
+            rho=0.12,
+            draw_rate=0.05,
+            seed_scores=(),
+        ),
+        SCRIPTED_RANDOM_LEGAL: Comparison(
+            a="learner@4000000",
+            b=SCRIPTED_RANDOM_LEGAL,
+            n_seeds=20,
+            n_games=40,
+            score_a=0.7,
+            lo=0.58,
+            hi=0.81,
+            rho=0.2,
+            draw_rate=0.1,
+            seed_scores=(),
+        ),
+    }
+
+
 def _row(tmp_path) -> dict:
     pool = _pool(tmp_path)
     state = ScheduleState(
@@ -261,6 +297,8 @@ def _row(tmp_path) -> dict:
             paired_rho=0.31,
             gate_seconds_frac=0.04,
             decision=_decision(),
+            rungs=_probe(),
+            probe_seconds_frac=0.02,
         ),
     )
     return metrics.row()
@@ -287,6 +325,9 @@ def test_the_ladder_group_leaves_out_what_it_has_not_measured(tmp_path) -> None:
         "ladder/rating_above_v0",
         "ladder/gate_observed_rate",
         "ladder/gate_lower_bound",
+        "ladder/score_vs_noop",
+        "ladder/score_vs_random_legal",
+        "ladder/probe_seconds_frac",
     ):
         assert key not in bare, key
     # The pool's own shape is not conditional: it is known from the moment the run starts.
@@ -334,6 +375,8 @@ def test_the_patterned_families_are_matched(tmp_path) -> None:
     assert "env/reward_terms/tower_damage" in row
     assert "ladder/rating/snap:v0" in row
     assert "ladder/rating_ci95_lo/learner" in row
+    assert "ladder/score_vs/random_legal" in row
+    assert "ladder/score_vs_ci95_hi/noop" in row
 
 
 # -- the arithmetic ----------------------------------------------------------
@@ -493,8 +536,16 @@ def test_the_ladder_fields_read_the_fit_and_the_log(tmp_path) -> None:
     fields = ladder_fields(pool, ratings=pool.ratings, elo=1240.0)
     assert fields["ladder/rating_above_v0"] == pytest.approx(120.0)
     assert fields["ladder/champion_id"] == "snap:v0"
-    assert fields["ladder/score_vs_noop"] == 1.0
-    assert fields["ladder/score_vs_random_legal"] == 1.0
+    assert "ladder/score_vs_noop" not in fields, (
+        "the anchor scores come from a probe of the live policy, never from the log: the log's "
+        "games are all snapshot-against-something"
+    )
+    probed = ladder_fields(pool, ratings=pool.ratings, rungs=_probe(), probe_seconds_frac=0.02)
+    assert probed["ladder/score_vs_noop"] == pytest.approx(0.975)
+    assert probed["ladder/score_vs_random_legal"] == pytest.approx(0.7)
+    assert probed["ladder/score_vs_n/random_legal"] == 20
+    assert probed["ladder/score_vs_ci95_lo/random_legal"] == pytest.approx(0.58)
+    assert probed["ladder/probe_seconds_frac"] == pytest.approx(0.02)
     assert fields["ladder/transitivity_residual"] == pytest.approx(0.02)
     assert fields["ladder/rating_ci95_hi/learner"] > fields["ladder/rating/learner"]
     assert fields["ladder/gate_failed_condition"] == "none"
