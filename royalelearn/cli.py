@@ -20,7 +20,7 @@ import contextlib
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--config", type=Path, default=None)
     bench.add_argument("--profile", default="laptop", choices=PROFILE_NAMES)
     bench.add_argument("--seconds", type=float, default=60.0)
+    bench.add_argument("--iterations", type=int, default=3)
     bench.set_defaults(handler=_bench)
 
     train = commands.add_parser("train", help="a new run")
@@ -376,44 +377,78 @@ def _timesteps_for(config: RunConfig, iterations: int) -> int:
     return max(1, iterations) * config.ppo.timesteps_per_iteration
 
 
+def bench_report(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    env_steps_per_iteration: int,
+    codec_us: float,
+    ratio_atol: float,
+) -> dict[str, Any]:
+    """The table, from the rows an iteration wrote. Pure arithmetic, so a test can grade it.
+
+    ``update_timesteps_per_second`` is the LAST iteration's own transitions over its own update
+    seconds. It used to divide ``run/cumulative_timesteps``, which counts everything collected
+    since the process started, by that one iteration's update time, so a bench of three
+    iterations reported about three times the truth and the single-iteration case hid it. A
+    throughput a reader will quote has to be a rate over one thing.
+    """
+    row = rows[-1]
+    timesteps = float(row["run/cumulative_timesteps"])
+    if len(rows) > 1:
+        timesteps -= float(rows[-2]["run/cumulative_timesteps"])
+    return {
+        "iterations": len(rows),
+        "env_ms_per_game_step": (
+            1000.0 * float(row["time/env"]) / max(1, env_steps_per_iteration)
+        ),
+        "codec_us_per_row": codec_us,
+        "boundary_mb_per_second": float(row["throughput/boundary_mb_per_second"]),
+        "inference_ms_per_round": float(row["throughput/inference_ms_per_round"]),
+        "update_timesteps_per_second": timesteps / max(1e-9, float(row["time/update"])),
+        "rollout_capacity_ratio": float(row["throughput/rollout_capacity_ratio"]),
+        "vram_peak_mb": float(row["health/vram_peak_mb"]),
+        "ratio_max_abs_dev": float(row["ppo/ratio_max_abs_dev"]),
+        "ratio_atol": ratio_atol,
+    }
+
+
 def _bench(args: argparse.Namespace) -> int:
     """Measure section 2.3's table for THIS machine, and print it.
 
-    Nothing here is asserted. The numbers are the machine's, and what the table is for is
-    deciding two things on it: whether a second shard is worth its thread, and whether the
+    Nothing here is asserted: the numbers are the machine's. What the table answers is whether the
     harness is still comfortably faster than the learner it feeds.
+
+    What it does NOT answer, though the spec and this docstring both used to say it did, is
+    whether a second shard is worth its thread. Nothing here separates the shards, and an honest
+    answer needs two runs of this command with ``rollout.shards_per_worker`` at 1 and at 2 on a
+    quiet machine, compared on collection seconds. Saying it here and not doing it sent a reader
+    looking for a line that was never printed.
+
+    ``--seconds`` is a lower bound, checked between iterations and never inside one, and the loop
+    stops at ``--iterations`` whatever the clock says. On the laptop profile one iteration is
+    already past the default deadline, so the default is one iteration.
     """
     config = _config_of(args)
     deadline = time.perf_counter() + max(1.0, args.seconds)
+    cap = max(1, int(args.iterations))
     with _coordinator(config) as run:
-        iterations = 0
-        while time.perf_counter() < deadline:
+        while len(run.rows) < cap:
             run.iterate()
-            iterations += 1
-            if iterations >= 3:
+            if time.perf_counter() >= deadline:
                 break
-        row = run.rows[-1]
         geo = run.geometry
-        env_steps = geo.cycles * geo.n_battles
-        codec_us = _codec_microseconds(run)
-        report = {
-            "iterations": iterations,
-            "env_ms_per_game_step": 1000.0 * float(row["time/env"]) / max(1, env_steps),
-            "codec_us_per_row": codec_us,
-            "boundary_mb_per_second": float(row["throughput/boundary_mb_per_second"]),
-            "inference_ms_per_round": float(row["throughput/inference_ms_per_round"]),
-            "update_timesteps_per_second": (
-                float(row["run/cumulative_timesteps"]) / max(1e-9, float(row["time/update"]))
-            ),
-            "rollout_capacity_ratio": float(row["throughput/rollout_capacity_ratio"]),
-            "vram_peak_mb": float(row["health/vram_peak_mb"]),
-            "ratio_max_abs_dev": float(row["ppo/ratio_max_abs_dev"]),
-            "ratio_atol": float(
-                config.ppo.ratio_atol.get(config.net.autocast_dtype, float("nan"))
-            ),
-        }
+        report = bench_report(
+            run.rows,
+            env_steps_per_iteration=geo.cycles * geo.n_battles,
+            codec_us=_codec_microseconds(run),
+            ratio_atol=float(config.ppo.ratio_atol.get(config.net.autocast_dtype, float("nan"))),
+        )
     for name, value in report.items():
         print(f"{name:<32} {value:.6g}" if isinstance(value, float) else f"{name:<32} {value}")
+    print(
+        "\npaste the block above into docs/throughput.md under a dated heading; "
+        "nothing writes that page for you"
+    )
     return 0
 
 

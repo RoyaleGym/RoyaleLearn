@@ -95,24 +95,27 @@ spawning, nothing is warm. The README records the first collection round of one 
 seconds and the second at 19 seconds, on 2026-09-22. Wait for the second iteration before you
 believe any timing.
 
-### Known defects in bench, confirmed in the code on 2026-09-22
+### What was wrong with bench, and what is left
 
-The train session reported these. All four are visible in `royalelearn/cli.py`.
+The train session reported four defects on 2026-09-22. Two are fixed, and two were true statements
+about a command that had promised more than it did, so the promise went instead.
 
-1. **It writes no page.** `docs/harness-spec.md` section 14.3 says `bench` writes the "measured on"
-   block in `docs/throughput.md`. It does not. It prints to the terminal and writes no
-   documentation file. Nothing in the repo writes this page; it is maintained by hand.
-2. **There is no shard verdict.** The function's own docstring says the table is for deciding
-   "whether a second shard is worth its thread". None of the ten printed lines separates the
-   shards. To answer that question you run `bench` twice, with `rollout.shards_per_worker` at 1
-   and at 2, and compare collection seconds yourself.
-3. **`update_timesteps_per_second` is inflated when more than one iteration runs.** It divides
-   `run/cumulative_timesteps`, which counts every transition collected since the process started,
-   by the **last** iteration's update seconds alone. Two iterations give roughly twice the truth,
-   three roughly three times. The single-iteration value is right.
-4. **`--seconds` is only read between iterations.** It never interrupts one in progress, and the
-   loop stops after three iterations whatever you pass. On the `laptop` profile the default of 60
-   seconds gets you exactly one iteration, because one iteration is already past the deadline.
+1. **It writes no page, and now it does not claim to.** The spec said `bench` writes the "measured
+   on" block here. It never did, and it should not: this page is kept by hand, and a command that
+   overwrote it would lose the prose around the numbers. `bench` prints the block and says to paste
+   it under a dated heading. The spec says that now too.
+2. **There is still no shard verdict, and the docstring no longer promises one.** Nothing in
+   `bench` separates the shards. To answer whether a second shard is worth its thread, run `bench`
+   twice on a quiet machine with `rollout.shards_per_worker` at 1 and at 2 and compare collection
+   seconds. Under about 10%, set it to 1 and spend the thread on a worker.
+3. **FIXED.** `update_timesteps_per_second` divided every transition collected since start-up by
+   the last iteration's update seconds, so three iterations reported about three times the truth
+   while one iteration was right, which is what kept it hidden. It is now that iteration's own
+   transitions over its own update seconds. `tests/test_bench_report.py` grades the arithmetic.
+4. **Documented rather than changed.** `--seconds` is a lower bound, checked between iterations and
+   never inside one. The loop now stops at `--iterations` (default 3) instead of a hard-coded three,
+   so a longer measurement is a flag rather than an edit. On the `laptop` profile one iteration is
+   already past the 60-second default, so the default is one iteration.
 
 ## The two halves, in the numbers the harness records
 
