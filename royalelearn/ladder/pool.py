@@ -225,12 +225,19 @@ class LadderPool:
         """How many ids a pool loaded from an older checkpoint must already have issued.
 
         Format 1 did not store the counter. Every name it did store is evidence, so the count is
-        read back from the highest ``snap:v{n}`` this pool has ever mentioned -- its members, the
-        ones it evicted and the chain of champions -- rather than from its current size, which an
-        eviction would have made too small.
+        read back from the highest ``snap:v{n}`` this pool has ever mentioned rather than from its
+        current size, which an eviction would have made too small.
+
+        The pool's own registers are not enough. A candidate the gate REJECTED is never added, so
+        it appears in no member list, no eviction list and no champion chain -- and its name was
+        spent all the same, on the games the gate played to reject it. Those games are in the
+        result log under that id, which is the only place a rejected candidate is remembered, so
+        the log is read too. Reported by the integrator, whose probe reproduced a backfill one
+        too low with a control that passed.
         """
         highest = -1
         names = set(self.members()) | set(self.state.evicted) | set(self.state.champion_chain)
+        names |= set(self.results.view(kind=None).players())
         for name in names:
             if not name.startswith("snap:v"):
                 continue

@@ -10,7 +10,7 @@ from __future__ import annotations
 import msgspec
 
 from royalelearn.ladder.pool import LadderPool, PoolState
-from royalelearn.ladder.results import ResultLog
+from royalelearn.ladder.results import GameResult, ResultLog
 
 
 def _pool(tmp_path, folder: str = "ladder") -> LadderPool:
@@ -58,6 +58,47 @@ def test_an_older_checkpoint_reads_its_count_back_from_the_names_it_holds(tmp_pa
     resumed = _pool(tmp_path, folder="resumed")
     resumed.load_checkpoint(tmp_path / "checkpoint")
     assert resumed.issue_candidate_id() == "snap:v4"
+
+
+def test_an_older_checkpoint_counts_a_candidate_the_gate_rejected(tmp_path) -> None:
+    """A rejected candidate is in no register the pool keeps, and its name was spent anyway.
+
+    It is never added, so it is not a member, was never evicted and never became champion. The
+    only trace it leaves is the games the gate played to reject it, which are in the result log
+    under its id. A backfill that read the pool's own lists alone would hand that name out again,
+    and the log would then hold two players under one id.
+    """
+    pool = _pool(tmp_path)
+    kept = pool.issue_candidate_id()
+    pool.add(kept, step=0)
+    rejected = pool.issue_candidate_id()  # the gate auditions it and says no
+    pool.record(
+        [
+            GameResult(
+                a=rejected,
+                b=kept,
+                score_a=0.0,
+                seed_index=index,
+                side_a="blue",
+                context="ctx",
+                kind="eval",
+                run_id="run",
+                iteration=1,
+                wall="",
+            )
+            for index in range(4)
+        ]
+    )
+    pool.save_checkpoint(tmp_path / "checkpoint")
+
+    state_path = tmp_path / "checkpoint" / "champion.json"
+    document = msgspec.json.decode(state_path.read_bytes())
+    document.pop("snapshots_issued")
+    state_path.write_bytes(msgspec.json.encode(document))
+
+    resumed = _pool(tmp_path)
+    resumed.load_checkpoint(tmp_path / "checkpoint")
+    assert resumed.issue_candidate_id() == "snap:v2", "it handed out the rejected name again"
 
 
 def test_the_counter_counts_names_handed_out_and_not_snapshots_kept(tmp_path) -> None:
