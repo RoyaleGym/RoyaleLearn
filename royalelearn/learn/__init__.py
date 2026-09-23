@@ -57,6 +57,7 @@ _EXPORTS: dict[str, str] = {
     "resolve_dtype": ".nets",
     "standardise": ".ppo",
     "surrogate": ".ppo",
+    "value_error": ".ppo",
 }
 
 __all__ = sorted(_EXPORTS)
