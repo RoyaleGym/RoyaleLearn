@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from .plan import SlotPlanner
 
 __all__ = [
+    "PATIENT_READY",
     "RANDOM_LEGAL_NOOP_PROB",
     "SCRIPTED_NAMES",
     "ScriptedSeats",
@@ -36,12 +37,23 @@ __all__ = [
 #: The scripted opponents a run may be assigned, in the order ``opponent_ix`` indexes them.
 #: The order is part of the protocol -- the parent sends an index and the worker looks it up --
 #: so a new opponent is appended rather than inserted.
-SCRIPTED_NAMES: tuple[str, ...] = ("noop", "random_legal")
+SCRIPTED_NAMES: tuple[str, ...] = (
+    "noop",
+    "random_legal",
+    "first_affordable",
+    "defend",
+    "push",
+    "patient",
+)
 
 #: ``RandomLegalOpponent``'s share of no-ops. Uniform over the whole action space takes the
 #: no-op essentially never and plays a card the instant one is affordable, which is a strange
 #: thing to learn against; at nine in ten it plays at about a human's rate.
 RANDOM_LEGAL_NOOP_PROB = 0.9
+
+#: How many decisions ``PatientOpponent`` waits before it commits. RoyaleGym's own ladder uses
+#: three, and this is the same number rather than a second opinion about it.
+PATIENT_READY = 3
 
 
 def scripted_id(name: str) -> str:
@@ -50,13 +62,37 @@ def scripted_id(name: str) -> str:
 
 
 def build_opponent(name: str) -> Any:
-    """One of ``SCRIPTED_NAMES`` as a ``royalegym.selfplay.Opponent``."""
+    """One of ``SCRIPTED_NAMES`` as a ``royalegym.selfplay.Opponent``.
+
+    A FRESH object every call. Several of these keep no state today and one of them may
+    tomorrow, and the same instance handed to eight environments is a shared mutable the rest of
+    this package refuses.
+
+    The four beyond the two anchors are RoyaleGym's: a floor that is not random play, and three
+    one-sentence strategies. They are here so that a run can be judged against something that
+    plays, rather than only against a bot that never plays and a bot that plays at random. Which
+    of them a run actually draws is the mixture's business; this function only says they exist.
+    """
+    from royalegym.opponents import (
+        DefendOpponent,
+        FirstAffordableOpponent,
+        PatientOpponent,
+        PushOpponent,
+    )
     from royalegym.selfplay import NoopOpponent, RandomLegalOpponent
 
     if name == "noop":
         return NoopOpponent()
     if name == "random_legal":
         return RandomLegalOpponent(noop_prob=RANDOM_LEGAL_NOOP_PROB)
+    if name == "first_affordable":
+        return FirstAffordableOpponent()
+    if name == "defend":
+        return DefendOpponent()
+    if name == "push":
+        return PushOpponent()
+    if name == "patient":
+        return PatientOpponent(ready=PATIENT_READY)
     raise KeyError(f"scripted opponent {name!r} is not one of {', '.join(SCRIPTED_NAMES)}")
 
 
