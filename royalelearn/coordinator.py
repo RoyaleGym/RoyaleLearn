@@ -403,6 +403,16 @@ CheckpointComponents = dict[str, Checkpointable]
 # ---------------------------------------------------------------------------
 
 
+def _is_publisher(value: Any) -> bool:
+    """Is this a viewer publisher rather than a yes-or-no?
+
+    Duck-typed on ``publish`` rather than imported and isinstance-d, because importing
+    ``royalegym.viser`` here would pull the viewer into every process that builds a player,
+    including the ones that never publish.
+    """
+    return value is not True and value is not False and hasattr(value, "publish")
+
+
 class PolicyProbe:
     """What the policy did, measured on a bounded sample of the iteration's own cells.
 
@@ -676,7 +686,7 @@ class EnvBattlePlayer:
         device: Any = "cpu",
         release_mode: str = "stochastic",
         max_decisions: int = 2000,
-        viser: bool = False,
+        viser: Any = False,
     ) -> None:
         self.spec = spec
         self.factory_spec = factory_spec
@@ -686,9 +696,18 @@ class EnvBattlePlayer:
         self.device = device
         self.release_mode = release_mode
         self.max_decisions = int(max_decisions)
-        #: Whether this battle carries the viewer's state stream. One vec env in a process may:
-        #: the publisher binds one fixed UDP port, so a second would be an OSError.
-        self.viser = bool(viser)
+        #: Whether this battle carries the viewer's state stream, or the publisher that carries
+        #: it. One vec env in a process may: the publisher binds one fixed UDP port, so a second
+        #: would be an OSError.
+        #:
+        #: A ``ViserPublisher`` here is used as given. That is how a caller outside this repo
+        #: puts a publisher of its own in the path -- one that PACES, for instance. A battle is
+        #: simulated far faster than it is played, and the viewer keeps only the newest datagram,
+        #: so an unpaced stream is sampled and the battle jumps; the fix is a publisher whose
+        #: publish sleeps to the next slot. Pacing is a property of watching rather than of
+        #: playing, so it belongs to whoever is watching and not here. Anything else is read as
+        #: a bool and means what it meant before: build the publisher from the environment.
+        self.viser = viser if _is_publisher(viser) else bool(viser)
         self.battles = 0
         self._env: Any = None
         self._vec: Any = None
@@ -703,7 +722,8 @@ class EnvBattlePlayer:
         """
         if self._env is None:
             if self.viser:
-                self._vec = self.factory_spec.build_vec(1, self.extra_modules, viser="env")
+                given = self.viser if _is_publisher(self.viser) else "env"
+                self._vec = self.factory_spec.build_vec(1, self.extra_modules, viser=given)
                 self._env = self._vec.envs[0]
             else:
                 self._env = self.factory_spec.factory(self.extra_modules)()

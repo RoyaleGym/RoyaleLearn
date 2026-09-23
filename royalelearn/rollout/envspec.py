@@ -162,14 +162,17 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         num_games: int,
         extra_modules: tuple[str, ...] = (),
         *,
-        viser: str | None = None,
+        viser: Any = None,
         autoreset_seed_fn: Any = None,
     ) -> ClashSelfPlayVecEnv:
         """``ClashSelfPlayVecEnv(num_games)`` built from this spec.
 
         ``viser`` defaults to None -- no publisher -- because exactly one vec env in a run
         carries the viewer's state stream and the farm is what decides which (section 7.7); a
-        second env binding the same UDP port raises at construction.
+        second env binding the same UDP port raises at construction. ``"env"`` builds one from
+        the environment, and a ``ViserPublisher`` is passed through as given, which is how a
+        caller supplies one of its own: a paced publisher, for instance, since a battle is
+        simulated faster than it is watched.
         """
         from royalegym.env import ClashSelfPlayVecEnv
 

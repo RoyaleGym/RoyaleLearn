@@ -111,3 +111,60 @@ def test_a_card_never_affordable_has_no_rate_rather_than_a_zero(tmp_path) -> Non
     assert fields["policy/card_legal_frac/3"] == pytest.approx(0.0)
     assert "policy/card_play_rate/3" not in fields
     assert fields["policy/card_in_hand_frac/3"] == pytest.approx(1.0)
+
+
+class _Publisher:
+    """Stands in for a ViserPublisher: the player duck-types on ``publish``."""
+
+    attached = False
+
+    def __init__(self) -> None:
+        self.published: list[object] = []
+
+    def publish(self, *args: object, **kwargs: object) -> None:
+        self.published.append(args)
+
+
+def _player(viser: object):
+    """Through the real constructor, because the coercion under test is IN it.
+
+    The first version of this built the object with ``__new__`` and assigned the attribute, so
+    it passed with the old ``bool(viser)`` still in place: it tested the assignment rather than
+    the constructor. A plant proves nothing unless it is on the line the test depends on.
+    """
+    from royalelearn.coordinator import EnvBattlePlayer
+
+    return EnvBattlePlayer(
+        spec=None,
+        factory_spec=None,
+        actors=lambda _name: None,
+        master_seed=0,
+        viser=viser,
+    )
+
+
+def test_the_player_keeps_a_publisher_it_is_given() -> None:
+    """A caller outside this repo puts its own publisher in the path, and pacing is why.
+
+    A battle is simulated far faster than it is watched and the viewer keeps only the newest
+    datagram, so an unpaced stream is sampled and the battle jumps. The fix is a publisher whose
+    publish sleeps to the next slot, and that belongs to whoever is watching rather than to the
+    learner. Before this, ``player.viser`` was coerced with ``bool()`` and there was nowhere to
+    put one.
+    """
+    from royalelearn.coordinator import _is_publisher
+
+    publisher = _Publisher()
+    assert _is_publisher(publisher)
+    player = _player(publisher)
+    assert player.viser is publisher
+
+
+def test_a_bool_still_means_what_it_meant() -> None:
+    """True builds the publisher from the environment; False publishes nothing."""
+    from royalelearn.coordinator import _is_publisher
+
+    assert not _is_publisher(True)
+    assert not _is_publisher(False)
+    assert not _is_publisher(1), "a truthy number is a bool's business, not a publisher's"
+    assert not _is_publisher(None)
