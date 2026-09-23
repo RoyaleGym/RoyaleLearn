@@ -194,6 +194,21 @@ class CommittedElixirPotential(PotentialReward):
         return (self._committed(state, team) - self._committed(state, 1 - team)) / self._scale
 
     def _committed(self, state: BattleState, team: int) -> Fraction:
+        """The bar plus the board. What it cannot see is a spell in FLIGHT, and that is fine.
+
+        ``BattleState.spells`` is a separate list from ``entities`` -- a spell between its cast
+        and its effect has no entity and stands on no tile -- so for those few ticks its elixir
+        is in neither the bar nor this sum, and the side that cast it reads as having lost that
+        much ground. It telescopes: potential-based shaping pays ``gamma*Phi(s') - Phi(s)``, so
+        a dip and its recovery cancel to within one discount factor, and once the spell resolves
+        the elixir really is spent and really is worth nothing, which is the steady state this
+        term already reports. A card that RELEASES units is not affected at all: what it leaves
+        behind are ordinary entities filed under the releasing card's own catalogue id.
+
+        Confirmed with the gym session on 2026-09-22 rather than assumed; the same structural
+        split is why the planned card-identity planes leave a spell in flight off the board too,
+        which keeps the two readings consistent with each other.
+        """
         total = Fraction(state.players[team].elixir_milli, ELIXIR_MILLI)
         for entity in state.entities:
             if entity.team != team or entity.kind in TOWER_KINDS:

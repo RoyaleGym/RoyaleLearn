@@ -238,7 +238,18 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
             "kl_dead",
             lambda kl: kl < config.kl_dead,
             patience=10,
-            meaning="nothing is moving: dead entropy, a rate too low, or a frozen head",
+            # The fourth cause is the one that had nobody looking for it, and it is the one this
+            # run actually had: with ppo.adam_eps at its default 1e-5, most of the actor's second
+            # moments sit under the floor, Adam stops normalising, and the step is lr*m/eps --
+            # proportional to a gradient that is already small. Measured 99.2% of actor
+            # parameters on a run whose KL was 1e-5 and whose clip never bound. Reading
+            # ppo/adam_eps_floor_frac_actor separates that from a rate that is merely low,
+            # because the remedy is the opposite end of the optimizer.
+            meaning=(
+                "nothing is moving: dead entropy, a rate too low, a frozen head, or an actor "
+                "under the Adam eps floor -- read ppo/adam_eps_floor_frac_actor, and if it is "
+                "high lower ppo.adam_eps rather than raising lr_actor"
+            ),
         ),
         MetricAlarm(
             "ev_negative",
