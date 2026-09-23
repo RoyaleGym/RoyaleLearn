@@ -339,6 +339,20 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: decision.
     release_mode: str = "stochastic"
     refit_every_iterations: int = 10
+    #: Iterations between probes of the LIVE policy against the fixed rungs below. Zero is off,
+    #: and off is the default: a probe plays real battles in the parent, so turning it on costs
+    #: wall clock that no existing run was paying. Every other evaluation in the harness is a
+    #: frozen snapshot against something, which is why without this a run publishes no
+    #: measurement of the policy it is actually training.
+    probe_every_iterations: int = 0
+    #: Battles per rung per probe, paired: ``probe_games // 2`` seeds, each played from both
+    #: sides. At 40 the 95% interval on a score rate is about ten points wide, which is enough
+    #: to see a collapse and not enough to see a small improvement; that is the trade a probe is
+    #: for, and the gate is what measures small improvements.
+    probe_games: int = 40
+    #: The rungs. Scripted ids, because the point of a rung is that it never changes: a snapshot
+    #: improves with the pool and a score against it says nothing on its own.
+    probe_opponents: tuple[str, ...] = ("scripted:noop", "scripted:random_legal")
     gate: GateConfig = GateConfig()
     rater: RaterConfig = RaterConfig()
 
@@ -691,6 +705,49 @@ def profile(name: str) -> RunConfig:
 # --------------------------------------------------------------------------
 
 
+def _probe_problems(ladder: LadderConfig) -> list[str]:
+    """Everything wrong with the live-policy probe's settings.
+
+    The opponent names are checked whether or not the probe is on: a name is either one of the
+    scripted opponents or a typo, and a typo caught at the first probe is caught an hour into a
+    run rather than before it starts. The counts are checked only when the probe is on. They
+    describe battles that will be played, and holding a run that never probes to them would
+    make these new fields change what an existing config is allowed to say.
+    """
+    from .rollout.scripted import SCRIPTED_NAMES, scripted_id
+
+    known = tuple(scripted_id(name) for name in SCRIPTED_NAMES)
+    problems = [
+        f"ladder.probe_opponents names {opponent!r}, which is not one of {', '.join(known)}"
+        for opponent in ladder.probe_opponents
+        if opponent not in known
+    ]
+    if ladder.probe_every_iterations < 0:
+        problems.append(
+            f"ladder.probe_every_iterations {ladder.probe_every_iterations} is negative; 0 is "
+            "how a run says it does not probe"
+        )
+    if ladder.probe_every_iterations <= 0:
+        return problems
+    if not ladder.probe_opponents:
+        problems.append(
+            "ladder.probe_every_iterations asks for a probe and ladder.probe_opponents is "
+            "empty, so every probe would measure nothing"
+        )
+    if ladder.probe_games < 2:
+        problems.append(
+            f"ladder.probe_games {ladder.probe_games} is below the two battles a paired "
+            "comparison is: one seed, played from both sides"
+        )
+    elif ladder.probe_games // 2 > ladder.eval_seed_count:
+        problems.append(
+            f"ladder.probe_games {ladder.probe_games} needs {ladder.probe_games // 2} of the "
+            f"{ladder.eval_seed_count} frozen evaluation seeds; raise ladder.eval_seed_count, "
+            "or probe fewer battles"
+        )
+    return problems
+
+
 def check_consistency(config: RunConfig) -> list[str]:
     """Everything wrong with a config, in one list.
 
@@ -751,6 +808,7 @@ def check_consistency(config: RunConfig) -> list[str]:
         problems.append("ladder.max_resident_opponents must be at least 1")
     if config.ladder.rater.draws not in ("davidson", "half_win"):
         problems.append(f"ladder.rater.draws {config.ladder.rater.draws!r} is not a draw model")
+    problems.extend(_probe_problems(config.ladder))
     if config.checkpoint.keep < 1:
         problems.append("checkpoint.keep must be at least 1")
     if config.determinism.tier not in TIERS:

@@ -148,6 +148,12 @@
     "eval_seed_count": 500,
     "release_mode": "stochastic",
     "refit_every_iterations": 10,
+    "probe_every_iterations": 0,
+    "probe_games": 40,
+    "probe_opponents": [
+      "scripted:noop",
+      "scripted:random_legal"
+    ],
     "gate": {
       "champion_games": 1000,
       "champion_lower_bound": 0.52,
