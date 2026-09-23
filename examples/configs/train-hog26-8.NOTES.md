@@ -34,3 +34,30 @@ the shape of the cost rather than as constants:
 The last one is the one that bites. It is a projection made at start-up, and a run that begins with
 headroom and loses it two hours later dies two hours later. Watch free memory for the whole run,
 not at the door.
+
+## Is one ladder candidate enough? Yes, because the ladder is not this run's instrument
+
+A reader will see 493 iterations producing exactly one unconditional admission and reasonably ask
+whether the ladder did anything. It did not, and that is deliberate.
+
+**The question this run asks is whether the policy keeps becoming less uniform if it is allowed to
+run long enough.** Every run before it stopped at 147 iterations or fewer. The instruments for that
+question are:
+
+    ppo/logit_std                     the spread of the masked logits over choosing rows
+    1 - ppo/entropy_normalised        the entropy deficit, the same quantity seen worse
+    ladder/score_vs_random_legal      20 probes, an ABSOLUTE signal against a fixed opponent
+
+None of the three depends on the pool. The probe plays a scripted opponent that never changes, so
+it measures the policy against a fixed yardstick rather than against its own history.
+
+**What the ladder would add is a different question** — whether the policy beats its own past
+selves — and that one needs a populated pool and real gates, which is a run that costs twice this
+one. Asking it before knowing whether the policy improves at all is the wrong order.
+
+So the single admission is a side effect worth having rather than a measurement: it is the first
+snapshot this project has ever admitted, and the pool-dependent machinery downstream of it has
+never run with a member in place. Getting one in costs nothing here.
+
+**Read the learning curve, not the ladder.** If `logit_std` is still climbing at iteration 493 the
+run should be longer; if it has flattened, that is the answer and no gate would have told you.
