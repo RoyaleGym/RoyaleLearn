@@ -116,6 +116,28 @@ jobs:
           ROYALESIM_DATA_DIR: ${{ github.workspace }}/RoyaleSim/data
         run: pytest -q -p no:randomly
 
+      # The 26 tests the default selection leaves out, ON THE SAME CLEAN RUNNER. Until
+      # 2026-09-23 these ran nowhere automatically: they are slow-marked, so CI skipped them by
+      # design, and they only executed when a maintainer typed `-m slow` by hand. That meant the
+      # RESUME GUARANTEE -- spec 12.4, a run comes back byte for byte in a fresh process -- had
+      # no automated coverage at all.
+      #
+      # A runner is also the only environment they are reliable in. Three of them refuse when a
+      # sibling checkout's `git describe` changes between the original run and the resume, which
+      # is a correct refusal and happens routinely on a development box where seven sessions
+      # share five repositories. A clean runner has nothing else moving.
+      #
+      # `continue-on-error` because they spawn processes and build environments and have never
+      # run here: a red in this step should not take a green suite down with it on the first
+      # night. Remove it once the step has been green for a while -- an allowed failure that
+      # stays allowed is a step nobody reads.
+      - name: slow suite
+        working-directory: RoyaleLearn
+        continue-on-error: true
+        env:
+          ROYALESIM_DATA_DIR: ${{ github.workspace }}/RoyaleSim/data
+        run: pytest -q -p no:randomly -m "slow and not engine"
+
       # Counts are never recorded without the build digest: a number with no build behind it
       # cannot be compared with the next one.
       - name: record what this run was
