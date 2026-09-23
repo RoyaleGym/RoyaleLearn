@@ -279,7 +279,11 @@
       "prior_sd": 400.0,
       "anchor": "scripted:noop",
       "draws": "davidson"
-    }
+    },
+    "probe_opponents": [
+      "scripted:random_legal"
+    ],
+    "probe_every_iterations": 10
   },
   "checkpoint": {
     "every_env_steps": 50000,
