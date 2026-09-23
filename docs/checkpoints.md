@@ -372,6 +372,11 @@ and expect the opponents to come with it.
 ## Rough edges, honestly
 
 - There is no way to resume inside an episode, and no plan to add one written down here.
+- A checkpoint directory that will not delete does not stop the run. Windows holds a file
+  open a moment longer than you expect, the prune fails, and the entry stays in the index so
+  nothing is lost -- but the directory stays on disk. That used to be entirely silent. It now
+  shows up as `health/housekeeping_failures` in the metric row, with the kind `prune` beside
+  it, so a run that is quietly accumulating directories says so.
 - `checkpoint.include_buffer` exists in the config and nothing reads it.
 - Checkpoint sizes on this page are one measurement of one run at the default network on
   2026-09-22. Bigger profiles use bigger networks, so scale accordingly rather than trusting 10.5 MB.
