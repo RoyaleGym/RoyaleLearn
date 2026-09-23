@@ -41,3 +41,31 @@ Gym verified three things, and the second is the one that would have wasted the 
 "any_tap"}` in a resumed run — had it been omitted, a resume would have silently reverted to the
 default action space and the failure would have read as "the intervention did not work" rather
 than as a config bug; and `n_actions` is identical under both.
+
+## CONDITIONAL: measure before spending the slot on this
+
+**Do not run this arm until the relocation rate has been measured on the POLICY'S OWN TAPS.**
+
+Every relocation figure so far — 51.7% of 3x3 taps moving, 15.0% losing the chosen tile — is a
+uniform sweep over legal tiles. This policy is not uniform and is getting less so:
+
+    policy/tile_top1_share        0.137 -> 0.170    one tile is 17% of ALL plays
+    policy/card_tile_top10_share  0.234 -> 0.348    top ten (card, tile) pairs are 35%
+    policy/tile_entropy            4.52 ->  3.95
+
+So 15% is a property of the board, not of this agent. If its favoured building tiles are ones a
+3x3 does not fit, the mechanism is far larger than 15% here; if they are open ground, it is far
+smaller and this arm would spend eight hours on a non-effect.
+
+`TraceStep` now carries `landed` — the RESOLVED deploy position, parallel to `commands` — as of
+RoyaleGym 92f8a49. So the measurement is: record a trace from hog26-8's final checkpoint, compare
+each command against its `landed`, and get the loss rate on the distribution the policy actually
+taps. That is minutes against this run's eight hours.
+
+**Run this arm if that rate is materially above zero. If it is near zero, relocation is not what
+suppresses Cannon here and the reward becomes the candidate** — a potential over committed elixir
+counts board entities, and a spell never becomes one.
+
+(Gym's note on why the card behind a step cannot be reconstructed by hand: frames are recorded
+AFTER `engine.step()`, so the frame nearest a step shows the hand the play already cycled — the
+replacement card, not the card played. `card_ids` removes that rather than documenting it.)
