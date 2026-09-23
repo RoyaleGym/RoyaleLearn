@@ -842,6 +842,18 @@ def check_consistency(config: RunConfig) -> list[str]:
         problems.append(
             f"ppo.forced_rows {ppo.forced_rows!r} is not one of {', '.join(FORCED_ROW_ARMS)}"
         )
+    if ppo.dual_clip_c < 1.0:
+        # The skipping arms add the skipped rows' surrogate back analytically, and that add-back
+        # is only correct because a forced row's dual clip cannot bind: max(A, cA) is A for a
+        # negative advantage when c is at least one. Below one the clip takes the other branch,
+        # the constant the arms add back is the wrong constant, and ppo/policy_loss stops being
+        # comparable between them. Nothing checked this until the verifier asked what happens at
+        # 0.5. The value is a lower bound on a negative surrogate, so under one is not a
+        # configuration anybody wants either.
+        problems.append(
+            f"ppo.dual_clip_c {ppo.dual_clip_c} is below 1.0, which is not a lower bound on a "
+            "negative surrogate and breaks the add-back ppo.forced_rows relies on"
+        )
     elif ppo.forced_rows != "all" and not net.separate_trunks:
         problems.append(
             f"ppo.forced_rows {ppo.forced_rows!r} needs net.separate_trunks: with one trunk "

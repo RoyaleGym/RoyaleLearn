@@ -372,6 +372,7 @@ class PPOUpdate(Update):
         started = time.perf_counter()
         config = self.config
         self._n_slots = buffer.n_slots
+        self._ratio_unchecked = True
         self._apply_learning_rates(sched)
         gather = self._gather_for(buffer)
 
@@ -472,8 +473,27 @@ class PPOUpdate(Update):
             actor_scale = 1.0 / max(
                 1, batch.n_choice if self._choice_mean else batch.n_samples
             )
-            for position, minibatch in enumerate(batch):
-                first = index == 0 and position == 0
+            for minibatch in batch:
+                # "first" is the first minibatch whose ACTOR ran, not the first minibatch.
+                # Under `all` they are the same one and nothing changes. Under a skipping value
+                # the first minibatch can hold no choice row at all -- at the shipped forced rate
+                # of about nine in ten that is ordinary rather than rare -- and the check then
+                # never ran, while ppo/ratio_max_abs_dev published its default 0.0, which is the
+                # healthiest reading the key has. A check that silently does not happen is worse
+                # than one that fails.
+                #
+                # NOT COVERED BY A TEST, said rather than implied. With the choice-first
+                # partition a batch's choice rows come first, so the case needs a batch that is
+                # ENTIRELY forced followed by one that is not, and which cells land in which
+                # batch is decided by the epoch's permutation. A test would have to reproduce
+                # that permutation to plant against it. The first test written for this passed
+                # with the old gating restored, which is the reason this note exists rather than
+                # a green test.
+                first = self._ratio_unchecked and (
+                    not self._skip_forced or bool(minibatch.n_choice)
+                )
+                if first:
+                    self._ratio_unchecked = False
                 self._minibatch(
                     minibatch,
                     sched,

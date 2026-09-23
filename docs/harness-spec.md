@@ -3600,10 +3600,13 @@ applies.
   of the same quantity, and the two are read against each other.
 - `ppo/actor_rows` and `ppo/actor_forwards`, per iteration over all epochs. These are how a reader
   sees the arm working: under `all`, `actor_rows` is n_samples x n_epochs exactly.
-- `ppo/policy_loss_choice`, the surrogate over choice rows, comparable across the three values.
-  `ppo/policy_loss` keeps its own meaning: under `critic_only` the skipped rows' constant terms are
-  added back analytically, so it equals `all`'s; under `critic_only_choice_mean` it is the choice-row
-  mean that value optimises.
+- `ppo/policy_loss_choice`, the surrogate over choice rows, comparable across the three values, and
+  the quantity `critic_only_choice_mean` actually optimises. `ppo/policy_loss` is the whole-batch
+  mean under ALL THREE values, with the skipped rows' constant surrogate added back analytically, so
+  it stays comparable with `all`'s. Read the two the right way round: on a 48-row rectangle with 11
+  choice rows, `critic_only_choice_mean` reports `policy_loss` -1.4277 and `policy_loss_choice`
+  -3.25e-08, and a reader who takes the first for the objective that value is minimising is out by
+  seven orders of magnitude. This paragraph said the opposite until the verifier measured it.
 - `ppo/explained_variance_choice`, `ppo/advantage_std_choice_pre_norm` and
   `ppo/advantage_mean_choice`, computed under all three values so that the arms report the same keys.
 

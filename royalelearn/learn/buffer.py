@@ -478,9 +478,20 @@ class RectBuffer(ExperienceBuffer):
         of what was legal there names nothing the update can ask about.
         """
         shape = (self.cycles + 1, self.n_slots)
-        array = counts.detach().to(device="cpu", dtype=torch.int16).numpy()
-        if array.shape != shape:
-            raise ValueError(f"expected {shape} and was given {array.shape}")
+        wide = counts.detach().to(device="cpu", dtype=torch.int32).numpy()
+        if wide.shape != shape:
+            raise ValueError(f"expected {shape} and was given {wide.shape}")
+        # The column is int16 to keep the rectangle small, and an action space above 32,767 would
+        # wrap into a negative count, which reads as "forced" and quietly drops a choice row from
+        # the actor. The shipped space is 2,305, so this is a guard against a future catalogue
+        # rather than a live hazard, and a loud one because the failure it prevents is silent.
+        largest = int(wide.max()) if wide.size else 0
+        if largest > 32_767:
+            raise ValueError(
+                f"a cell's mask left {largest} actions legal and this column holds up to 32,767; "
+                "widen RectBuffer.n_legal before growing the action space"
+            )
+        array = wide.astype(np.int16)
         self.n_legal[: self.cycles] = array[: self.cycles]
 
     def set_final_values(self, cells: np.ndarray, values: Tensor) -> None:
