@@ -279,6 +279,11 @@ Before you start you need three things already installed: Git, Python 3.12 or ne
 1.80 or newer with cargo. The Rust one surprises people. Stage 4 compiles the battle engine, and
 without cargo it stops there.
 
+The 1.80 is a promise this repo makes and cannot keep on its own: RoyaleLearn has no `Cargo.toml`,
+so nothing here checks your toolchain. What enforces it is RoyaleSim's manifest, which is where
+the compile happens and where a version that is too old is refused. If the two ever disagree,
+RoyaleSim's is the one that decides and this line is the one that is wrong.
+
 Stage 1 makes a folder and clones the four repos into it.
 
 ```
@@ -343,10 +348,10 @@ else on this page still works, and `train`, `doctor` and `bench` stop with
 .venv\Scripts\python -m pip install -e "RoyaleLearn[torch]"
 ```
 
-## Status (2026-09-22)
+## Status (2026-09-23)
 
 <p align="center">
-  <img alt="Fast suite: 693 passed on 2026-09-22, commit bd6db80" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
+  <img alt="Fast suite: 889 passed on 2026-09-23, commit 1f84e6d" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
   <img alt="Ruff: all checks passed" src="https://img.shields.io/badge/ruff-all%20checks%20passed-3fb950?style=flat-square">
   <img alt="Torch is optional" src="https://img.shields.io/badge/torch-optional-555?style=flat-square">
   <img alt="Bot: not trained yet" src="https://img.shields.io/badge/bot-not%20trained%20yet-d29922?style=flat-square">

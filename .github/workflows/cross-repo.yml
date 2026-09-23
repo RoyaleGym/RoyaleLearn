@@ -1,0 +1,12 @@
+# The cross-repo check, hosted in RoyaleSim and called by all four repos.
+#
+# Landed now rather than after RoyaleSim's body is written: the call site is four lines and the
+# coverage arrives the moment that swap happens, instead of needing a second pass through four
+# repos to add it. Until then the callee is a no-op echo, so a green run here says nothing yet.
+name: cross-repo
+
+on: [push, workflow_dispatch]
+
+jobs:
+  cross:
+    uses: RoyaleGym/RoyaleSim/.github/workflows/cross-repo.yml@main

@@ -1,0 +1,80 @@
+# The fast suite, on a machine that has never seen this project.
+#
+# Everything this repo has ever been tested on is one developer's Windows box with four sibling
+# checkouts already installed. This is the first machine in its life that starts from nothing, so
+# a red first run is this file working rather than this file being wrong.
+#
+# The install is the README's own sequence, in the README's own order, because a workflow that
+# installs some other way tests nothing a reader will experience. `royalelearn` declares
+# `royalegym` as a dependency and the README says pip takes it from your venv, never from PyPI --
+# so RoyaleGym is checked out and installed FIRST, and if that line ever stops being true this job
+# is where it shows.
+#
+# What is NOT here: the Rust toolchain and a royalesim build. `addopts` in pyproject.toml already
+# selects `not slow and not engine`, so the tests needing a freshly built engine are deselected
+# rather than skipped, and the cross-repo workflow is where an engine build belongs.
+name: suite
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: RoyaleLearn
+
+      # The siblings the README installs before this package, at the same commit a reader would
+      # get today. RoyaleViser is optional for the package and NOT optional here: the viser
+      # protocol tests `importorskip` it, so without it they pass by not running.
+      - uses: actions/checkout@v4
+        with:
+          repository: RoyaleGym/RoyaleGym
+          path: RoyaleGym
+      - uses: actions/checkout@v4
+        with:
+          repository: RoyaleGym/RoyaleViser
+          path: RoyaleViser
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # CPU wheels explicitly. The default index serves a CUDA build that is gigabytes larger and
+      # would be downloading a GPU runtime onto a runner with no GPU.
+      - name: install torch (cpu)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: install
+        run: |
+          pip install -e RoyaleGym
+          pip install -e RoyaleViser
+          pip install -e "RoyaleLearn[torch]"
+          pip install -e "RoyaleLearn[dev]"
+
+      - name: ruff
+        working-directory: RoyaleLearn
+        run: ruff check royalelearn tests
+
+      - name: suite
+        working-directory: RoyaleLearn
+        run: pytest -q -p no:randomly
+
+      # Counts are never recorded without the build digest: a number with no build behind it
+      # cannot be compared with the next one.
+      - name: record what this run was
+        if: always()
+        working-directory: RoyaleLearn
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          try:
+              from royalegym.rust_engine import build_digest, core_available
+              print("engine build_digest=", build_digest() if core_available() else "no-extension")
+          except Exception as exc:
+              print("engine build_digest= unavailable:", exc)
+          PY
