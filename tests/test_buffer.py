@@ -516,6 +516,22 @@ def test_every_trainable_cell_is_trained_on_once_an_epoch_and_nothing_is_dropped
     assert counts.sum() == epochs * cells.size
 
 
+def test_an_epoch_with_nothing_trainable_yields_no_batches(rect: Fixture) -> None:
+    """The claim is written in three documents and was held by nothing.
+
+    ``api/buffer.py``'s contract, the implementation's own docstring and the coordinator all say
+    an epoch with no trainable rows yields no batches. The integrator restored the behaviour this
+    replaced -- one empty batch per epoch -- and the whole suite stayed green, which is how a
+    contract quietly stops being true. It is about the contract rather than about a run: the
+    coordinator's invariants refuse an iteration this short long before the update sees it.
+    """
+    buffer = fill_iteration(rect)
+    buffer.group[: buffer.cycles] = GROUP_DEAD
+    assert int(buffer.trainable().sum()) == 0
+
+    assert collect(buffer, 7, 3, 3) == []
+
+
 def test_an_epoch_is_cut_into_whole_batches_with_the_rows_over_spread_across_them(
     rect: Fixture,
 ) -> None:
