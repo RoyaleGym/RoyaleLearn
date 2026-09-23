@@ -315,7 +315,7 @@ generated rather than stored, so a fresh clone does not have them. This stage ta
 cd RoyaleSim
 ..\.venv\Scripts\python tools\extract_arena.py
 ..\.venv\Scripts\python tools\extract_cards.py --vintage 2018
-..\.venv\Scripts\python tools\extract_cards.py --vintage 2018 --out data\derived\cards.json
+Copy-Item data\derived\cards-15.535.json data\derived\cards.json
 ..\.venv\Scripts\python tools\extract_globals.py
 cd ..
 ```
