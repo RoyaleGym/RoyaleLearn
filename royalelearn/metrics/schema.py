@@ -284,17 +284,21 @@ METRICS: dict[str, MetricSpec] = {
         "fraction",
         "Share of the actor's parameters whose Adam second moment sits under adam_eps, where "
         "the step stops being normalised by the gradient and becomes proportional to it again. "
-        "The actor reaches this floor and the critic does not, which is what a grad_norm_actor "
-        "of 0.0068 against a critic at 26.6 looks like from the optimizer's side. High here "
-        "with a KL near zero says to lower adam_eps rather than to raise lr_actor. No band: "
-        "the comparison that means something is against the CRITIC's share in the same row, "
-        "and nobody has yet trained a policy far enough to know what an absolute healthy "
-        "value is. 99.2% against a critic's 33.7% is the reading that is known to be bad.",
+        "No band, and no absolute reading: what means something is this share against the "
+        "CRITIC's in the same row. Measured on hog26-6 (adam_eps 1e-08) at its last "
+        "checkpoint: 10.1% of actor parameters under the floor against 16.9% of the critic's, "
+        "so the actor was LESS floored than the critic while grad_norm_actor was 0.0068 against "
+        "a critic at 26.6. The floor is therefore NOT the account of that asymmetry, which is "
+        "what this key was added to find out and what it answered.",
     ),
     "ppo/adam_eps_floor_frac_critic": _m(
         "fraction",
         "The same share for the critic, published beside the actor's because the ASYMMETRY is "
-        "the reading: one number alone cannot say whether a floor is this network or this side.",
+        "the reading: one number alone cannot say whether a floor is this network or this side. "
+        "Note that the threshold each is measured against is its OWN optimizer's eps. Measuring "
+        "the actor against a value the run did not use answers a counterfactual -- at 1e-5 the "
+        "same checkpoint reads 94.8% actor against 29.1% critic -- and quoting that about a run "
+        "at 1e-08 is a true number attached to the wrong population.",
     ),
     "ppo/lr_backoff_events": _m("count", "Learning-rate backoffs so far in this run.", dtype="int"),
     # -- policy ------------------------------------------------------------

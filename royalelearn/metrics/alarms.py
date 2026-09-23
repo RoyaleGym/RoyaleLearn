@@ -238,17 +238,19 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
             "kl_dead",
             lambda kl: kl < config.kl_dead,
             patience=10,
-            # The fourth cause is the one that had nobody looking for it, and it is the one this
-            # run actually had: with ppo.adam_eps at its default 1e-5, most of the actor's second
-            # moments sit under the floor, Adam stops normalising, and the step is lr*m/eps --
-            # proportional to a gradient that is already small. Measured 99.2% of actor
-            # parameters on a run whose KL was 1e-5 and whose clip never bound. Reading
-            # ppo/adam_eps_floor_frac_actor separates that from a rate that is merely low,
-            # because the remedy is the opposite end of the optimizer.
+            # The fourth cause is worth naming because it is invisible from the KL alone: under
+            # the Adam eps floor the step is lr*m/eps rather than normalised, so a small gradient
+            # stays a small step. It is a hypothesis to CHECK and not the answer -- measured on
+            # this project's own runs it is not what happened. hog26-6 ran at adam_eps 1e-08 and
+            # its last checkpoint has 10.1% of actor parameters under that floor against 16.9%
+            # of the critic's, so the actor was LESS floored than the critic while its gradient
+            # norm was 0.0068 against the critic's 26.6. The comparison that means something is
+            # the two shares against each other in one row, not either against a threshold.
             meaning=(
                 "nothing is moving: dead entropy, a rate too low, a frozen head, or an actor "
-                "under the Adam eps floor -- read ppo/adam_eps_floor_frac_actor, and if it is "
-                "high lower ppo.adam_eps rather than raising lr_actor"
+                "under the Adam eps floor -- compare ppo/adam_eps_floor_frac_actor with the "
+                "critic's in the same row, and only if the actor's is far higher is ppo.adam_eps "
+                "the lever rather than lr_actor"
             ),
         ),
         MetricAlarm(
