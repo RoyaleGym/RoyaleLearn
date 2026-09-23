@@ -638,6 +638,7 @@ CONDITIONAL: dict[str, str] = {
     # and "no free memory" on a machine that simply has no GPU to report either about, which is
     # the same sentinel this file exists to stop. ``vram_peak_mb`` predates the rule and still
     # returns 0.0.
+    "throughput/gpu_util_frac": "a CUDA device is present and its utilisation can be read",
     "health/vram_reserved_mb": "a CUDA device is present",
     "health/vram_inactive_split_mb": "a CUDA device is present",
     "health/vram_driver_free_mb": "a CUDA device is present",

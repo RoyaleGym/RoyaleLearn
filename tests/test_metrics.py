@@ -304,6 +304,34 @@ def _row(tmp_path) -> dict:
     return metrics.row()
 
 
+def test_a_number_nobody_could_read_is_left_out_of_the_row() -> None:
+    """``throughput/gpu_util_frac`` read 0.0 on a card at 92%, because the call that reads it
+    raises without pynvml and every failure path returned zero. An idle GPU is what a reader
+    hunting a bottleneck would have concluded."""
+    from royalelearn.coordinator import _optional
+
+    assert _optional("throughput/gpu_util_frac", None) == {}
+    assert _optional("throughput/gpu_util_frac", 0.0) == {"throughput/gpu_util_frac": 0.0}
+    assert _optional("throughput/gpu_util_frac", 0.92) == {"throughput/gpu_util_frac": 0.92}
+
+
+def test_the_update_publishes_what_its_two_long_phases_cost() -> None:
+    """``time/critic_pass`` and ``time/gae`` were the literal 0.0, not a measurement.
+
+    The update is most of an iteration on this machine, and those are the two phases inside it
+    that run before a single epoch does. Published as zero they said the update was entirely
+    epochs, so a reader deciding where to spend an optimisation had the one number that would
+    have redirected them reading as nothing.
+    """
+    result = _update()
+    assert result.critic_pass_seconds >= 0.0
+    assert result.gae_seconds >= 0.0
+    fields = update_fields(
+        msgspec.structs.replace(result, critic_pass_seconds=1.25, gae_seconds=0.5)
+    )
+    assert "ppo/critic_pass_seconds" not in fields, "it belongs in the time group"
+
+
 def test_the_ladder_group_leaves_out_what_it_has_not_measured(tmp_path) -> None:
     """Every one of these had a neutral value, and every neutral value is a claim.
 

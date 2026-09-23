@@ -1855,8 +1855,8 @@ class LearningCoordinator:
             * collection["rounds"]
             / 1000.0,
             "time/ipc": ipc_seconds,
-            "time/critic_pass": 0.0,
-            "time/gae": 0.0,
+            "time/critic_pass": float(result.critic_pass_seconds),
+            "time/gae": float(result.gae_seconds),
             "time/update": update_seconds,
             "time/checkpoint": self._take_checkpoint_seconds(),
             "time/gate": gate_seconds,
@@ -1897,7 +1897,7 @@ class LearningCoordinator:
                 1000.0 * inference_seconds / max(1, collection["rounds"])
             ),
             "throughput/discarded_rows_frac": _discarded_frac(buffer, trainable),
-            "throughput/gpu_util_frac": _gpu_util(),
+            **_optional("throughput/gpu_util_frac", _gpu_util()),
         }
 
         metrics.ppo = dict(update_fields(result))
@@ -2337,15 +2337,41 @@ def _hash_tensors(digest: Any, mapping: Mapping[str, Any]) -> None:
         digest.update(tensor.reshape(-1).numpy().tobytes())
 
 
-def _gpu_util() -> float:  # pragma: no cover - there is no GPU in the suite
+def _optional(key: str, value: float | None) -> dict[str, MetricValue]:
+    """``{key: value}`` when there is a value, and nothing at all when there is not.
+
+    The row's rule, kept in one place: a metric nobody measured is absent, because a neutral
+    value is a claim and a reader cannot tell one from a measurement.
+    """
+    return {} if value is None else {key: value}
+
+
+def _gpu_util() -> float | None:  # pragma: no cover - there is no GPU in the suite
+    """How busy the device was, or None when nobody could say.
+
+    It returned 0.0 on every path, including the two that are not measurements: no CUDA device,
+    and the reading itself failing. A run on a card at 92% published "0.0" for the whole of its
+    life because ``torch.cuda.utilization`` raises without pynvml installed, and an idle GPU is
+    exactly what a reader looking for a bottleneck would conclude from it. The exception is also
+    printed once rather than swallowed, because "pynvml is not installed" is a thing somebody can
+    fix in a minute and a silent zero is not.
+    """
     try:
         import torch
 
         if not torch.cuda.is_available():
-            return 0.0
+            return None
         return float(torch.cuda.utilization()) / 100.0
-    except Exception:
-        return 0.0
+    except Exception as exc:
+        global _GPU_UTIL_COMPLAINED
+        if not _GPU_UTIL_COMPLAINED:
+            _GPU_UTIL_COMPLAINED = True
+            print(f"throughput/gpu_util_frac is not being recorded: {type(exc).__name__}: {exc}")
+        return None
+
+
+#: Said once per process. A line per iteration about a metric nobody can read is noise.
+_GPU_UTIL_COMPLAINED = False
 
 
 def _vram_regime(needed_mb: float | None = None) -> dict[str, MetricValue]:

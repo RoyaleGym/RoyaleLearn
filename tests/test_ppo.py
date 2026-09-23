@@ -296,6 +296,23 @@ def test_explained_variance_is_one_for_a_perfect_critic_and_zero_for_the_mean() 
 # --------------------------------------------------------------------------
 
 
+def test_an_update_reports_what_its_two_pre_epoch_phases_cost(rect: Fixture) -> None:
+    """Both were published as a literal 0.0, which reads as "free" rather than "unmeasured".
+
+    They are the critic's pass over every collected cell and the advantage recursion over the
+    rectangle, and they both run before the first epoch does. A reader deciding where to spend an
+    optimisation was told the update was entirely epochs.
+    """
+    model = build_model(rect.spec)
+    collect(rect, model)
+
+    result = update_for(model).step(rect.buffer, SCHEDULE)
+
+    assert result.critic_pass_seconds > 0.0
+    assert result.gae_seconds > 0.0
+    assert result.critic_pass_seconds + result.gae_seconds < result.seconds
+
+
 def test_turning_value_clipping_on_reaches_the_critic(rect: Fixture) -> None:
     """The unit test above grades the arithmetic; this one grades the wiring.
 

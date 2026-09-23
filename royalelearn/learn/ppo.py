@@ -345,6 +345,7 @@ class PPOUpdate(Update):
         self._apply_learning_rates(sched)
         gather = self._gather_for(buffer)
 
+        critic_started = time.perf_counter()
         values = chunked_critic_pass(buffer, self.model, gather, chunk=config.critic_chunk)
         buffer.set_values(values)
         cells, rows = self._take_final_observations()
@@ -352,7 +353,9 @@ class PPOUpdate(Update):
             buffer.set_final_values(
                 cells, self.critic_on_final_obs(buffer, gather, cells, rows)
             )
+        critic_pass_seconds = time.perf_counter() - critic_started
 
+        gae_started = time.perf_counter()
         inputs = buffer.advantage_inputs()
         advantages, returns, self.advantage_stats = self.gae.compute(
             rewards=inputs.rewards,
@@ -364,6 +367,7 @@ class PPOUpdate(Update):
             gamma=sched.gamma,
             lam=sched.gae_lambda,
         )
+        gae_seconds = time.perf_counter() - gae_started
         mask = buffer.trainable_mask() & buffer.valid_mask()
         selected = advantages[mask]
         self.advantage_std_pre_norm = (
@@ -437,6 +441,8 @@ class PPOUpdate(Update):
             update_actor=float((after_actor - before_actor).norm().item()),
             update_critic=float((after_critic - before_critic).norm().item()),
             seconds=time.perf_counter() - started,
+            critic_pass_seconds=critic_pass_seconds,
+            gae_seconds=gae_seconds,
         )
         if self.backoff is not None and self.backoff.observe(result.kl):
             print(
@@ -810,6 +816,8 @@ class _Diagnostics:
         update_actor: float,
         update_critic: float,
         seconds: float,
+        critic_pass_seconds: float = 0.0,
+        gae_seconds: float = 0.0,
     ) -> UpdateResult:
         total = max(1, self.samples)
         means = {name: float((value / total).item()) for name, value in self._sums.items()}
@@ -856,6 +864,8 @@ class _Diagnostics:
             n_samples=n_samples,
             samples_unused_frac=max(0.0, unused),
             seconds=seconds,
+            critic_pass_seconds=critic_pass_seconds,
+            gae_seconds=gae_seconds,
         )
 
 

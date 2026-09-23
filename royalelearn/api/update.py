@@ -52,6 +52,12 @@ class UpdateResult(msgspec.Struct):
     n_samples: int
     samples_unused_frac: float
     seconds: float
+    #: Seconds inside ``step`` before the epochs begin: the critic's pass over every collected
+    #: cell, and the advantage recursion over the rectangle. They were published as a hardcoded
+    #: 0.0, which reads as "it cost nothing" rather than "nobody measured it", and they are part
+    #: of the update's own time rather than of the residual it is compared against.
+    critic_pass_seconds: float = 0.0
+    gae_seconds: float = 0.0
 
 
 class Update(ABC, Checkpointable):
