@@ -34,7 +34,7 @@ from royalelearn.api.schedule import ScheduleState
 
 torch = pytest.importorskip("torch")
 
-from royalelearn.config import LrBackoffConfig, PPOConfig  # noqa: E402
+from royalelearn.config import FORCED_ROW_ARMS, LrBackoffConfig, PPOConfig  # noqa: E402
 from royalelearn.learn.gae import GAE  # noqa: E402
 from royalelearn.learn.inference import BatchedInference  # noqa: E402
 from royalelearn.learn.ppo import (  # noqa: E402
@@ -176,6 +176,12 @@ FORCED_CELLS = [
     for slot in range(SLOTS)
     if (cycle * SLOTS + slot) % 8 < 5
 ]
+
+
+#: Two slots whose every cell is forced. They are the padding an arm either divides by or does
+#: not: their rows reach the critic and the recursion and carry no policy gradient at all.
+PADDING_SLOTS = (SLOTS - 2, SLOTS - 1)
+PADDING_CELLS = [(cycle, slot) for cycle in range(CYCLES) for slot in PADDING_SLOTS]
 
 
 def count_rows(module: Any) -> list[int]:
@@ -402,7 +408,7 @@ def test_turning_value_clipping_on_reaches_the_critic(rect: Fixture) -> None:
     assert drift > 0.0, "the flag did not reach the critic's loss"
 
 
-@pytest.mark.parametrize("arm", ["all", "critic_only"])
+@pytest.mark.parametrize("arm", FORCED_ROW_ARMS)
 def test_accumulated_minibatch_gradients_are_the_one_batch_gradient(
     rect: Fixture, arm: str
 ) -> None:
@@ -523,6 +529,196 @@ def test_letting_the_actor_skip_forced_rows_lands_on_the_gradient_all_produces(
     assert skipped.policy_loss == pytest.approx(plain.policy_loss, abs=1e-6)
     for key in ("kl", "clip_fraction", "entropy", "noop_entropy", "entropy_normalised"):
         assert getattr(skipped, key) == pytest.approx(getattr(plain, key), rel=1e-5), key
+
+
+@pytest.mark.parametrize("arm", ["critic_only", "critic_only_choice_mean"])
+def test_only_the_choice_mean_ignores_how_much_padding_a_batch_carries(
+    rect: Fixture, arm: str
+) -> None:
+    """This is the whole of what ``critic_only_choice_mean`` is for, in one number.
+
+    Two slots are made entirely forced and then, in the second run, taken out of the update by
+    marking them somebody else's seat. Nothing else moves: the recursion is per slot and does
+    not read the trainable flag, so the cells that did have a choice get the same advantages and
+    returns either way, which this asserts rather than assumes.
+
+    Under ``critic_only`` the actor's denominator is the batch, so removing padding scales its
+    gradient by the ratio of the two row counts -- 48 rows to 36 here, which is the factor the
+    elixir bar moves on a real run as the policy learns to hold elixir and again in overtime.
+    Under ``critic_only_choice_mean`` the denominator is the rows that had a choice, and those
+    did not change, so the gradient is the same one to rounding.
+
+    Standardisation is off so that the two runs share one set of advantages; which population
+    sets the scale is the next test's subject, not this one's.
+    """
+    model = build_model(rect.spec)
+    plant_forced(rect, PADDING_CELLS)
+    buffer = collect(rect, model)
+    config = msgspec.structs.replace(
+        CONFIG, forced_rows=arm, advantage_standardization=False
+    )
+    padded = update_for(build_model(rect.spec), config, optimizer_factory=_Recording)
+
+    padded.step(buffer, SCHEDULE)
+    with_padding = padded.actor_optimizer.recorded[0]
+    kept = np.array([slot not in PADDING_SLOTS for slot in range(SLOTS)])
+    advantages = buffer.advantage[:CYCLES, kept].copy()
+    returns = buffer.ret[:CYCLES, kept].copy()
+
+    buffer.group[:, list(PADDING_SLOTS)] = 0  # a resident snapshot's index: not the learner
+    bare = update_for(build_model(rect.spec), config, optimizer_factory=_Recording)
+    bare.step(buffer, SCHEDULE)
+    without = bare.actor_optimizer.recorded[0]
+
+    assert np.array_equal(buffer.advantage[:CYCLES, kept], advantages), (
+        "the cells that had a choice were given different advantages, so the two runs are not "
+        "the same experiment"
+    )
+    assert np.array_equal(buffer.ret[:CYCLES, kept], returns)
+    rows, choice = SAMPLES, int(kept.sum()) * CYCLES
+    assert (rows, choice) == (48, 36)
+    scale = float(without.abs().max())
+    expected = without if arm == "critic_only_choice_mean" else without * (choice / rows)
+    drift = float((with_padding - expected).abs().max())
+    assert drift <= 1e-5 * scale, (
+        f"the actor's gradient with padding is {drift:.3g} from the expected one on a scale of "
+        f"{scale:.3g}"
+    )
+    if arm == "critic_only":
+        # And the factor is not one, or the assertion above would hold for either arm.
+        assert float((with_padding - without).abs().max()) > 1e-3 * scale
+
+
+@pytest.mark.parametrize("arm", FORCED_ROW_ARMS)
+def test_the_advantages_are_scaled_by_the_cells_that_will_read_them(
+    rect: Fixture, arm: str
+) -> None:
+    """``standardise`` centres and scales over the cells that reach the update, and under the
+    choice mean a forced cell no longer does.
+
+    It reaches the critic, which never reads an advantage. Leaving the forced cells in the
+    statistics would leave the actor's baseline and its scale following the elixir bar through
+    the back door, after the denominator had been taken off it -- and it would move the entropy
+    terms' weight against the policy term by the same ratio.
+    """
+    model = build_model(rect.spec)
+    plant_forced(rect, FORCED_CELLS)
+    buffer = collect(rect, model)
+
+    update_for(
+        build_model(rect.spec), msgspec.structs.replace(CONFIG, forced_rows=arm)
+    ).step(buffer, SCHEDULE)
+
+    trainable = buffer.trainable()
+    choice = trainable & (buffer.n_legal[:CYCLES] > 1)
+    forced = trainable & ~choice
+    assert choice.any() and forced.any()
+    population = choice if arm == "critic_only_choice_mean" else trainable
+    selected = buffer.advantage[:CYCLES][population]
+
+    assert float(selected.mean()) == pytest.approx(0.0, abs=1e-6)
+    assert float(selected.std(ddof=1)) == pytest.approx(1.0, abs=1e-6)
+    # The other population is not the centred one, so the assertion above names which was used.
+    other = forced if arm == "critic_only_choice_mean" else choice
+    assert abs(float(buffer.advantage[:CYCLES][other].mean())) > 1e-3
+
+
+def test_the_two_skipping_arms_standardise_over_different_cells(rect: Fixture) -> None:
+    """The arms are told apart by the numbers they produce and not only by a population count."""
+    model = build_model(rect.spec)
+    plant_forced(rect, FORCED_CELLS)
+    buffer = collect(rect, model)
+
+    update_for(
+        build_model(rect.spec), msgspec.structs.replace(CONFIG, forced_rows="critic_only")
+    ).step(buffer, SCHEDULE)
+    batch_scaled = buffer.advantage[:CYCLES].copy()
+    update_for(
+        build_model(rect.spec),
+        msgspec.structs.replace(CONFIG, forced_rows="critic_only_choice_mean"),
+    ).step(buffer, SCHEDULE)
+
+    assert not np.allclose(batch_scaled, buffer.advantage[:CYCLES], atol=1e-4)
+
+
+def test_the_choice_mean_moves_the_actor_by_the_ratio_of_the_denominators(
+    rect: Fixture,
+) -> None:
+    """Section 18 item 8's own test: the parameter delta after a real Adam step, not the
+    gradient norm.
+
+    Adam largely cancels a uniform rescale of the loss, because the first moment and the root of
+    the second scale together, so a gradient-norm comparison between these two arms reports a
+    clean factor while the weights move almost identically. What is left of the rescale is
+    ``eps``, and on the laptop's optimizer state almost every actor coordinate sits below it.
+
+    So the factor is measured in both regimes. With ``adam_eps`` far above the largest gradient
+    coordinate the step is ``lr * g / eps``, linear in the gradient, and the choice mean moves
+    the actor by exactly the ratio of the two denominators. With ``adam_eps`` at 1e-12 the first
+    step is ``lr * sign(g)`` and the two arms land in the same place. That pair is what shows
+    the difference is eps and not the gradient.
+
+    Advantage standardisation is off, so the only thing between the two arms is the denominator.
+    The learning rate is raised for this test alone: what is compared is a difference of
+    parameters, and at the shipped rate the step is a ten-millionth of a weight, which float32
+    cannot subtract without quantising the answer to a percent of itself.
+    """
+    from torch.nn.utils import parameters_to_vector
+
+    model = build_model(rect.spec)
+    plant_forced(rect, FORCED_CELLS)
+    buffer = collect(rect, model)
+    base = msgspec.structs.replace(CONFIG, advantage_standardization=False)
+    sched = msgspec.structs.replace(SCHEDULE, lr_actor=0.5, lr_critic=0.5)
+    probe = update_for(
+        build_model(rect.spec),
+        msgspec.structs.replace(base, forced_rows="critic_only"),
+        optimizer_factory=_Recording,
+    )
+    probe.step(buffer, sched)
+    largest = float(probe.actor_optimizer.recorded[0].abs().max())
+    assert largest > 0.0
+
+    def deltas(arm: str, eps: float) -> tuple[Any, Any]:
+        update = update_for(
+            build_model(rect.spec),
+            msgspec.structs.replace(base, forced_rows=arm, adam_eps=eps),
+        )
+        before = parameters_to_vector(update.actor_params).detach().clone()
+        before_critic = parameters_to_vector(update.critic_params).detach().clone()
+        update.step(buffer, sched)
+        return (
+            parameters_to_vector(update.actor_params).detach() - before,
+            parameters_to_vector(update.critic_params).detach() - before_critic,
+        )
+
+    rows = int(buffer.trainable().sum())
+    choice = int(((buffer.n_legal[:CYCLES] > 1) & buffer.trainable()).sum())
+    assert 0 < choice < rows
+    expected = rows / choice
+
+    bound_batch, bound_batch_critic = deltas("critic_only", 10_000.0 * largest)
+    bound_choice, bound_choice_critic = deltas("critic_only_choice_mean", 10_000.0 * largest)
+    assert float(bound_choice.norm() / bound_batch.norm()) == pytest.approx(expected, rel=1e-3)
+    # And it is the same step scaled, not a different one of the right size.
+    assert float((bound_choice - bound_batch * expected).abs().max()) <= 1e-2 * float(
+        bound_choice.abs().max()
+    )
+
+    sign_batch, sign_batch_critic = deltas("critic_only", 1e-12)
+    sign_choice, sign_choice_critic = deltas("critic_only_choice_mean", 1e-12)
+    assert float(sign_choice.norm() / sign_batch.norm()) == pytest.approx(1.0, rel=1e-3), (
+        "away from the eps-bound regime Adam's first step is the rate times the sign of the "
+        "gradient, so a denominator cannot reach it"
+    )
+    assert torch.equal(sign_choice.sign(), sign_batch.sign())
+    assert torch.allclose(sign_choice, sign_batch, rtol=1e-2, atol=1e-9)
+
+    for mine, theirs in (
+        (bound_batch_critic, bound_choice_critic),
+        (sign_batch_critic, sign_choice_critic),
+    ):
+        assert torch.equal(mine, theirs), "the critic's step is not this field's business"
 
 
 def test_a_batch_with_no_choice_row_still_steps_both_optimizers(rect: Fixture) -> None:

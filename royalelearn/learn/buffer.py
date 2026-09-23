@@ -518,6 +518,15 @@ class RectBuffer(ExperienceBuffer):
     def valid_mask(self) -> Tensor:
         return torch.from_numpy(self.valid[: self.cycles].copy()).to(self.device)
 
+    def choice_mask(self) -> Tensor:
+        """``(T, R)`` bool: cells whose mask offered more than the no-op.
+
+        Off the column the critic's pass filled, so it is the same classification the minibatches
+        carry and not a second opinion about it. It says nothing about whether a cell is
+        trainable; a caller that wants both asks for both.
+        """
+        return torch.from_numpy(self.n_legal[: self.cycles] > 1).to(self.device)
+
     def advantage_inputs(self) -> AdvantageInputs:
         """The estimator's arguments, on the device, with a dead row's rewards and values
         already zero because nothing ever wrote them."""

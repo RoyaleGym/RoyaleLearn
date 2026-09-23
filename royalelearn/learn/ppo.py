@@ -396,12 +396,19 @@ class PPOUpdate(Update):
         )
         gae_seconds = time.perf_counter() - gae_started
         mask = buffer.trainable_mask() & buffer.valid_mask()
+        choice = mask & buffer.choice_mask()
         selected = advantages[mask]
         self.advantage_std_pre_norm = (
             float(selected.std(unbiased=True).item()) if selected.numel() > 1 else 0.0
         )
         if config.advantage_standardization:
-            advantages = standardise(advantages, mask)
+            # Over the cells that READ an advantage, which is ``standardise``'s own rule. Under
+            # ``critic_only_choice_mean`` a forced cell reaches only the critic, and the critic
+            # never reads one, so leaving those cells in the statistics would put the actor's
+            # baseline and its scale back on the elixir bar after the denominator had been taken
+            # off it -- and would move the entropy terms' weight against the policy term by the
+            # ratio of the two spreads.
+            advantages = standardise(advantages, choice if self._choice_mean else mask)
         buffer.set_advantages(advantages, returns)
 
         before_actor = parameters_to_vector(self.actor_params).detach().clone()
