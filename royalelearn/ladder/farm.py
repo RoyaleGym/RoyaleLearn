@@ -51,6 +51,14 @@ __all__ = ["EvalFarm", "EvalWorkerConfig", "eval_worker_main"]
 #: decodes the calibration data, and K of them at once decode it K times.
 STARTUP_TIMEOUT_S = 180.0
 
+#: How long a worker gets to act on its stop word before it is signalled. It is finishing at most
+#: one battle, measured at 8.02 s.
+STOP_WORD_TIMEOUT_S = 10.0
+
+#: How long a signalled worker gets to actually die before the next signal. Nothing is running at
+#: this point; this is the operating system's latency, not the worker's work.
+SIGNAL_TIMEOUT_S = 5.0
+
 #: How long one battle may take before the farm calls the worker dead. A full match with no
 #: truncation was measured at 8 s with networks on both sides; this is twenty times that, because
 #: the number that matters is "clearly hung" rather than "slower than expected".
@@ -156,9 +164,7 @@ def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
         except BaseException as exc:  # reported, not swallowed
             import traceback
 
-            outbox.put(
-                ("failed", index, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}")
-            )
+            outbox.put(("failed", index, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
             continue
         outbox.put(("score", index, float(score)))
     player.close()
@@ -187,6 +193,10 @@ class EvalFarm:
         self._inbox: Any = None
         self._outbox: Any = None
         self.battles_played = 0
+        #: Workers that survived every signal ``close`` has. Kept, because the defect this
+        #: replaced was that they were dropped and could not be asked about afterwards.
+        self.unkilled: list[Any] = []
+        self.terminate_failures = 0
 
     # -- the player seam ----------------------------------------------------
 
@@ -297,16 +307,48 @@ class EvalFarm:
                 )
 
     def close(self) -> None:
+        """Stop the workers, and say so only if they stopped.
+
+        THE OLD VERSION COULD NOT TELL YOU WHICH HAPPENED. It joined, called ``terminate`` on
+        anything still alive, and then cleared ``_procs`` on the next line -- so a worker that
+        ignored SIGTERM was both unreported and unreachable, and a clean shutdown and a leaked
+        process produced the same output: none. A worker blocked inside a native engine call is
+        exactly the case that ignores a stop word AND a terminate, and it is the case this farm
+        spends its whole life in.
+
+        So each stage is tried because the one before it did not take, the handles of anything
+        that survived all three are kept on ``unkilled`` rather than dropped, and the count is a
+        number somebody can read. They are ``daemon=True``, so a leak ends when the run does --
+        that bounds the cost at the length of a run on a box that troughs at 337 MB free, which is
+        a reason to report it rather than a reason not to.
+        """
         if not self._procs:
             return
         if self._inbox is not None:
             for _ in self._procs:
                 with _suppress():
                     self._inbox.put(None)
+        leaked = []
         for process in self._procs:
-            process.join(timeout=10.0)
-            if process.is_alive():  # pragma: no cover - a worker that ignores its stop word
-                process.terminate()
+            process.join(timeout=STOP_WORD_TIMEOUT_S)
+            if not process.is_alive():
+                continue
+            process.terminate()
+            process.join(timeout=SIGNAL_TIMEOUT_S)
+            if not process.is_alive():
+                continue
+            process.kill()
+            process.join(timeout=SIGNAL_TIMEOUT_S)
+            if process.is_alive():
+                leaked.append(process)
+        if leaked:
+            self.terminate_failures += len(leaked)
+            self.unkilled.extend(leaked)
+            self.printer(
+                f"{len(leaked)} evaluation worker(s) survived a stop word, a terminate and a "
+                f"kill: {', '.join(p.name for p in leaked)}. They hold memory until this run "
+                "ends."
+            )
         self._procs = []
         self._inbox = None
         self._outbox = None
