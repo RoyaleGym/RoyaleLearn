@@ -228,6 +228,7 @@ def run_preflight(
         f"iteration     {geo.cycles} cycles for {geo.timesteps_per_iteration} timesteps; "
         f"credit horizon {_credit_horizon_s(config, spec):.1f} s"
     )
+    say(_ladder_cost_line(config, geo))
     say(_viser_line(config))
     report = PreflightReport(
         spec=spec,
@@ -250,6 +251,43 @@ def run_preflight(
 # ---------------------------------------------------------------------------
 # The gates
 # ---------------------------------------------------------------------------
+
+
+def _ladder_cost_line(config: RunConfig, geo: Geometry) -> str:
+    """What the ladder will cost this run, before it costs it.
+
+    The candidate cadence is a BOUNDARY between two economics rather than a budget, and nothing
+    said so: the first candidate into an empty pool is admitted unconditionally and costs
+    milliseconds, and every one after it plays a full gate. At the shipped settings that is
+    2,200 battles, and at a measured 8.02 s a battle it is about five hours EACH. A 500-iteration
+    run at the old cadence fired six of them -- 29 hours of evaluation against 4 hours of
+    training -- and the first anybody knew was a measurement on 2026-09-23, because no run of
+    this project had ever reached a second candidate.
+
+    So it is printed. A reader choosing a step budget can see which side of the boundary it
+    falls on instead of discovering it at hour six.
+    """
+    from ..ladder.gate import EVAL_BATTLE_SECONDS, gate_battles
+    from ..ladder.pool import SCRIPTED_IDS
+
+    env_per_iteration = max(1, geo.cycles * geo.n_battles)
+    every = config.ladder.candidate_every_env_steps
+    if every <= 0:
+        return "ladder        no candidates: ladder.candidate_every_env_steps is off"
+    battles = gate_battles(config.ladder.gate, anchors=len(SCRIPTED_IDS))
+    hours = battles * EVAL_BATTLE_SECONDS / 3600.0
+    probe_every = config.ladder.probe_every_iterations
+    probe = (
+        f"; a probe every {probe_every} iterations plays "
+        f"{config.ladder.probe_games * len(config.ladder.probe_opponents)} battles"
+        if probe_every > 0
+        else "; no probes"
+    )
+    return (
+        f"ladder        a candidate every {every // env_per_iteration} iterations "
+        f"({every} env steps). The FIRST into an empty pool is free; every one after plays "
+        f"{battles} battles, about {hours:.1f} h at {EVAL_BATTLE_SECONDS:.1f} s a battle{probe}"
+    )
 
 
 def _construct(factory: EnvFactorySpec, extra_modules: tuple[str, ...]) -> Any:

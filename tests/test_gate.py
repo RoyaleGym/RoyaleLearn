@@ -543,3 +543,85 @@ def test_stopping_early_does_not_change_any_decision(tmp_path) -> None:
                 assert decision.promote == (decision.admit and not decision.cycle), name
                 if not decision.admit:
                     assert not decision.promote and not decision.cycle, name
+
+
+# -- what a gate costs, before anybody pays it -------------------------------
+
+
+def test_the_gate_says_how_many_battles_it_plays() -> None:
+    """The number nobody had before 2026-09-23, when it turned out to be 29 hours.
+
+    A gate's cost is four config fields multiplied together and nothing printed it, so the
+    shipped cadence quietly implied six gates of 2,200 battles in a 500-iteration run. At a
+    measured 8.02 s a battle that is 29 hours of evaluation against 4 hours of training.
+    """
+    from royalelearn.ladder.gate import gate_battles
+
+    config = GateConfig(
+        champion_games=1000, anchor_games=200, stratified_snapshots=8, stratified_games=100
+    )
+    assert gate_battles(config, anchors=2) == 1000 + 2 * 200 + 8 * 100 == 2200
+    assert gate_battles(config, anchors=0) == 1000 + 800
+
+
+def test_the_cost_it_reports_is_the_cost_it_pays(tmp_path) -> None:
+    """The count against a real gate that plays everything, so the two cannot drift apart.
+
+    A number computed from config in one place and paid in another is exactly the pairing that
+    goes stale, and this is the whole point of publishing it.
+    """
+    from royalelearn.ladder.gate import gate_battles
+
+    pool = _pool(tmp_path)
+    player = QuotaPlayer(_rates(0.7))
+    gate = _gate(tmp_path)
+    gate.evaluate(CANDIDATE, pool, _runner(player, tmp_path))
+
+    assert len(player.played) == gate_battles(gate.config, anchors=len(gate.anchors))
+
+
+def test_the_preflight_says_which_side_of_the_boundary_a_run_falls_on() -> None:
+    """The cadence is a boundary between two economics, and nothing printed it.
+
+    Train's run was capped at 2,700,000 steps rather than 4,000,000 for exactly this reason:
+    493 iterations is one candidate and the free admission, 730 is two and the second is a full
+    gate. Nothing in the config says so, so preflight says it.
+    """
+    import pathlib
+
+    import royalelearn.config as cfg
+    from royalelearn.config import geometry
+    from royalelearn.ladder.gate import gate_battles
+    from royalelearn.ladder.pool import SCRIPTED_IDS
+    from royalelearn.rollout.preflight import _ladder_cost_line
+
+    config = cfg.load_config(
+        pathlib.Path("examples/configs/train-hog26-8.json").read_bytes()
+    )
+    line = _ladder_cost_line(config, geometry(config))
+
+    battles = gate_battles(config.ladder.gate, anchors=len(SCRIPTED_IDS))
+    assert str(battles) in line, line
+    assert "FIRST into an empty pool is free" in line
+    assert f"every {config.ladder.probe_every_iterations} iterations" in line
+
+    env_per_iteration = geometry(config).cycles * geometry(config).n_battles
+    cadence = config.ladder.candidate_every_env_steps // env_per_iteration
+    assert f"every {cadence} iterations" in line
+
+
+def test_a_run_that_never_gates_says_that_instead() -> None:
+    """A cadence of zero is off, and a line reporting hours for it would be a lie."""
+    import msgspec
+
+    import royalelearn.config as cfg
+    from royalelearn.config import geometry
+    from royalelearn.rollout.preflight import _ladder_cost_line
+
+    config = cfg.RunConfig()
+    config = msgspec.structs.replace(
+        config, ladder=msgspec.structs.replace(config.ladder, candidate_every_env_steps=0)
+    )
+    line = _ladder_cost_line(config, geometry(config))
+    assert "no candidates" in line
+    assert "h at" not in line

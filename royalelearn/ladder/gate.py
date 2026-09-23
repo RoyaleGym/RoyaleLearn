@@ -45,9 +45,11 @@ __all__ = [
     "CONDITION_ANCHORS",
     "CONDITION_CHAMPION",
     "CONDITION_POOL",
+    "EVAL_BATTLE_SECONDS",
     "WilsonGate",
     "failed_condition",
     "floor_decision",
+    "gate_battles",
     "gate_filename",
 ]
 
@@ -80,6 +82,31 @@ def floor_decision(candidate: str, champion: str | None) -> GateDecision:
         conditions={},
         eval_seed_set_sha="",
         wall_seconds=0.0,
+    )
+
+
+#: What one evaluation battle costs, measured 2026-09-23 on this machine with the shipped
+#: architecture: 8.02 s network against network, 0.195 s scripted against scripted, median of
+#: three full matches with no truncation. It is a property of the machine and of a batch-of-one
+#: forward, so it is a figure to re-measure rather than a constant to trust -- but a gate's cost
+#: printed in hours is what makes a cadence a decision instead of a discovery.
+EVAL_BATTLE_SECONDS = 8.0
+
+
+def gate_battles(config: GateConfig, *, anchors: int) -> int:
+    """How many battles one full gate plays, from the four fields that decide it.
+
+    Published because nothing printed it and the multiplication is not obvious: at the shipped
+    settings it is 2,200, and at the shipped candidate cadence a 500-iteration run fires six of
+    them. That is 29 hours of evaluation against 4 hours of training, and the first anybody knew
+    of it was a measurement on 2026-09-23, because no run had ever reached a second candidate.
+
+    A gate that stops early plays fewer; this is the full price, which is what a plan needs.
+    """
+    return (
+        config.champion_games
+        + anchors * config.anchor_games
+        + config.stratified_snapshots * config.stratified_games
     )
 
 
