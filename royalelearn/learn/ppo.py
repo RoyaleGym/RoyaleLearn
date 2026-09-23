@@ -78,6 +78,7 @@ __all__ = [
     "explained_variance",
     "standardise",
     "surrogate",
+    "value_error",
 ]
 
 #: What ``ppo.ratio_atol`` calls each precision -- torch's own spelling, so that one vocabulary
@@ -130,6 +131,31 @@ def approx_kl(ratio: Tensor) -> Tensor:
     """
     log_ratio = ratio.log()
     return (ratio - 1.0) - log_ratio
+
+
+def value_error(
+    values: Tensor, old_values: Tensor, returns: Tensor, *, clip_range: float | None
+) -> Tensor:
+    """The critic's squared error, optionally held near the value the batch was collected under.
+
+    Without a clip range this is the plain mean squared error and the critic is free to move as
+    far as one update asks. With one, the prediction is also measured after being pulled back to
+    within ``clip_range`` of the old value, and the LARGER of the two errors is the one optimised.
+    That is a pessimistic bound rather than a cap: the gradient of a step that overshoots comes
+    from the clipped branch, so the critic is not rewarded for a large move it cannot justify on
+    the far side of the clip.
+
+    ``ppo.value_clipping`` has been a configuration field with nothing reading it since the
+    learner landed, so a config could ask for this and silently not get it. It is off by default
+    and it stays off: the published evidence for it is thin, and this repo's own critic clips on
+    its gradient norm every step already (``ppo/grad_norm_critic`` sits at 21-35 against a
+    ``max_grad_norm`` of 0.5), so a second brake on the same wheel is a thing to measure rather
+    than to assume. The field now does what it says, which is the point.
+    """
+    if clip_range is None:
+        return F.mse_loss(values, returns)
+    pulled_back = old_values + (values - old_values).clamp(-clip_range, clip_range)
+    return torch.max((values - returns).square(), (pulled_back - returns).square()).mean()
 
 
 def clipped_fraction(ratio: Tensor, clip_range: float) -> Tensor:
@@ -448,7 +474,12 @@ class PPOUpdate(Update):
             clip_range=config.clip_range,
             dual_clip_c=config.dual_clip_c,
         )
-        mean_squared_error = F.mse_loss(result.values, minibatch.returns)
+        mean_squared_error = value_error(
+            result.values,
+            minibatch.values,
+            minibatch.returns,
+            clip_range=config.clip_range if config.value_clipping else None,
+        )
         policy_loss = -dual.mean() * weight
         value_loss = config.vf_coef * mean_squared_error * weight
         entropy_loss = (

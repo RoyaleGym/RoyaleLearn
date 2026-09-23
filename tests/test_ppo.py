@@ -45,6 +45,7 @@ from royalelearn.learn.ppo import (  # noqa: E402
     explained_variance,
     standardise,
     surrogate,
+    value_error,
 )
 from royalelearn.learn.schedules import LrBackoff  # noqa: E402
 from test_buffer import CYCLES, SEED, SLOTS, Fixture, plan_for, round_for  # noqa: E402
@@ -180,6 +181,35 @@ class _Recording(torch.optim.SGD):
 # --------------------------------------------------------------------------
 
 
+def test_the_value_clip_is_a_floor_on_the_error_and_not_a_cap_on_the_step() -> None:
+    """``ppo.value_clipping`` had no reader at all, so a config could ask for it and not get it.
+
+    What it should do, when it is on: measure the prediction twice, once as it is and once pulled
+    back to within ``clip_range`` of the value the batch was collected under, and optimise the
+    LARGER error. A move that overshoots is then graded on the far side of the clip, so the critic
+    cannot be rewarded for going somewhere the batch does not support.
+    """
+    import torch
+
+    old = torch.tensor([0.0, 0.0, 0.0])
+    returns = torch.tensor([1.0, 1.0, -1.0])
+    # Within the clip the two branches agree, so the error is the plain one.
+    inside = torch.tensor([0.1, -0.1, 0.05])
+    assert value_error(inside, old, returns, clip_range=0.2) == pytest.approx(
+        float(value_error(inside, old, returns, clip_range=None))
+    )
+    # Outside it they do not, and the larger of the two is taken.
+    over = torch.tensor([0.9, 0.9, 0.9])
+    plain = float(value_error(over, old, returns, clip_range=None))
+    clipped = float(value_error(over, old, returns, clip_range=0.2))
+    assert clipped > plain
+    pulled = old + (over - old).clamp(-0.2, 0.2)
+    by_hand = torch.max((over - returns).square(), (pulled - returns).square()).mean()
+    assert clipped == pytest.approx(float(by_hand))
+    # A clip wide enough to bind on nothing is the unclipped error exactly.
+    assert value_error(over, old, returns, clip_range=1e9) == pytest.approx(plain)
+
+
 def test_the_kl_estimator_is_the_hand_computed_one() -> None:
     """Schulman's k3, sample by sample, against the same expression evaluated on paper."""
     ratios = [0.5, 0.9, 1.0, 1.3, 1.25]
@@ -264,6 +294,40 @@ def test_explained_variance_is_one_for_a_perfect_critic_and_zero_for_the_mean() 
 # --------------------------------------------------------------------------
 # The loop
 # --------------------------------------------------------------------------
+
+
+def test_turning_value_clipping_on_reaches_the_critic(rect: Fixture) -> None:
+    """The unit test above grades the arithmetic; this one grades the wiring.
+
+    ``ppo.value_clipping`` sat in the config with no reader, so the honest test is not that the
+    clipped error can be computed somewhere, it is that asking for it changes where the critic
+    ends up. It binds only once the critic has moved inside the update -- the values the batch
+    carries are the critic's own predictions from the pass that opens the update, so on the first
+    pass the two branches are equal by construction -- which is why this runs several epochs with
+    a real optimizer rather than reading one gradient. Both arms use the same clip range, so the
+    only difference between them is the value branch; the actor's loss does not see the flag.
+    """
+    config = msgspec.structs.replace(CONFIG, n_epochs=3, clip_range=1e-4)
+    model = build_model(rect.spec)
+    collect(rect, model)
+
+    plain = update_for(build_model(rect.spec), config)
+    clipping = update_for(
+        build_model(rect.spec), msgspec.structs.replace(config, value_clipping=True)
+    )
+    before = [p.detach().clone() for p in clipping.critic_params]
+
+    plain.step(rect.buffer, SCHEDULE)
+    clipping.step(rect.buffer, SCHEDULE)
+
+    pairs = zip(clipping.critic_params, before, strict=True)
+    moved = max(float((now.detach() - was).abs().max()) for now, was in pairs)
+    assert moved > 0.0, "the critic did not move at all, so this test proves nothing"
+    drift = max(
+        float((one.detach() - other.detach()).abs().max())
+        for one, other in zip(plain.critic_params, clipping.critic_params, strict=True)
+    )
+    assert drift > 0.0, "the flag did not reach the critic's loss"
 
 
 def test_accumulated_minibatch_gradients_are_the_one_batch_gradient(rect: Fixture) -> None:
