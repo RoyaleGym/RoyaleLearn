@@ -426,6 +426,7 @@ class PolicyProbe:
         self.tiles = spec.tiles[0] * spec.tiles[1]
         self.max_mana = _max_mana()
         self.card_plays: dict[int, int] = {}
+        self.card_legal: dict[int, int] = {}
         self.tile_plays: dict[int, int] = {}
         self.card_tile_plays: dict[tuple[int, int], int] = {}
 
@@ -451,6 +452,7 @@ class PolicyProbe:
         taken = actions[cycles, slots].astype(np.int64)
 
         legal_counts: list[np.ndarray] = []
+        slot_legal: list[np.ndarray] = []
         elixir: list[np.ndarray] = []
         onehots: list[np.ndarray] = []
         # The gather's staging ring is one round wide, so the probe reads in blocks of at
@@ -462,6 +464,11 @@ class PolicyProbe:
             with torch.no_grad():
                 mask = obs.mask
                 legal_counts.append(mask.sum(dim=-1).to("cpu").numpy())
+                # Per hand slot rather than per action: a slot is playable when ANY of its tiles
+                # is. This is what separates "the policy does not choose this card" from "this
+                # card is rarely affordable", and nothing measured it before.
+                slots_wide = mask[:, 1:].reshape(mask.shape[0], self.hand.hand_size, self.tiles)
+                slot_legal.append(slots_wide.any(dim=-1).to("cpu").numpy())
                 chosen = mask.gather(
                     -1,
                     torch.from_numpy(taken[block]).to(mask.device).unsqueeze(-1),
@@ -489,10 +496,18 @@ class PolicyProbe:
         fields["env/mean_elixir_at_decision"] = float(bar.mean() * self.max_mana)
         fields["env/frac_elixir_above_99"] = float(np.mean(bar >= 0.99))
 
-        fields.update(self._plays(taken, np.concatenate(onehots, axis=0)))
+        fields.update(
+            self._plays(
+                taken,
+                np.concatenate(onehots, axis=0),
+                np.concatenate(slot_legal, axis=0),
+            )
+        )
         return fields
 
-    def _plays(self, actions: np.ndarray, onehot: np.ndarray) -> dict[str, MetricValue]:
+    def _plays(
+        self, actions: np.ndarray, onehot: np.ndarray, slot_legal: np.ndarray
+    ) -> dict[str, MetricValue]:
         """Where the cards went, and which cards they were.
 
         The action index says the hand slot and the tile; the card in that slot is read out of
@@ -500,6 +515,7 @@ class PolicyProbe:
         position -- which is the only one of the two that means anything across a cycle.
         """
         fields: dict[str, MetricValue] = {}
+        fields.update(self._availability(onehot, slot_legal))
         played = actions > 0
         fields["policy/noop_rate"] = float(np.mean(~played))
         if not played.any():
@@ -536,6 +552,41 @@ class PolicyProbe:
         total = float(sum(self.card_plays.values()))
         for card, played_count in sorted(self.card_plays.items()):
             fields[f"policy/card_play_frac/{card}"] = played_count / total
+            # The share of plays is a share of a policy AND of an elixir bar, and a reader
+            # cannot tell which they are looking at. Divided by the decisions where the card
+            # was affordable, it is the policy alone.
+            affordable = self.card_legal.get(card, 0)
+            if affordable:
+                fields[f"policy/card_play_rate/{card}"] = played_count / affordable
+        return fields
+
+    def _availability(
+        self, onehot: np.ndarray, slot_legal: np.ndarray
+    ) -> dict[str, MetricValue]:
+        """How often each card was in the hand at all, and how often it was affordable.
+
+        Without these, a per-card play share answers a question nobody asked. A three-cost card
+        is legal at a decision far more often than a four-cost one when the bar averages about
+        one and a half elixir, so a policy that chooses uniformly among what it can afford still
+        plays cheap cards many times more often. Reading that as a preference is reading the
+        elixir economy as a policy.
+        """
+        block = self.hand.onehot_width
+        rows, hand = slot_legal.shape
+        wide = onehot[:, : hand * block].reshape(rows, hand, block)
+        cards = wide.argmax(axis=-1)
+        self.card_legal = {}
+        fields: dict[str, MetricValue] = {}
+        for card in np.unique(cards):
+            in_hand = cards == card
+            legal = int(np.count_nonzero(in_hand & slot_legal))
+            self.card_legal[int(card)] = legal
+            fields[f"policy/card_in_hand_frac/{int(card)}"] = float(
+                np.count_nonzero(in_hand.any(axis=-1)) / rows
+            )
+            fields[f"policy/card_legal_frac/{int(card)}"] = float(
+                np.count_nonzero((in_hand & slot_legal).any(axis=-1)) / rows
+            )
         return fields
 
     def heatmap(self) -> dict[str, Any]:

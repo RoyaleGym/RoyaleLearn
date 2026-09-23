@@ -169,7 +169,10 @@ PUBLISHED_PATTERNS = (
     'ladder/score_vs_ci95_hi/{opponent}',
     'ladder/score_vs_ci95_lo/{opponent}',
     'ladder/score_vs_n/{opponent}',
+    'policy/card_in_hand_frac/{card}',
+    'policy/card_legal_frac/{card}',
     'policy/card_play_frac/{card}',
+    'policy/card_play_rate/{card}',
     'ppo/clip_fraction_epoch{epoch}',
     'ppo/kl_epoch{epoch}',
 )

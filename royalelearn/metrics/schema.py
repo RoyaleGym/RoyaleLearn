@@ -551,6 +551,27 @@ PATTERNS: tuple[MetricPattern, ...] = (
         _m("fraction", "Share of plays that were this card."),
     ),
     _pattern(
+        "policy/card_in_hand_frac/{card}",
+        _m("fraction", "Share of sampled decisions where this card was in the hand."),
+    ),
+    _pattern(
+        "policy/card_legal_frac/{card}",
+        _m(
+            "fraction",
+            "Share of sampled decisions where this card was in the hand AND affordable.",
+        ),
+    ),
+    _pattern(
+        "policy/card_play_rate/{card}",
+        _m(
+            "fraction",
+            "Plays of this card over the decisions where it was affordable: the policy's "
+            "preference with the elixir economy divided out. A cheap card is legal far more "
+            "often than an expensive one, so the play SHARE reflects both and this reflects "
+            "one. Absent for a card that was never affordable in the sample.",
+        ),
+    ),
+    _pattern(
         "env/reward_terms/{term}",
         _m("units", "One weighted reward term's mean per episode, signed."),
     ),
