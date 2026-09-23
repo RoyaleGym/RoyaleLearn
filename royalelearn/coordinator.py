@@ -1987,7 +1987,7 @@ class LearningCoordinator:
             "health/nan_guard_trips": _nan_guard_trips(result),
             "health/vram_peak_mb": _vram_peak_mb(),
             **_vram_regime(getattr(self, "vram_needed_mb", None)),
-            "health/rss_peak_mb": _rss_peak_mb(),
+            **_optional("health/rss_peak_mb", _rss_peak_mb()),
             "health/buffer_fill_frac": _fill_frac(buffer, collection["rounds"], geo),
         }
         for kind, n in sorted(failures.items()):
@@ -2449,11 +2449,26 @@ def _vram_peak_mb() -> float:
         return 0.0
 
 
-def _rss_peak_mb() -> float:
-    """The parent's peak resident memory, where the platform will say.
+def _rss_peak_mb() -> float | None:
+    """The parent's peak resident memory, where the platform will say, and None where it will not.
 
-    Reported as zero rather than guessed where it will not: the RAM ledger is what the doctor
-    projects a run from, and a fabricated measurement beside it would be worse than a gap.
+    Absent rather than guessed: the RAM ledger is what the doctor projects a run from, and a
+    fabricated measurement beside it would be worse than a gap. It used to answer 0.0 for "this
+    platform cannot say", which is a measurement a planner would read.
+
+    The Windows path needs its signatures DECLARED, which is why it read zero on this machine for
+    the whole life of the project. ``GetCurrentProcess`` returns the pseudo-handle
+    0xFFFFFFFFFFFFFFFF, and ctypes assumes a C ``int`` return and an ``int`` argument for
+    functions nobody has told it about, so the handle arrived at ``GetProcessMemoryInfo``
+    truncated to 32 bits and the call failed. Every failure then became 0.0. Measured after
+    declaring them: 13.9 MB for a bare interpreter and 31.7 MB for one holding this package,
+    against 0.0 before.
+
+    Which line is load-bearing, since it is not the obvious one: passing the handle as an explicit
+    ``c_void_p`` is what fixes it. Removing only the ``restype`` declaration leaves the test green,
+    because ctypes reads the truncated -1 back and ``c_void_p(-1)`` is the same pseudo-handle
+    again. The plant that goes red is the call written as it was, with neither the wrapper nor
+    ``argtypes``.
     """
     try:
         import resource
@@ -2481,11 +2496,19 @@ def _rss_peak_mb() -> float:
 
             counters = _Counters()
             counters.cb = ctypes.sizeof(_Counters)
-            handle = ctypes.windll.kernel32.GetCurrentProcess()  # type: ignore[attr-defined]
-            if not ctypes.windll.psapi.GetProcessMemoryInfo(  # type: ignore[attr-defined]
-                handle, ctypes.byref(counters), counters.cb
-            ):
-                return 0.0
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            kernel32.GetCurrentProcess.argtypes = []
+            psapi = ctypes.windll.psapi  # type: ignore[attr-defined]
+            psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+            psapi.GetProcessMemoryInfo.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_Counters),
+                wintypes.DWORD,
+            ]
+            handle = ctypes.c_void_p(kernel32.GetCurrentProcess())
+            if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return None
             return float(counters.PeakWorkingSetSize) / 1e6
         except Exception:
-            return 0.0
+            return None

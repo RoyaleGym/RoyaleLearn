@@ -639,6 +639,7 @@ CONDITIONAL: dict[str, str] = {
     # the same sentinel this file exists to stop. ``vram_peak_mb`` predates the rule and still
     # returns 0.0.
     "throughput/gpu_util_frac": "a CUDA device is present and its utilisation can be read",
+    "health/rss_peak_mb": "the platform reports a peak working set",
     "health/vram_reserved_mb": "a CUDA device is present",
     "health/vram_inactive_split_mb": "a CUDA device is present",
     "health/vram_driver_free_mb": "a CUDA device is present",

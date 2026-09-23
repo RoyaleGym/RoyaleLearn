@@ -8,6 +8,7 @@ which is the failure that makes a dashboard quietly wrong rather than loudly bro
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import msgspec
@@ -302,6 +303,22 @@ def _row(tmp_path) -> dict:
         ),
     )
     return metrics.row()
+
+
+def test_the_parents_peak_memory_is_a_number_or_nothing_but_never_zero() -> None:
+    """It read 0.0 on this machine for the life of the project, and 0.0 is a planner's input.
+
+    The Windows path asks ``GetCurrentProcess`` for a handle, and that function returns the
+    pseudo-handle 0xFFFFFFFFFFFFFFFF. ctypes assumes a C ``int`` return for a function nobody has
+    declared, so the handle arrived truncated to 32 bits, the call failed, and the failure became
+    a zero. The RAM ledger is what ``doctor`` projects a run from.
+    """
+    from royalelearn.coordinator import _rss_peak_mb
+
+    peak = _rss_peak_mb()
+    assert peak is None or peak > 0.0, peak
+    if sys.platform == "win32":
+        assert peak is not None and peak > 1.0, "a live interpreter holds more than a megabyte"
 
 
 def test_a_number_nobody_could_read_is_left_out_of_the_row() -> None:
