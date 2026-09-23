@@ -260,7 +260,7 @@
     "pfsp_power": 2.0,
     "pfsp_uniform_floor": 0.2,
     "weight_floor_scale": 0.01,
-    "candidate_every_env_steps": 400000,
+    "candidate_every_env_steps": 1500000,
     "floor_admit_every_env_steps": 50000000,
     "pool_working_size": 48,
     "eval_seed_count": 500,
@@ -283,7 +283,7 @@
     "probe_opponents": [
       "scripted:random_legal"
     ],
-    "probe_every_iterations": 10
+    "probe_every_iterations": 25
   },
   "checkpoint": {
     "every_env_steps": 50000,
