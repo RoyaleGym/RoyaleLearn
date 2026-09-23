@@ -193,7 +193,7 @@
     "logit_scale": "rsqrt_c",
     "init": "orthogonal",
     "noop_bias": 8.0,
-    "autocast_dtype": "bfloat16",
+    "autocast_dtype": "float32",
     "device": "cuda"
   },
   "ppo": {
