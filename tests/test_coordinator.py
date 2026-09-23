@@ -108,6 +108,26 @@ def run(tmp_path: Path) -> Iterator[Any]:
         yield coordinated
 
 
+def test_a_named_run_directory_is_the_one_opened(tmp_path: Path) -> None:
+    """A tool pointed at a run has to reach THAT run, whatever the code has done since.
+
+    A run directory is ``<run_name>-<run_id>`` and the run id hashes the identity, which carries
+    the commit of every repository. So a command pointed at a run that started before the code
+    moved computed a different id, created an empty directory beside the real one and worked in
+    it: ``royalelearn eval --run <a live run>`` reached nothing, which is why the train session
+    reads episodes.jsonl with a tool of its own instead. When a caller names a directory, that
+    directory is the answer, and the identity is still checked separately and by name.
+    """
+    named = tmp_path / "somebody-elses-name"
+    with coordinator(tiny_config(tmp_path), run_dir=named) as run:
+        assert run.run_dir == named
+        assert named.is_dir()
+        assert run.run_dir.name != f"{run.config.run_name}-{run.run_id}"
+
+    with coordinator(tiny_config(tmp_path)) as run:
+        assert run.run_dir.name == f"{run.config.run_name}-{run.run_id}"
+
+
 # -- one iteration -----------------------------------------------------------
 
 

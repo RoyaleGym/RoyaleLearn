@@ -808,12 +808,21 @@ class LearningCoordinator:
         source: RolloutSource | None = None,
         preflight_kwargs: Mapping[str, Any] | None = None,
         install_signal_handler: bool = True,
+        run_dir: str | Path | None = None,
     ) -> None:
         self.config = validate(config)
         self.printer = printer or (lambda _line: None)
         self.geometry = geometry(self.config)
         self.codec_path = codec
         self.resume_from = Path(resume) if resume is not None else None
+        #: A directory to open INSTEAD of the one this configuration's identity names. A run
+        #: directory is ``<run_name>-<run_id>`` and the run id is a hash of the identity, which
+        #: includes the commit of every repository. So a tool pointed at a run that started
+        #: before the code moved computed a DIFFERENT id, made an empty directory beside the real
+        #: one and evaluated nothing: `royalelearn eval --run <a live run>` could not reach the
+        #: run it was given, which is why the train session reads episodes.jsonl with its own
+        #: tool instead. When a caller names a directory, that directory is the answer.
+        self.given_run_dir = Path(run_dir) if run_dir is not None else None
         self.allow_identity_drift = bool(allow_identity_drift)
         self.requested_device = device
         self.preflight_kwargs = dict(preflight_kwargs or {})
@@ -906,7 +915,7 @@ class LearningCoordinator:
         )
         self.run_id = run_id_of(self.identity)
         report.note_run_id(self.run_id, printer=self.printer)
-        self.run_dir = run_directory(config, self.run_id)
+        self.run_dir = self.given_run_dir or run_directory(config, self.run_id)
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self.codec = build_codec(

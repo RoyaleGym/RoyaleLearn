@@ -351,7 +351,10 @@ def _resume(args: argparse.Namespace) -> int:
     config = _run_config(args.run)
     checkpoint = Path(args.checkpoint) if args.checkpoint else _latest_checkpoint(args.run)
     with _coordinator(
-        config, resume=checkpoint, allow_identity_drift=args.allow_identity_drift
+        config,
+        resume=checkpoint,
+        allow_identity_drift=args.allow_identity_drift,
+        run_dir=args.run,
     ) as run:
         run.learn(until_timesteps=args.until_timesteps)
         print(f"run {run.run_id} stopped at iteration {run.iteration}")
@@ -508,7 +511,7 @@ def _codec_microseconds(run: Any) -> float:
 def _eval(args: argparse.Namespace) -> int:
     """A paired evaluation between two members, with its interval, outside the loop."""
     config = _run_config(args.run)
-    with _coordinator(config) as run:
+    with _coordinator(config, run_dir=args.run) as run:
         comparison = run.eval_runner.compare(args.a, args.b, games=2 * args.seeds)
     print(f"{args.a} vs {args.b} over {comparison.n_games} battles ({comparison.n_seeds} seeds)")
     print(f"score  {comparison.score_a:.4f}  95% [{comparison.lo:.4f}, {comparison.hi:.4f}]")
@@ -519,7 +522,7 @@ def _eval(args: argparse.Namespace) -> int:
 def _gate(args: argparse.Namespace) -> int:
     """Re-run a gate decision from stored snapshots and print the verdict."""
     config = _run_config(args.run)
-    with _coordinator(config) as run:
+    with _coordinator(config, run_dir=args.run) as run:
         decision = run.gate.evaluate(args.candidate, run.pool, run.eval_runner)
     print(f"candidate {decision.candidate} against {decision.champion or 'nothing'}")
     for name, condition in decision.conditions.items():
