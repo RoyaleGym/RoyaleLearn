@@ -228,6 +228,7 @@ def run_preflight(
         f"iteration     {geo.cycles} cycles for {geo.timesteps_per_iteration} timesteps; "
         f"credit horizon {_credit_horizon_s(config, spec):.1f} s"
     )
+    _ratio_precision_gate(config, spec, say)
     say(_ladder_cost_line(config, geo))
     say(_viser_line(config))
     report = PreflightReport(
@@ -251,6 +252,105 @@ def run_preflight(
 # ---------------------------------------------------------------------------
 # The gates
 # ---------------------------------------------------------------------------
+
+
+#: EXPLICIT mantissa bits, which is what sets the spacing between two representable values:
+#: ulp(x) = 2**floor(log2 x) * 2**-bits. Named here rather than read from torch, so this can be
+#: asked of a config in a process with no torch installed.
+MANTISSA_BITS: dict[str, int] = {"bfloat16": 7, "float16": 10, "float32": 23}
+
+
+def ratio_precision(*, noop_bias: float, n_actions: int, dtype_name: str) -> float:
+    """How far from one the importance ratio can sit from ARITHMETIC ALONE, before a run starts.
+
+    PPO's update recomputes each stored action's log-probability and asserts the ratio is one,
+    because nothing has changed since the rollout. What makes that assertion fragile is not the
+    guard but the shape of a softmax:
+
+        log p_i = z_i - logsumexp(z)      so      d(log p_i) / d(z_noop) = -p_noop
+
+    An error in the LARGEST logit is multiplied into every other action's log-probability by the
+    probability that logit holds. So the deviation is ``p_max`` times the spacing between two
+    representable logits at that magnitude -- and both factors are knowable from the config and
+    the action space, with nothing running.
+
+    IT IS AN UPPER BOUND AND ITS ACCURACY IS UNEVEN, which is worth knowing before trusting a
+    borderline number. Against the two measurements of 2026-09-23, on 451 actions at
+    ``noop_bias`` 8.0:
+
+        float32     predicts 8.3e-7    measured 9.5e-7 over eight iterations     within 15%
+        bfloat16    predicts 0.054     measured 0.0261 when a run died at it     2x conservative
+
+    The bfloat16 side is high because the observed figure is the worst of the actions a minibatch
+    happened to sample, while this is the worst the arithmetic allows. Erring high is the right
+    direction for a gate -- it refuses slightly early rather than slightly late -- and the two
+    cases it has to tell apart are five orders of magnitude apart, so a factor of two changes
+    nothing about the decision.
+
+    At ``noop_bias`` 0 the no-op holds 1/451 of the mass and the same arithmetic is invisible,
+    which is why 383 iterations across three runs never came near the guard.
+
+    ``n_actions`` is the WHOLE action space and the mask makes the set smaller at runtime, so the
+    real ``p_max`` is higher than this assumes -- 0.87 over the ~450 legal actions of that run
+    against 0.56 over its 2,305-wide space. That pushes the estimate down where the ulp term
+    pushes it up, and the two partly cancel. The space is what a config knows before an
+    environment exists, which is the point of asking here.
+    """
+    import math
+
+    bits = MANTISSA_BITS.get(dtype_name, MANTISSA_BITS["float32"])
+    others = max(1, n_actions - 1)
+    # p_max at initialisation: the biased action against a field of roughly equal ones. The rest
+    # of the head is small next to a bias of several nats, so this is the bias alone.
+    p_max = math.exp(noop_bias) / (math.exp(noop_bias) + others)
+    # The spacing between representable values at the biased logit's magnitude. A magnitude below
+    # one still has a spacing, so the floor keeps this a statement about the head rather than
+    # about zero.
+    magnitude = max(abs(noop_bias), 1.0)
+    spacing = 2.0 ** (math.floor(math.log2(magnitude))) * 2.0 ** -bits
+    return p_max * spacing
+
+
+def _ratio_precision_gate(config: RunConfig, spec: EnvSpec, say: Callable[[str], None]) -> None:
+    """Refuse a run whose own arithmetic cannot carry its own importance-ratio guard.
+
+    This costs nothing and it replaces five hours of discovery with a printed number. The run it
+    was written for died at iteration 6 with a deviation of 0.0261 against a tolerance of 0.02,
+    and everything needed to predict that was in the config before it started.
+    """
+    from ..learn.ppo import PRECISION_NAMES
+
+    name = str(config.net.autocast_dtype)
+    for dtype, spelling in PRECISION_NAMES.items():  # normalise torch's spelling to the config's
+        if spelling == name or str(dtype).endswith(name):
+            name = spelling
+            break
+    predicted = ratio_precision(
+        noop_bias=config.net.noop_bias, n_actions=spec.n_actions, dtype_name=name
+    )
+    atol = float(config.ppo.ratio_atol.get(name, 1e-4))
+    say(
+        f"ratio guard   {name} at noop_bias {config.net.noop_bias:g} over {spec.n_actions} "
+        f"actions predicts a deviation of {predicted:.2e} against ppo.ratio_atol {atol:g}"
+    )
+    if predicted <= atol / 4.0:
+        return
+    unbiased = ratio_precision(noop_bias=0.0, n_actions=spec.n_actions, dtype_name=name)
+    amplification = predicted / max(1e-30, unbiased)
+    trouble = (
+        f"ppo.ratio_atol[{name!r}] is {atol:g} and this run's arithmetic predicts a deviation of "
+        f"{predicted:.2e}. log p = z - logsumexp(z), so an error in the largest logit is "
+        f"multiplied into every other action's log-probability by the probability that logit "
+        f"holds: at noop_bias {config.net.noop_bias:g} over {spec.n_actions} actions that is "
+        f"{amplification:.0f}x what an unbiased head would see. Set net.autocast_dtype to "
+        f"float32, measured at 9.5e-7 on this action space, or lower net.noop_bias"
+    )
+    if predicted > atol:
+        raise PreflightError(
+            "this run would fail its own importance-ratio assertion within a few iterations: "
+            + trouble
+        )
+    say(f"              WARNING: within a factor of four of the guard. {trouble}")
 
 
 def _ladder_cost_line(config: RunConfig, geo: Geometry) -> str:
