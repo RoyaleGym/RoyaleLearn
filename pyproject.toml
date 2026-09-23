@@ -65,5 +65,11 @@ src = ["royalelearn", "tests"]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003", "SIM108"]
 
+[tool.ruff.lint.per-file-ignores]
+# A VENDORED COPY, kept byte-identical to the original in the other three repos so the four can
+# be diffed against each other. Reformatting it to this repo's line length would make it a local
+# rewrite that only looks like a copy, which is the one thing it must not be.
+"tests/_shell_fences.py" = ["E501"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["royalelearn", "royalegym", "royalesim"]
