@@ -175,6 +175,21 @@ METRICS: dict[str, MetricSpec] = {
         low=0.3,
         high=0.8,
     ),
+    "ppo/logit_std": _m(
+        "nats",
+        "Spread of the logits over each row's legal set, over the rows that had a choice. The "
+        "un-saturated reading of how far the policy is from uniform, and the one to plot: "
+        "entropy_normalised is a saturating function of this and spans 0.999991 to 0.994957 "
+        "across a run whose policy became 560 times less uniform (hog26-3, 147 iterations), so "
+        "the whole of a run's learning lives in its fifth decimal place. This grows linearly "
+        "with the pointer head's query norm instead. Starts near 0.015 on the shipped "
+        "architecture and rises about 5% an iteration; a decisive policy is of order 1. "
+        "The checkpoint quantity it corresponds to is the norm of "
+        "actor.head.query.weight, which grew 0.22 -> 1.82 monotonically over 147 "
+        "iterations of hog26-3 and 0.22 -> 1.18 over 102 of hog26-6. Runs from before "
+        "2026-09-23 do not carry this key, and that norm is how to join them to one "
+        "that does.",
+    ),
     "ppo/noop_entropy": _m(
         "nats",
         "Binary entropy of play against wait, over the rows whose mask offered more than the "

@@ -627,6 +627,7 @@ class PPOUpdate(Update):
                 dual=dual,
                 entropy=result.entropy,
                 noop_entropy=result.noop_entropy,
+                logit_std=result.logit_std,
                 n_legal=result.n_legal,
                 value_loss=mean_squared_error.detach(),
                 clip_range=config.clip_range,
@@ -698,6 +699,7 @@ class PPOUpdate(Update):
                 dual_clip_c=config.dual_clip_c,
             )
             entropy, noop_entropy = distribution.entropy(), distribution.noop_entropy()
+            logit_std = distribution.logit_std()
             n_legal = distribution.n_legal()
             policy_loss = -dual.sum() * actor_scale
             entropy_loss = (
@@ -714,6 +716,7 @@ class PPOUpdate(Update):
             # the value loss and the sample count are theirs.
             empty = minibatch.advantages[:0]
             ratio = advantages = surr = dual = entropy = noop_entropy = empty
+            logit_std = empty
             n_legal = minibatch.n_legal[:0]
         with torch.no_grad():
             # What the skipped rows would have contributed to the surrogate, exactly: their
@@ -731,6 +734,7 @@ class PPOUpdate(Update):
                 dual=dual,
                 entropy=entropy,
                 noop_entropy=noop_entropy,
+                logit_std=logit_std,
                 n_legal=n_legal,
                 value_loss=mean_squared_error.detach(),
                 clip_range=config.clip_range,
@@ -975,6 +979,7 @@ class _Diagnostics:
                 "forced_rows",
                 "policy_loss_choice",
                 "entropy_normalised",
+                "logit_std",
                 "kl",
                 "clip_fraction",
                 "dual_clip_fraction",
@@ -1025,6 +1030,7 @@ class _Diagnostics:
         dual: Tensor,
         entropy: Tensor,
         noop_entropy: Tensor,
+        logit_std: Tensor,
         n_legal: Tensor,
         value_loss: Tensor,
         clip_range: float,
@@ -1087,6 +1093,7 @@ class _Diagnostics:
         self._sums["noop_entropy"] += (noop_entropy * chose).sum()
         self._sums["forced_rows"] += (n - chose_n)
         self._sums["entropy_normalised"] += ((entropy / legal) * chose).sum()
+        self._sums["logit_std"] += (logit_std * chose).sum()
         self._sums["kl"] += kl * chose_n
         self._sums["clip_fraction"] += clip * chose_n
         self._sums["dual_clip_fraction"] += (
@@ -1135,6 +1142,7 @@ class _Diagnostics:
         for name in (
             "entropy",
             "entropy_normalised",
+            "logit_std",
             "noop_entropy",
             "kl",
             "clip_fraction",
@@ -1153,6 +1161,7 @@ class _Diagnostics:
             entropy=means["entropy"],
             noop_entropy=means["noop_entropy"],
             entropy_normalised=means["entropy_normalised"],
+            logit_std=means["logit_std"],
             kl=means["kl"],
             clip_fraction=means["clip_fraction"],
             dual_clip_fraction=means["dual_clip_fraction"],

@@ -46,9 +46,9 @@ __all__ = [
     "SeedSet",
     "bootstrap_interval",
     "comparison_id",
-    "play_all",
     "eval_seed_set",
     "paired_rho",
+    "play_all",
     "score_interval",
 ]
 

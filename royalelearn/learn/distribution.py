@@ -155,6 +155,27 @@ class MaskedCategorical(ActionDistribution):
         """
         return self._logp[:, NOOP].exp()
 
+    def logit_std(self) -> Tensor:
+        """``(B,)`` float32: the spread of the logits over each row's LEGAL set.
+
+        How far apart the policy is willing to put its options, which is the quantity entropy
+        is a saturating function of. Over 250 legal actions the entropy deficit goes as the
+        square of this and starts invisibly small: measured on hog26-3, ``entropy_normalised``
+        spanned 0.999991 to 0.994957 across a run whose policy became 560 times less uniform,
+        so the climb lives in the fifth decimal place of that key and is legible in this one.
+
+        Computed from the normalised log-probabilities rather than from the raw logits, which
+        is the same number: ``log_softmax`` subtracts a constant per row and a constant does
+        not move a standard deviation. Doing it here means it is over the same masked set the
+        entropy is over, rather than over a tensor that still carries the fill value.
+        """
+        mask = self._mask
+        n = mask.sum(-1, keepdim=True).clamp_min(1).to(self._logp.dtype)
+        centred = self._logp.masked_fill(~mask, 0.0)
+        mean = centred.sum(-1, keepdim=True) / n
+        var = (((centred - mean) ** 2) * mask).sum(-1) / n.squeeze(-1)
+        return var.clamp_min(0.0).sqrt()
+
     def n_legal(self) -> Tensor:
         """``(B,)`` int64. Entropy falling is ambiguous without it: a policy that has learnt to
         wait sees fewer legal actions, and its entropy falls for that reason alone."""

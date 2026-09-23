@@ -228,6 +228,7 @@ class SeparateActorCritic(_BaseActorCritic):
             noop_entropy=distribution.noop_entropy(),
             values=self.critic.value(obs),
             n_legal=distribution.n_legal(),
+            logit_std=distribution.logit_std(),
         )
 
     def distribution_on_rows(self, obs: ObsBatch, rows: Tensor) -> MaskedCategorical:
@@ -286,6 +287,7 @@ class SharedTrunkActorCritic(_BaseActorCritic):
             noop_entropy=distribution.noop_entropy(),
             values=values,
             n_legal=distribution.n_legal(),
+            logit_std=distribution.logit_std(),
         )
 
     def critic_parameters(self) -> Iterator[Parameter]:

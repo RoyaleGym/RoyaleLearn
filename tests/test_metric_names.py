@@ -109,6 +109,7 @@ PUBLISHED_KEYS = (
     'ppo/grad_norm_actor',
     'ppo/grad_norm_critic',
     'ppo/kl',
+    'ppo/logit_std',
     'ppo/lr_backoff_events',
     'ppo/n_minibatches',
     'ppo/n_optimizer_steps',

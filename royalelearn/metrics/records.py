@@ -269,6 +269,7 @@ def update_fields(result: UpdateResult) -> dict[str, MetricValue]:
         "ppo/entropy": result.entropy,
         "ppo/noop_entropy": result.noop_entropy,
         "ppo/entropy_normalised": result.entropy_normalised,
+        "ppo/logit_std": result.logit_std,
         "ppo/kl": result.kl,
         "ppo/clip_fraction": result.clip_fraction,
         "ppo/dual_clip_fraction": result.dual_clip_fraction,

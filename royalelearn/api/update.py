@@ -36,6 +36,10 @@ class UpdateResult(msgspec.Struct):
     entropy: float
     noop_entropy: float
     entropy_normalised: float
+    #: Spread of the logits over each row's legal set, averaged over the rows that had a choice.
+    #: The un-saturated companion to ``entropy_normalised``, which is within 1e-5 of its maximum
+    #: for the first hundred iterations of every run so far.
+    logit_std: float
     kl: float
     clip_fraction: float
     dual_clip_fraction: float

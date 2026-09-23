@@ -166,6 +166,7 @@ def _update() -> UpdateResult:
         entropy=3.4,
         noop_entropy=0.21,
         entropy_normalised=0.55,
+        logit_std=0.42,
         kl=0.008,
         clip_fraction=0.12,
         dual_clip_fraction=0.001,

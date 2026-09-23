@@ -161,6 +161,10 @@ class BackpropResult(msgspec.Struct):
     noop_entropy: Tensor
     values: Tensor
     n_legal: Tensor
+    #: Spread of the logits over each row's legal set. Entropy is a saturating function of this
+    #: and reads within 1e-5 of its maximum for the first hundred iterations of a run; this does
+    #: not, so it is the one a plot can show.
+    logit_std: Tensor
 
 
 class NetworkFactory(ABC):

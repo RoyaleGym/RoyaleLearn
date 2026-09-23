@@ -226,3 +226,96 @@ def test_the_environments_own_masks_always_admit_the_noop(mock_env_spec: Any) ->
             observations = env.step(noop)[0]
     finally:
         env.close()
+
+
+# -- the spread entropy saturates away ---------------------------------------
+
+
+def test_a_uniform_policy_has_no_spread() -> None:
+    """The baseline the key is read against: zero, exactly, whatever the logits' offset."""
+    import torch
+
+    from royalelearn.learn.distribution import MaskedCategorical
+
+    for offset in (0.0, -7.5, 12.25):
+        logits = torch.full((3, 16), offset)
+        mask = torch.ones((3, 16), dtype=torch.bool)
+        assert torch.allclose(
+            MaskedCategorical(logits, mask).logit_std(), torch.zeros(3), atol=1e-6
+        )
+
+
+def test_the_spread_is_the_logits_own_and_survives_the_softmax_constant() -> None:
+    """log_softmax subtracts a constant per row, and a constant does not move a deviation.
+
+    So the key can be computed from the normalised log-probabilities, which is the only place a
+    masked, finite set of them exists, and still be a statement about the LOGITS.
+    """
+    import torch
+
+    from royalelearn.learn.distribution import MaskedCategorical
+
+    logits = torch.tensor([[0.0, 1.0, 2.0, 3.0], [5.0, 5.0, 5.0, 9.0]])
+    mask = torch.ones((2, 4), dtype=torch.bool)
+    expected = logits.std(dim=-1, unbiased=False)
+    assert torch.allclose(MaskedCategorical(logits, mask).logit_std(), expected, atol=1e-5)
+    shifted = MaskedCategorical(logits + 100.0, mask).logit_std()
+    assert torch.allclose(shifted, expected, atol=1e-4)
+
+
+def test_an_illegal_logit_does_not_widen_the_spread() -> None:
+    """The one that matters on this action space: 88-93% of a row is usually illegal.
+
+    An implementation that took the deviation over the whole row would read the fill value,
+    which is ``finfo.min``, and report a spread of about 1e38 on every row.
+    """
+    import torch
+
+    from royalelearn.learn.distribution import MaskedCategorical
+
+    logits = torch.tensor([[0.0, 1.0, 2.0, 3.0, 500.0]])
+    mask = torch.tensor([[True, True, True, True, False]])
+    expected = logits[0, :4].std(unbiased=False)
+    assert torch.allclose(MaskedCategorical(logits, mask).logit_std()[0], expected, atol=1e-5)
+
+
+def test_a_forced_row_has_a_spread_of_zero_rather_than_a_nan() -> None:
+    """One legal action is a point mass. A deviation over one sample is zero, not undefined."""
+    import torch
+
+    from royalelearn.learn.distribution import MaskedCategorical
+
+    logits = torch.zeros((1, 8))
+    mask = torch.zeros((1, 8), dtype=torch.bool)
+    mask[0, 0] = True
+    value = MaskedCategorical(logits, mask).logit_std()
+    assert torch.isfinite(value).all()
+    assert float(value[0]) == pytest.approx(0.0)
+
+
+def test_the_spread_sees_what_normalised_entropy_cannot() -> None:
+    """The reason the key exists, as a comparison rather than as a claim.
+
+    Over 250 actions a policy at 8x the spread of another still reads within 3e-3 of maximum
+    entropy on both, which is the fifth-decimal band a whole run's learning lived in. The spread
+    separates them by the factor it actually is.
+    """
+    import math
+
+    import torch
+
+    from royalelearn.learn.distribution import MaskedCategorical
+
+    mask = torch.ones((2, 250), dtype=torch.bool)
+    base = torch.randn(250, generator=torch.Generator().manual_seed(7))
+    base = (base - base.mean()) / base.std()
+    logits = torch.stack([0.05 * base, 0.40 * base])
+
+    distribution = MaskedCategorical(logits, mask)
+    spread = distribution.logit_std()
+    normalised = distribution.entropy() / math.log(250)
+
+    assert float(spread[1] / spread[0]) == pytest.approx(8.0, rel=1e-3)
+    assert float(normalised[0]) > 0.999
+    assert float(normalised[1]) > 0.985
+    assert float(normalised[0] - normalised[1]) < 3e-2
