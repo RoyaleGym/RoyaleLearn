@@ -2865,13 +2865,14 @@ reference's residual silently absorbs the four places it is actually slow.
 `explained_variance`, `grad_norm_actor`, `grad_norm_critic`, `update_magnitude_actor`,
 `update_magnitude_critic`, `ratio_max_abs_dev`, `advantage_std_pre_norm`, `return_running_mean`,
 `return_running_std`, `reward_clip_frac`, `n_minibatches`, `n_optimizer_steps`,
-`samples_unused_frac`, `lr_backoff_events`.
+`samples_unused_frac`, `lr_backoff_events`, `adam_eps_floor_frac_actor`, `adam_eps_floor_frac_critic`.
 
 | metric | healthy | what it diagnoses |
 |---|---|---|
 | `explained_variance` | rising to 0.5-0.9 | the critic's health. No reference logs it, and value loss is uninterpretable while returns are normalised by a moving standard deviation. Still negative after fifty iterations is the most likely cause of a plateau |
-| `entropy_normalised` | 0.3-0.8 | raw entropy falling is ambiguous: it can be a confident policy or a tighter mask. Only the normalised form separates them |
+| `entropy_normalised` | see note | raw entropy falling is ambiguous -- a confident policy or a tighter mask -- and the normalised form separates those. It does NOT separate a policy that has concentrated on one action, and on this action space that is most of what matters: over 250 legal actions a policy putting **15.3x uniform mass on the no-op** still reads 0.980. Measured on hog26-2 at iteration 124, and reproduced from first principles in `tests/test_hold_lift.py`. Read `policy/rollout_hold_lift` for that question. The documented band of 0.3-0.8 was written for an unconditioned mean and could not be reached once the key was conditioned on choice rows; no replacement band has been earned yet |
 | `noop_entropy` | above 0.05 nats | the leading indicator of no-op collapse, before `cards_per_match` bottoms out. Taken over the rows whose mask offered more than the no-op, because a decision the elixir bar cannot afford has a binary entropy of zero by construction and most decisions on this environment are that one (section 18, item 8). An unconditioned mean measures the elixir curve: it reads near zero on a healthy run, so a floor on it fires permanently, and a gate that had really collapsed would move it by a fraction of what it moves on the rows that had a choice |
+| `adam_eps_floor_frac_actor` | below 0.5 | the share of the actor's parameters whose Adam second moment sits under `adam_eps`, where the step stops being normalised by the gradient and becomes `lr*m/eps` -- proportional to it again. Measured 99.2% on a real run beside `grad_norm_actor` 0.0068, `grad_norm_critic` 26.6, `kl` 1e-5 and a clip fraction of zero: that whole picture is one floored actor rather than four separate symptoms. High here with a KL near zero says to lower `adam_eps` before touching `lr_actor`. Published beside the critic's because the ASYMMETRY is the reading |
 | `clip_fraction` | 0.05-0.20 | pinned near 1.0 is the signature of a rollout/update mask disagreement, or a learning rate far too high |
 | `kl` | 0.003-0.02 | below the band, lower `batch_size`; above it, raise `batch_size` or let the backoff act |
 | `grad_norm_*` | below `max_grad_norm` most steps | pinned at 0.5 every step means the clip is the binding constraint and the effective learning rate is unknown |
@@ -2881,8 +2882,17 @@ reference's residual silently absorbs the four places it is actually slow.
 no-op-collapse metric**, because a healthy policy is about 94% no-op and 99.5% no-op is 1.8 cards a
 match and dead), `noop_rate`, `legal_actions_mean`, `legal_actions_p05/p50/p95`, `forced_noop_frac`
 (the share with exactly one legal action, which carries zero policy gradient), `tile_entropy`,
-`tile_top1_share`, `card_tile_top10_share`, per-card play frequency, and a 32x18 play heatmap per card
+`tile_top1_share`, `card_tile_top10_share`, `rollout_hold_rate`, `rollout_hold_lift`, `rollout_legal_actions`, `rollout_choice_frac`, per-card play frequency, and a 32x18 play heatmap per card
 as an artifact every `metrics.image_every` iterations.
+
+The four `rollout_*` keys are measured in the rollout's own forwards rather than in the update,
+so they describe the policy that CHOSE the actions rather than the one the optimizer saw after an
+epoch had already moved it. `rollout_hold_lift` is the one to read: each choice row's p(no-op)
+divided by the uniform baseline of that row's own width, averaged over the rows that had a choice.
+1.0 is a policy that has learnt nothing about when to wait, and the distance from 1.0 is the only
+part of a hold rate that is about the policy rather than about the elixir bar. It has no healthy
+band because nobody has yet trained a policy far enough to earn one, and for the same reason no
+alarm reads it.
 
 The healthy figure for `cards_per_match` is elixir arithmetic, not a guess: a full regulation match
 generates 85.7 elixir (120 s at 0.357/s plus 60 s at 0.714/s) plus 5 at the start, and at an average
