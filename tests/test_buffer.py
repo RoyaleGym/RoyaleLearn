@@ -516,21 +516,35 @@ def test_every_trainable_cell_is_trained_on_once_an_epoch_and_nothing_is_dropped
     assert counts.sum() == epochs * cells.size
 
 
-def test_a_batch_never_straddles_an_epoch(rect: Fixture) -> None:
+def test_an_epoch_is_cut_into_whole_batches_with_the_rows_over_spread_across_them(
+    rect: Fixture,
+) -> None:
+    """Every optimizer step sees at least a full batch, and the count is a property of the config.
+
+    Cutting at every ``batch_size`` rows left the rows over as a batch of their own, and a batch
+    is one optimizer step whatever it holds: a few dozen leftover rows moved the weights as far
+    as a full batch did, on a gradient estimated from a fraction of the sample. Worse for
+    comparing runs, the number of steps then moved between iterations as the trainable count
+    crossed a multiple of the batch size.
+    """
     buffer = fill_iteration(rect)
     epochs, batch_size = 2, 7
     total = int(buffer.trainable().sum())
+    per_epoch = total // batch_size
+    assert per_epoch >= 2 and total % batch_size, "this fixture must have rows over to spread"
+
     batches = collect(buffer, batch_size, 3, epochs)
-    per_epoch = math.ceil(total / batch_size)
     assert len(batches) == epochs * per_epoch
     sizes = [batch.n_samples for batch in batches]
-    remainder = total - batch_size * (per_epoch - 1)
-    expected = [batch_size] * (per_epoch - 1) + [remainder]
-    assert sizes == expected * epochs
+    assert min(sizes) >= batch_size
+    assert max(sizes) - min(sizes) <= 1
     assert sum(sizes) == epochs * total
 
+    # An epoch that cannot fill one batch is one batch, which is what it already was.
+    assert len(collect(buffer, total * 2, 3, 1)) == 1
 
-def test_the_remainder_is_a_smaller_batch_weighted_by_its_true_count(rect: Fixture) -> None:
+
+def test_every_minibatch_is_weighted_by_its_share_of_its_own_batch(rect: Fixture) -> None:
     buffer = fill_iteration(rect)
     batch_size, minibatch_size = 7, 3
     for batch in collect(buffer, batch_size, minibatch_size, 1):

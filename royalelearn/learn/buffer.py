@@ -175,6 +175,26 @@ class _StagingRing:
             event.record()
 
 
+def _batch_count(n_samples: int, batch_size: int) -> int:
+    """How many optimizer steps one epoch over ``n_samples`` cells should take.
+
+    An epoch used to be cut at every ``batch_size`` rows, which left a remainder batch of
+    whatever was over. That batch is not a small step: the loss is a mean over the rows it holds
+    and the optimizer takes a step per batch, so 64 leftover rows moved the weights as far as
+    4,096 rows did, on a gradient estimated from a sixty-fourth of the sample. On the shipped
+    laptop profile 3 of every 27 steps an iteration were that, and the count itself moved between
+    iterations -- measured 6 to 9 -- as the number of trainable rows crossed a multiple of the
+    batch size, so the number of Adam steps an iteration took was not a property of the config at
+    all. That contaminates any comparison between two runs, which is what the profiles exist for.
+
+    So the epoch is cut into as many WHOLE batches as it can fill, and the rows over are spread
+    one each across those batches rather than made into a short one. Every batch is then at least
+    ``batch_size``, the step count is ``n // batch_size`` for any n at or above it, and no row is
+    dropped. An epoch smaller than one batch is one batch, which is what it already was.
+    """
+    return max(1, int(n_samples) // max(1, int(batch_size)))
+
+
 class RectBuffer(ExperienceBuffer):
     """The shipped experience buffer.
 
@@ -494,11 +514,10 @@ class RectBuffer(ExperienceBuffer):
         """
         cells = np.flatnonzero(self.trainable().reshape(-1))
         self._ensure_ring(minibatch_size)
-        step = max(1, int(batch_size))
         for epoch in range(epochs):
             order = cells[rng_for_epoch(epoch).permutation(cells.size)]
-            for start in range(0, order.size, step):
-                yield Batch(order[start : start + step], minibatch_size, self._gather)
+            for part in np.array_split(order, _batch_count(order.size, batch_size)):
+                yield Batch(part, minibatch_size, self._gather)
 
     def _ensure_ring(self, minibatch_size: int) -> None:
         rows = max(1, int(minibatch_size))
