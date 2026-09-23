@@ -68,6 +68,10 @@ class PoolState(msgspec.Struct):
     consecutive_gate_failures: int = 0
     evictions: int = 0
     eval_games: int = 0
+    #: How many candidates this run has NAMED, which is not how many are in the pool: a
+    #: candidate that fails its gate is still a name that has been used, and a name reused after
+    #: a resume would put two different sets of weights under one id in the result log.
+    snapshots_issued: int = 0
 
 
 class LadderPool:
@@ -171,6 +175,38 @@ class LadderPool:
             if member in self.state.evicted:
                 self.state.evicted.remove(member)
         self.state.residency_epoch += 1
+
+    def issue_candidate_id(self) -> str:
+        """The next candidate's id, and the pool remembers that it has been handed out.
+
+        The counter lives here rather than on the coordinator because it has to survive a resume,
+        and this is the object whose state is checkpointed. It was a plain attribute on the
+        coordinator, initialised to zero and not restored, so a resumed run named its next
+        candidate ``snap:v0`` again -- a name the pool already held, with different weights behind
+        it, which the gate would then compare against its own predecessor and the result log would
+        file under one id. A long run resumes, so this was the ordinary case rather than an edge.
+        """
+        candidate = f"snap:v{self.state.snapshots_issued}"
+        self.state.snapshots_issued += 1
+        return candidate
+
+    def _issued_from_names(self) -> int:
+        """How many ids a pool loaded from an older checkpoint must already have issued.
+
+        Format 1 did not store the counter. Every name it did store is evidence, so the count is
+        read back from the highest ``snap:v{n}`` this pool has ever mentioned -- its members, the
+        ones it evicted and the chain of champions -- rather than from its current size, which an
+        eviction would have made too small.
+        """
+        highest = -1
+        names = set(self.members()) | set(self.state.evicted) | set(self.state.champion_chain)
+        for name in names:
+            if not name.startswith("snap:v"):
+                continue
+            tail = name[len("snap:v") :]
+            if tail.isdigit():
+                highest = max(highest, int(tail))
+        return highest + 1
 
     def promote(self, member: str) -> None:
         """Make ``member`` the champion. The previous one stays in the pool and in the chain."""
@@ -289,6 +325,8 @@ class LadderPool:
         self._view = None
         self.opponents = _OpponentPool.load(pool_path, max_size=None)
         self.state = msgspec.json.decode(state_path.read_bytes(), type=PoolState)
+        if not self.state.snapshots_issued:
+            self.state.snapshots_issued = self._issued_from_names()
         if ratings_path.exists():
             self._ratings = msgspec.json.decode(
                 ratings_path.read_bytes(), type=RatingTable | None

@@ -834,7 +834,6 @@ class LearningCoordinator:
         self.recent_episodes: list[EpisodeRecord] = []
         self.last_decision: GateDecision | None = None
         self.ratings: RatingTable | None = None
-        self.snapshots_taken = 0
         self.last_gate_seconds = 0.0
         self.gate_seconds_total = 0.0
         self._entered = False
@@ -1681,8 +1680,7 @@ class LearningCoordinator:
         if not (candidate_due or floor_due):
             return 0.0
         self._last_candidate_step = self.cumulative_env_steps
-        candidate = f"snap:v{self.snapshots_taken}"
-        self.snapshots_taken += 1
+        candidate = self.pool.issue_candidate_id()
         self.snapshot_store.put(
             candidate,
             self.model,
