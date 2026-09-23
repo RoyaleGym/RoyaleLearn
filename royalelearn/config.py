@@ -166,6 +166,10 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: cycles instead of arriving in one spike.
     stagger_first_reset: bool = True
     #: Lag-1 collection under the update. Costs a second rectangle, so it is off on 8 GB.
+    #: Spec 14.1's overlapped collection. REFUSED by ``check_consistency`` while true, because
+    #: nothing honours it and the preflight charges a second rectangle for it. It stays in the
+    #: config rather than being deleted so that a config carrying it gets a refusal naming the
+    #: section, instead of ``forbid_unknown_fields`` rejecting the whole file over one line.
     overlap: bool = False
     eval_workers: int = 2
     eval_games_per_worker: int = 24
@@ -702,11 +706,14 @@ def laptop() -> RunConfig:
 
 
 def workstation() -> RunConfig:
-    """32 GB RAM, 12 GB VRAM, 16 threads. Overlap on: the rollout hides under the update, at the
-    cost of a second rectangle."""
+    """32 GB RAM, 12 GB VRAM, 16 threads.
+
+    It asked for ``rollout.overlap`` until 2026-09-22, which bought a second rectangle and no
+    overlap, because nothing in the package honours the flag. It is refused now.
+    """
     return RunConfig(
         profile="workstation",
-        rollout=RolloutConfig(workers=12, games_per_worker=64, overlap=True),
+        rollout=RolloutConfig(workers=12, games_per_worker=64),
         net=NetConfig(channels=96, blocks=8, card_embed=96),
         ppo=PPOConfig(timesteps_per_iteration=131_072, batch_size=16_384, minibatch_size=2_048),
         ladder=LadderConfig(candidate_every_env_steps=2_000_000),
@@ -717,7 +724,7 @@ def many_core() -> RunConfig:
     """64 GB RAM, 24 GB VRAM, 64 threads."""
     return RunConfig(
         profile="many_core",
-        rollout=RolloutConfig(workers=24, games_per_worker=64, overlap=True),
+        rollout=RolloutConfig(workers=24, games_per_worker=64),
         net=NetConfig(channels=128, blocks=12, card_embed=128),
         ppo=PPOConfig(timesteps_per_iteration=262_144, batch_size=32_768, minibatch_size=8_192),
         ladder=LadderConfig(candidate_every_env_steps=2_000_000),
@@ -811,6 +818,23 @@ def check_consistency(config: RunConfig) -> list[str]:
     """
     problems: list[str] = []
     ppo, rollout, net = config.ppo, config.rollout, config.net
+
+    if rollout.overlap:
+        # Refused rather than accepted and ignored. Spec 14.1 says what it would do: collect
+        # iteration i on a second thread and a second buffer while the update of i-1 runs,
+        # against a BehaviourSnapshot taken at the boundary. HALF of that exists --
+        # BatchedInference.begin_iteration takes a snapshot and samples from it -- and the
+        # driver does not: nothing passes one, there is no second thread, there is no second
+        # buffer, and ppo/behaviour_lag_iterations is in the spec and in no schema.
+        #
+        # Meanwhile the flag was not free. preflight sizes TWO rectangles when it is set, so the
+        # two profiles that shipped with it on reserved twice the buffer memory for a feature
+        # that never ran, and that reservation is what the memory gate checks against.
+        problems.append(
+            "rollout.overlap is not implemented: it is accepted, recorded in the run identity "
+            "and charged for (the preflight reserves a second rectangle) while changing "
+            "nothing. Spec 14.1 says what it would do. Leave it false until the driver exists"
+        )
 
     if rollout.shards_per_worker < 1:
         problems.append("rollout.shards_per_worker must be at least 1")

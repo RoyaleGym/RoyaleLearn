@@ -759,6 +759,7 @@ CONDITIONAL: dict[str, str] = {
     # An iteration whose every decision was forced measured nothing about the policy. A lift of
     # 1.0 would read as "exactly uniform", a hold rate of 1.0 as "it never plays", and both are
     # statements about the elixir bar.
+    "time/overlap_saved": "rollout.overlap is honoured, which it is not yet (spec 14.1)",
     "ppo/adam_eps_floor_frac_actor": "the actor's optimizer has taken a step",
     "ppo/adam_eps_floor_frac_critic": "the critic's optimizer has taken a step",
     "policy/rollout_hold_rate": "a rollout decision this iteration had more than one legal action",

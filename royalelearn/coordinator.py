@@ -1961,7 +1961,9 @@ class LearningCoordinator:
             "time/checkpoint": self._take_checkpoint_seconds(),
             "time/gate": gate_seconds,
             "time/probe": rung_seconds,
-            "time/overlap_saved": 0.0,
+            # No "time/overlap_saved": it was a hardcoded 0.0, which reads as "overlap saved
+            # nothing this iteration" rather than "there is no overlap". rollout.overlap is
+            # refused until spec 14.1's driver exists, so nothing can fill it.
         }
         # The probe is in the attributed sum rather than in the residual. It plays battles one
         # at a time in the parent, so at the cadences worth running it is minutes, and a

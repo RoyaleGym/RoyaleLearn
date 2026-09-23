@@ -421,3 +421,48 @@ def test_torch_is_importable_in_this_environment_or_the_check_is_vacuous() -> No
     if probe.returncode != 0:
         pytest.skip("torch is not installed, so the import check above proves less than it says")
     assert probe.stdout.strip()
+
+
+# -- a flag the code does not honour -----------------------------------------
+
+
+def test_rollout_overlap_is_refused_rather_than_accepted_and_ignored() -> None:
+    """Nothing in the package reads ``rollout.overlap``, and it was not free to set.
+
+    Spec 14.1 describes it: the collection of iteration ``i`` on a second thread and a second
+    buffer while the update of ``i-1`` runs, against a ``BehaviourSnapshot`` taken at the
+    boundary. Half of that exists -- ``BatchedInference.begin_iteration`` takes a behaviour
+    snapshot and samples from it -- and the driver does not. No coordinator ever passes one,
+    there is no second thread, there is no second buffer, and ``ppo/behaviour_lag_iterations``
+    is in the spec and in no schema.
+
+    What the flag DID do is size the preflight for two rectangles
+    (``rollout/preflight.py:535``), so the two profiles that shipped with it on reserved twice
+    the buffer memory for a feature that never ran -- and that reservation is what the memory
+    gate then checks against. A flag that is accepted, recorded in the run identity and charged
+    for, while changing nothing, is worse than one that is refused.
+    """
+    import royalelearn.config as cfg
+
+    config = msgspec.structs.replace(
+        cfg.RunConfig(), rollout=msgspec.structs.replace(cfg.RolloutConfig(), overlap=True)
+    )
+    problems = cfg.check_consistency(config)
+    assert any("rollout.overlap" in problem for problem in problems), problems
+    assert any("14.1" in problem for problem in problems), (
+        "the refusal should send the reader to the section that says what it would have done"
+    )
+
+
+def test_no_shipped_profile_asks_for_overlap() -> None:
+    """The workstation and many_core profiles set it until 2026-09-22.
+
+    A refusal the shipped profiles trip is a refusal nobody can use, so this is the other half
+    of the change and not a separate tidy-up.
+    """
+    import royalelearn.config as cfg
+
+    for name in sorted(cfg.PROFILES):
+        config = cfg.profile(name)
+        assert not config.rollout.overlap, f"profile {name} asks for a flag that is refused"
+        assert not cfg.check_consistency(config), f"profile {name} does not load"

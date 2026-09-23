@@ -2856,7 +2856,9 @@ blocked on workers that have not published, which rises when the workers cannot 
 number about workers idling), `inference_ms_per_round`, `discarded_rows_frac`, `gpu_util_frac`.
 
 **`time/`**: `iteration`, `collection`, `inference`, `env`, `codec`, `ipc`, `critic_pass`, `gae`,
-`update`, `checkpoint`, `gate`, `overlap_saved`. The ratio of collection to iteration is how you see
+`update`, `checkpoint`, `gate`, `probe`, `residual`, and `overlap_saved` once there is an overlap
+to save anything (it was published as a hardcoded 0.0, which reads as "overlap saved nothing this
+iteration" rather than "there is no overlap", and is now absent). The ratio of collection to iteration is how you see
 whether a run is environment-bound or learner-bound, and the residual is broken out because the
 reference's residual silently absorbs the four places it is actually slow.
 
@@ -3127,6 +3129,16 @@ Every invariant reads only what collection wrote, so the batch is judged before 
 it, and a refused batch is never trained on. Until 0839758 the update ran first, and a refused batch
 was trained and then refused. The row is written before the alarms read it because a halt checkpoints
 the learner that row describes, and the row has to be in `metrics.jsonl` by then (section 12.2).
+
+**`rollout.overlap` is REFUSED as of 2026-09-22, and what follows describes what it would do
+rather than what it does.** Half of it exists: `BatchedInference.begin_iteration` takes a
+`BehaviourSnapshot` and samples from it. The driver does not -- nothing passes one, there is no
+second thread, there is no second buffer, and `ppo/behaviour_lag_iterations` is in this sentence
+and in no schema. It was not a free thing to leave accepted: the preflight sizes TWO rectangles
+when it is set (`rollout/preflight.py`), so the `workstation` and `many_core` profiles shipped
+reserving twice the buffer memory for a feature that never ran, and that reservation is what the
+memory gate is checked against. `check_consistency` now says so instead. When the driver is
+built, delete this paragraph's first sentence and the refusal together.
 
 With `rollout.overlap = true` the collection of iteration `i` runs on a second thread and a second
 buffer while the update of iteration `i-1` runs on the default CUDA stream, against a
