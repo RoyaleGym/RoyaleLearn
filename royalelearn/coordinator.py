@@ -1107,6 +1107,7 @@ class LearningCoordinator:
             getattr(self, "control", None),
             getattr(self, "source", None),
             getattr(self, "player", None),
+            getattr(self, "eval_player", None),
             getattr(self, "sinks", None),
             getattr(self, "results", None),
             getattr(self, "buffer", None),
@@ -1238,8 +1239,16 @@ class LearningCoordinator:
             device=self.device,
             release_mode=config.ladder.release_mode,
         )
+        # The player the GATE uses. `rollout.eval_workers` was accepted, recorded in the run
+        # identity and read by nothing until 2026-09-23 -- the same defect `rollout.overlap` had.
+        # A gate is 2,200 battles at a measured 8.02 s each, so this is the difference between a
+        # gate that costs 4.9 hours and one that costs 4.9/N. The probe keeps the parent's player:
+        # it plays the LIVE weights, which no worker has.
+        self.eval_player: Any = self.player
+        if config.rollout.eval_workers > 1:
+            self.eval_player = self._eval_farm(config, eval_env)
         self.eval_runner = _RecordingEvalRunner(
-            self.player,
+            self.eval_player,
             self.seeds,
             master_seed=config.master_seed,
             context=self.context,
@@ -1272,6 +1281,43 @@ class LearningCoordinator:
             self.rater,
             gates_dir=ladder_dir / "gates",
         )
+
+    def _eval_farm(self, config: Any, eval_env: Any) -> Any:
+        """A farm for the gate's battles, or the parent's player if one cannot be built.
+
+        A FAILED START FALLS BACK RATHER THAN ENDING THE RUN, loudly. The gate path has never
+        executed in this project's life, so the first run to reach one should not lose hours
+        because a worker could not spawn; it should take 4.9 hours instead of 4.9/N and say why.
+        A worker that fails DURING a batch is a different matter and raises: half a comparison
+        from the parent and half from a worker would be one measurement from two sources.
+        """
+        from .ladder.farm import EvalFarm, EvalWorkerConfig
+
+        try:
+            worker_config = EvalWorkerConfig(
+                spec=self.spec,
+                net=config.net,
+                env=eval_env,
+                extra_modules=tuple(config.extra_component_modules),
+                snapshot_root=str(self.run_dir / "snapshots"),
+                template=self.snapshot_template,
+                master_seed=config.master_seed,
+                release_mode=config.ladder.release_mode,
+                max_decisions=self.player.max_decisions,
+                max_resident=config.ladder.max_resident_opponents + 2,
+            )
+            return EvalFarm(
+                worker_config,
+                workers=config.rollout.eval_workers,
+                fallback=self.player,
+                printer=self.printer,
+            )
+        except Exception as exc:  # pragma: no cover - a farm that cannot even be described
+            self.printer(
+                f"eval farm     not built ({type(exc).__name__}: {exc}); gates will play their "
+                "battles in this process, which is about 8 s each"
+            )
+            return self.player
 
     def _build_actor(self, device: Any) -> Any:
         """A bare actor of this run's architecture, for a snapshot to load into."""
