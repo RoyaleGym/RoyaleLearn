@@ -86,9 +86,9 @@ end, but nobody has trained a bot with them yet, so there is no evidence yet tha
 good one, and there is more to say than that. On 2026-09-22 we found that a reward reached the
 buffer one cycle late, so it sat beside the action after the one that earned it. Every training
 number this project had produced to that point described a different objective than the one we
-meant. The fix landed the same evening (`87c97ae`), and the first run on the corrected loop
-started the same day. No run has yet gone far enough to say whether the bot gets better, so the
-honest position is that the loop is correct as far as we can tell and still unproven.
+meant. A fix landed the same evening (`87c97ae`) and a run on it started the same day. Nobody
+outside this repo has checked that fix yet, and no run has gone far enough to say whether the bot
+gets better, so the honest position is that the loop looks right to us and is unproven.
 
 In plain words, for anyone who has not trained a bot before:
 
