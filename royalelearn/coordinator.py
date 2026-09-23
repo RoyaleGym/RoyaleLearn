@@ -821,7 +821,9 @@ class LearningCoordinator:
         #: before the code moved computed a DIFFERENT id, made an empty directory beside the real
         #: one and evaluated nothing: `royalelearn eval --run <a live run>` could not reach the
         #: run it was given, which is why the train session reads episodes.jsonl with its own
-        #: tool instead. When a caller names a directory, that directory is the answer.
+        #: tool instead. When a caller names a directory, that directory is the answer. The
+        #: identity is still checked, separately and by name: the directory says WHERE and the
+        #: identity says WHETHER.
         self.given_run_dir = Path(run_dir) if run_dir is not None else None
         self.allow_identity_drift = bool(allow_identity_drift)
         self.requested_device = device

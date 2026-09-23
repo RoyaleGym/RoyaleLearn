@@ -114,11 +114,21 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--a", required=True)
     evaluate.add_argument("--b", required=True)
     evaluate.add_argument("--seeds", type=int, default=50)
+    evaluate.add_argument(
+        "--record",
+        action="store_true",
+        help="put these games in the run's own ladder, where the rating fit will see them",
+    )
     evaluate.set_defaults(handler=_eval)
 
     gate = commands.add_parser("gate", help="re-run a gate decision from stored snapshots")
     gate.add_argument("--run", type=Path, required=True)
     gate.add_argument("--candidate", required=True)
+    gate.add_argument(
+        "--record",
+        action="store_true",
+        help="put these games in the run's own ladder, where the rating fit will see them",
+    )
     gate.set_defaults(handler=_gate)
 
     rate = commands.add_parser("rate", help="refit the ratings from games.jsonl")
@@ -508,11 +518,35 @@ def _codec_microseconds(run: Any) -> float:
     return 1e6 * (time.perf_counter() - started) / 200
 
 
+def _side_log(run: Any, run_dir: Path, record: bool) -> Path | None:
+    """Send this command's games somewhere that is not the run's own ladder, unless asked.
+
+    An evaluation that writes into the log it is evaluating is a check that changes what it
+    checks. The games a manual ``eval`` or a re-run ``gate`` plays would join the fit, move the
+    ratings, and count towards ``ladder/eval_games_total`` in a run nobody asked to change --
+    silently, because the command that did it reads as a question rather than as an edit.
+
+    So the default is a side log beside the real one, and ``--record`` puts them in the ladder.
+    A flag in a command line is a thing a reviewer can see; "I ran eval against the live run" is
+    not. Returns the path written to, for the line the command prints.
+    """
+    if record:
+        return None
+    from .ladder.results import ResultLog
+
+    side = run_dir / "ladder" / "manual-eval.jsonl"
+    run.eval_runner.log = ResultLog(side)
+    return side
+
+
 def _eval(args: argparse.Namespace) -> int:
     """A paired evaluation between two members, with its interval, outside the loop."""
     config = _run_config(args.run)
     with _coordinator(config, run_dir=args.run) as run:
+        side = _side_log(run, Path(args.run), args.record)
         comparison = run.eval_runner.compare(args.a, args.b, games=2 * args.seeds)
+    if side is not None:
+        print(f"games written to {side}, not to this run's ladder (--record puts them in it)")
     print(f"{args.a} vs {args.b} over {comparison.n_games} battles ({comparison.n_seeds} seeds)")
     print(f"score  {comparison.score_a:.4f}  95% [{comparison.lo:.4f}, {comparison.hi:.4f}]")
     print(f"rho    {comparison.rho:.3f}   draws {comparison.draw_rate:.3f}")
@@ -523,7 +557,10 @@ def _gate(args: argparse.Namespace) -> int:
     """Re-run a gate decision from stored snapshots and print the verdict."""
     config = _run_config(args.run)
     with _coordinator(config, run_dir=args.run) as run:
+        side = _side_log(run, Path(args.run), args.record)
         decision = run.gate.evaluate(args.candidate, run.pool, run.eval_runner)
+    if side is not None:
+        print(f"games written to {side}, not to this run's ladder (--record puts them in it)")
     print(f"candidate {decision.candidate} against {decision.champion or 'nothing'}")
     for name, condition in decision.conditions.items():
         verdict = "pass" if condition.passed else "FAIL"
