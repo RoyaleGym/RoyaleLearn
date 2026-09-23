@@ -39,12 +39,14 @@ from .results import KIND_EVAL, KIND_PROBE, GameResult, ResultLog
 __all__ = [
     "SIDES",
     "BattlePlayer",
+    "BattleRequest",
     "Comparison",
     "EvalRunner",
     "SeedScore",
     "SeedSet",
     "bootstrap_interval",
     "comparison_id",
+    "play_all",
     "eval_seed_set",
     "paired_rho",
     "score_interval",
@@ -96,6 +98,52 @@ class BattlePlayer(Protocol):
     def play(self, *, a: str, b: str, seed: int, a_seat: int, act_path: str) -> float:
         """``a``'s score: 1 for a win, 0.5 for a draw, 0 for a loss."""
         ...
+
+
+class BattleRequest(msgspec.Struct, frozen=True):
+    """One battle, named completely.
+
+    Everything ``EnvBattlePlayer.play`` needs and nothing it carries between battles: the
+    environment is reset with ``seed`` and the acting uniforms come from the master seed and
+    ``act_path``, so two requests cannot see each other and the order they are played in is an
+    implementation detail rather than part of the measurement.
+    """
+
+    a: str
+    b: str
+    seed: int
+    a_seat: int
+    act_path: str
+
+
+def play_all(player: BattlePlayer, requests: Sequence[BattleRequest]) -> list[float]:
+    """Every request's score, in the order the requests were given.
+
+    A player that offers ``play_many`` is handed the whole list and may play it in any order or
+    in any number of processes; one that does not is driven a battle at a time, which is what
+    this has always done. The contract is the RETURN order, not the play order, and a pool that
+    returns the wrong number of results is refused here rather than silently shortening a
+    comparison.
+    """
+    many = getattr(player, "play_many", None)
+    if callable(many):
+        scores = list(many(list(requests)))
+        if len(scores) != len(requests):
+            raise ValueError(
+                f"the player was given {len(requests)} battles and returned {len(scores)} "
+                f"results; a comparison assembled from that would be shorter than it says"
+            )
+        return [float(score) for score in scores]
+    return [
+        player.play(
+            a=request.a,
+            b=request.b,
+            seed=request.seed,
+            a_seat=request.a_seat,
+            act_path=request.act_path,
+        )
+        for request in requests
+    ]
 
 
 class SeedScore(msgspec.Struct, frozen=True):
@@ -241,25 +289,33 @@ class EvalRunner:
                 f"{len(self.seeds)}; raise ladder.eval_seed_count for a longer comparison"
             )
         identity = comparison_id(a, b)
+        # The battles are named first and played second. They are independent by construction --
+        # each is reset from its own seed and acts from its own stream -- so the play order is
+        # not part of the measurement, and a player that can play them in a farm is handed all
+        # of them at once. What is assembled below is indexed by REQUEST order either way.
+        requests = [
+            BattleRequest(
+                a=a,
+                b=b,
+                seed=self.seeds.seeds[seed_index],
+                a_seat=a_seat,
+                act_path=stream_path(
+                    EVAL_MATCH, comparison=identity, seed_index=seed_index, side=side
+                ),
+            )
+            for seed_index in range(n_seeds)
+            for a_seat, side in enumerate(SIDES)
+        ]
+        played = [_checked_score(score) for score in play_all(self.player, requests)]
+
         scores: list[SeedScore] = []
         results: list[GameResult] = []
         draws = 0
         wall = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
         for seed_index in range(n_seeds):
-            seed = self.seeds.seeds[seed_index]
-            sides: list[float] = []
+            sides = played[2 * seed_index : 2 * seed_index + 2]
             for a_seat, side in enumerate(SIDES):
-                score = self.player.play(
-                    a=a,
-                    b=b,
-                    seed=seed,
-                    a_seat=a_seat,
-                    act_path=stream_path(
-                        EVAL_MATCH, comparison=identity, seed_index=seed_index, side=side
-                    ),
-                )
-                score = _checked_score(score)
-                sides.append(score)
+                score = sides[a_seat]
                 draws += score == 0.5
                 results.append(
                     GameResult(
