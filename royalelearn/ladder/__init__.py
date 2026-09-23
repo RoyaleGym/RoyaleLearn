@@ -35,6 +35,8 @@ _EXPORTS: dict[str, str] = {
     "eval_seed_set": ".evaluate",
     "failed_condition": ".gate",
     "floor_decision": ".gate",
+    "is_learner": ".pool",
+    "learner_probe_id": ".pool",
     "pfsp_shape": ".matchmaker",
     "wilson_interval": ".rating",
 }

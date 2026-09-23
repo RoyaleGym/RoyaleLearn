@@ -11,6 +11,8 @@
    definition is not.
 3. **Separate streams and a separate table.** The seeds come from a set drawn once at run start
    and reused forever; results are tagged ``kind="eval"`` and are the only ones the fit reads.
+   A runner built with ``kind="probe"`` writes the live policy's own measurements, which are
+   recorded beside the rest and deliberately left out of that cut.
 4. **Paired, with common random numbers.** Each pairing plays each seed twice with the sides
    swapped, and the unit of analysis is the seed, not the battle. That removes the side bias
    exactly rather than averaging it away, and removes the start-state variance the two policies
@@ -32,7 +34,7 @@ import numpy as np
 from ..errors import PreflightError
 from ..seeding import EVAL_BOOTSTRAP, EVAL_MATCH, EVAL_SEED_SET, derive_generator, stream_path
 from .rating import Z95
-from .results import KIND_EVAL, GameResult, ResultLog
+from .results import KIND_EVAL, KIND_PROBE, GameResult, ResultLog
 
 __all__ = [
     "SIDES",
@@ -184,9 +186,20 @@ class EvalRunner:
         bootstrap_resamples: int = 10_000,
         release_mode: str = "stochastic",
         obs_digest: Callable[[str], str] | None = None,
+        kind: str = KIND_EVAL,
     ) -> None:
         if release_mode not in ("stochastic", "argmax"):
             raise ValueError(f"unknown release mode {release_mode!r}")
+        # The kind belongs to the runner and not to the call, so that one runner cannot write
+        # two kinds into the log. A caller that wants both builds two runners, and then which
+        # cut a battle lands in is decided once, where the runner is built, rather than at every
+        # comparison. ``train`` is not one of them: a runner records no experience and nothing
+        # it plays was chosen by the curriculum.
+        if kind not in (KIND_EVAL, KIND_PROBE):
+            raise ValueError(
+                f"an evaluation runner writes results of kind {KIND_EVAL!r} or {KIND_PROBE!r}, "
+                f"not {kind!r}"
+            )
         self.player = player
         self.seeds = seeds
         self.master_seed = int(master_seed)
@@ -196,10 +209,20 @@ class EvalRunner:
         self.bootstrap_resamples = int(bootstrap_resamples)
         self.release_mode = release_mode
         self.obs_digest = obs_digest
+        self.kind = kind
         self.games_played = 0
 
     def compare(self, a: str, b: str, *, games: int, iteration: int = 0) -> Comparison:
-        """Play ``games`` battles between ``a`` and ``b``: half the seeds, twice each."""
+        """Play ``games`` battles between ``a`` and ``b``: half the seeds, twice each.
+
+        The seeds are the FIRST ``games // 2`` of the frozen set and never a fresh draw from
+        it. Every comparison of a given length therefore plays the same start states, which is
+        what makes two of them comparable: two players measured on two different samples of
+        positions differ by the positions as much as by the players, and at the few dozen seeds
+        a repeated measurement can afford that difference is most of the number. It is also why
+        the count is a config field rather than a per-call choice -- changing it mid-run changes
+        which positions are being reported on.
+        """
         self._check_pairing(a, b)
         n_seeds = int(games) // 2
         if n_seeds < 1:
@@ -238,7 +261,7 @@ class EvalRunner:
                         seed_index=seed_index,
                         side_a=side,
                         context=self.context,
-                        kind=KIND_EVAL,
+                        kind=self.kind,
                         run_id=self.run_id,
                         iteration=iteration,
                         wall=wall,

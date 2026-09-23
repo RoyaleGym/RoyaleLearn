@@ -31,11 +31,14 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "LEARNER_ID",
+    "LEARNER_STEP_SEPARATOR",
     "SCRIPTED_IDS",
     "SCRIPTED_NOOP",
     "SCRIPTED_RANDOM_LEGAL",
     "LadderPool",
     "PoolState",
+    "is_learner",
+    "learner_probe_id",
 ]
 
 #: The two scripted anchors. They exist before any snapshot does, which is what lets the rating
@@ -45,8 +48,36 @@ SCRIPTED_NOOP = "scripted:noop"
 SCRIPTED_RANDOM_LEGAL = "scripted:random_legal"
 SCRIPTED_IDS: tuple[str, ...] = (SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL)
 
-#: The live policy's id in the result log and in the fit.
+#: The live policy's id in the training results and in the online Elo readout.
 LEARNER_ID = "learner"
+
+#: What separates the live policy from the step it was measured at. It is not a colon, because
+#: a colon already means "a family of ids" here -- ``scripted:`` and ``snap:`` -- and a probe is
+#: not a family, it is one player at one moment.
+LEARNER_STEP_SEPARATOR = "@"
+
+
+def learner_probe_id(env_step: int) -> str:
+    """The live policy's id in the result log, carrying the step it was measured at.
+
+    A probe at four million env steps and a probe at forty million are two different players,
+    and the log is keyed on the id: written under one name their games would pool into one row
+    of the matrix, and a rating fitted to that row would be the average of every policy the run
+    has ever had, reported as if it were the current one. The env step is the one thing about
+    the live learner a run can state exactly, it is what the snapshot specs already carry, and
+    it sorts.
+    """
+    return f"{LEARNER_ID}{LEARNER_STEP_SEPARATOR}{int(env_step)}"
+
+
+def is_learner(member: str) -> bool:
+    """Whether an id names the live policy rather than an archived snapshot or a script.
+
+    Both spellings: ``learner``, which the training results carry, and ``learner@{step}``,
+    which a probe writes. Callers use it to answer "what did this player see" without going to
+    the snapshot archive, which holds neither.
+    """
+    return member == LEARNER_ID or member.startswith(LEARNER_ID + LEARNER_STEP_SEPARATOR)
 
 
 class PoolState(msgspec.Struct):

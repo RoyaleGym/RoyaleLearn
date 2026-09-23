@@ -35,7 +35,9 @@ from typing import BinaryIO
 import msgspec
 
 __all__ = [
+    "KINDS",
     "KIND_EVAL",
+    "KIND_PROBE",
     "KIND_TRAIN",
     "Aggregate",
     "GameResult",
@@ -54,6 +56,18 @@ PAIR_SEPARATOR = "\x1f"
 #: default: they are PFSP-selected and therefore biased towards hard matchups.
 KIND_EVAL = "eval"
 KIND_TRAIN = "train"
+
+#: The live policy measured against a fixed rung, which is a third thing and not the other two.
+#: It is not ``train``: nothing about it is selected by the curriculum and no row of it reaches
+#: the buffer. It is not ``eval`` either, and this is the whole reason it has a kind of its own.
+#: The authoritative fit wants players it can pool games for, and the live policy is a player
+#: that exists for one moment: ``learner@4000000`` plays a handful of battles and never appears
+#: again. Pooling those into the fit would add a new column per probe, each with too few games
+#: to place, and would let a run's rating scale move because the run measured itself.
+KIND_PROBE = "probe"
+
+#: Every kind a line may carry, which is what a reader can expect to find in the file.
+KINDS: tuple[str, ...] = (KIND_EVAL, KIND_TRAIN, KIND_PROBE)
 
 
 class GameResult(msgspec.Struct, frozen=True):
