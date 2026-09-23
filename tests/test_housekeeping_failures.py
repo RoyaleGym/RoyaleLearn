@@ -342,3 +342,66 @@ def test_the_total_is_unconditional_so_an_existing_test_requires_it_in_the_row()
         "made conditional, which quietly removes it from the row test that proves it is emitted"
     )
     assert "health/housekeeping/{kind}" in {p.template for p in schema.PATTERNS}
+
+
+# -- the save an operator is most likely to reach for ----------------------------------------
+
+
+class _Alarm:
+    message = "buffer_overflow: fill read 1.4"
+
+
+class _Halting:
+    """Only what ``_halt_bundle`` touches."""
+
+    def __init__(self, *, checkpoint_raises: Exception | None) -> None:
+        self._raises = checkpoint_raises
+        self.printed: list[str] = []
+        self.dumped: dict[str, object] = {}
+        self.checkpoints = 0
+
+    def printer(self, line: str) -> None:
+        self.printed.append(line)
+
+    def _checkpoint(self) -> None:
+        self.checkpoints += 1
+        if self._raises is not None:
+            raise self._raises
+
+    def _dump_bundle(self, alarm: object = None, note: str = "") -> str:
+        self.dumped = {"alarm": alarm, "note": note}
+        return "runs/x/bundles/000001"
+
+
+def test_a_halt_checkpoint_that_fails_says_so_instead_of_being_suppressed() -> None:
+    """The halt path wrote its checkpoint under a blanket suppress.
+
+    That checkpoint is the one an operator reaches for, because it is the state the run stopped
+    in. Swallowing its failure left them believing they had it -- the bundle still appeared, the
+    halt still raised, and nothing anywhere said the save was not written.
+    """
+    from royalelearn.coordinator import LearningCoordinator
+
+    run = _Halting(checkpoint_raises=OSError("no space left on device"))
+
+    folder = LearningCoordinator._halt_bundle(run, _Alarm())
+
+    assert folder == "runs/x/bundles/000001", "a failed checkpoint stopped the bundle too"
+    note = str(run.dumped["note"])
+    assert "buffer_overflow" in note, "the alarm's own message was displaced by the note"
+    assert "no space left on device" in note
+    assert "no save" in note.lower()
+    assert any("FAILED" in line for line in run.printed)
+
+
+def test_a_halt_checkpoint_that_works_leaves_the_alarm_to_speak_for_itself() -> None:
+    """The control. A note that always appears would push the alarm out of the bundle header."""
+    from royalelearn.coordinator import LearningCoordinator
+
+    run = _Halting(checkpoint_raises=None)
+
+    LearningCoordinator._halt_bundle(run, _Alarm())
+
+    assert run.checkpoints == 1
+    assert run.dumped["note"] == "", "the bundle's note is what _dump_bundle falls back from"
+    assert run.printed == []

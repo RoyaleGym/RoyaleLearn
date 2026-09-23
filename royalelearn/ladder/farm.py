@@ -332,17 +332,9 @@ class EvalFarm:
                     delivered += 1
         leaked = []
         for process in self._procs:
-            process.join(timeout=STOP_WORD_TIMEOUT_S)
-            if not process.is_alive():
+            if _stop(process):
                 continue
-            process.terminate()
-            process.join(timeout=SIGNAL_TIMEOUT_S)
-            if not process.is_alive():
-                continue
-            process.kill()
-            process.join(timeout=SIGNAL_TIMEOUT_S)
-            if process.is_alive():
-                leaked.append(process)
+            leaked.append(process)
         if leaked:
             self.terminate_failures += len(leaked)
             self.unkilled.extend(leaked)
@@ -365,6 +357,30 @@ class EvalFarm:
         self._procs = []
         self._inbox = None
         self._outbox = None
+
+
+def _stop(process: Any) -> bool:
+    """Stop word, SIGTERM, SIGKILL, in that order, each because the one before did not take.
+
+    Returns whether the process is gone. A handle that RAISES counts as not gone rather than
+    propagating: ``close`` runs in teardown under the coordinator's blanket suppress, so an
+    exception here would abort the loop over the remaining workers and then be swallowed, leaving
+    more processes alive and nothing said about any of them.
+    """
+    for stage, timeout in (
+        (None, STOP_WORD_TIMEOUT_S),
+        ("terminate", SIGNAL_TIMEOUT_S),
+        ("kill", SIGNAL_TIMEOUT_S),
+    ):
+        try:
+            if stage is not None:
+                getattr(process, stage)()
+            process.join(timeout=timeout)
+            if not process.is_alive():
+                return True
+        except Exception:
+            return False
+    return False
 
 
 def _suppress() -> Any:

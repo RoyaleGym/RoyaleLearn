@@ -216,3 +216,31 @@ def test_a_delivered_stop_word_is_not_second_guessed() -> None:
 
     assert farm.terminate_failures == 1
     assert "did not reach" not in lines[0]
+
+
+def test_a_handle_that_raises_is_a_leak_and_not_an_exception() -> None:
+    """close() runs in teardown beside every other component, under a blanket suppress.
+
+    So an exception here is not loud, it is the opposite: it aborts this loop AND is swallowed by
+    the caller, which means the remaining workers are never signalled and nothing says why. A
+    handle that will not take a signal is the same outcome as one that ignores it -- a process
+    still running -- so it is counted, not raised.
+    """
+
+    class _Raising(_Process):
+        def terminate(self) -> None:
+            self.terminated += 1
+            raise OSError("access is denied")
+
+    bad = _Raising("royalelearn-eval-0", obeys="nothing")
+    after = _Process("royalelearn-eval-1", obeys="kill")
+    farm, lines = _farm(bad, after)
+
+    farm.close()
+
+    assert farm.terminate_failures == 1
+    assert [p.name for p in farm.unkilled] == ["royalelearn-eval-0"]
+    assert (after.terminated, after.killed) == (1, 1), (
+        "the second worker was never signalled, because the first one raised"
+    )
+    assert len(lines) == 1

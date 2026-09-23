@@ -2219,10 +2219,26 @@ class LearningCoordinator:
         self.sinks.write_alarms(fired)
 
     def _halt_bundle(self, alarm: AlarmResult) -> str | None:
-        """A checkpoint and a diagnostic bundle, in that order, before the halt is raised."""
-        with contextlib.suppress(Exception):
+        """A checkpoint and a diagnostic bundle, in that order, before the halt is raised.
+
+        THE CHECKPOINT WAS WRITTEN UNDER A BLANKET SUPPRESS. It is the save an operator is most
+        likely to reach for, because it is the state the run stopped in, and swallowing its
+        failure left them believing they had it: the bundle still appeared, the halt still raised
+        with its own message, and nothing anywhere said the file was not written. It still must
+        not raise -- that would replace the alarm with a disk error as the reason the run
+        stopped -- so the failure rides in the bundle's note and in the run log instead.
+        """
+        note = ""
+        try:
             self._checkpoint()
-        return self._dump_bundle(alarm)
+        except Exception as exc:
+            note = (
+                f"{alarm.message}\n\nTHE HALT CHECKPOINT DID NOT WRITE: "
+                f"{type(exc).__name__}: {exc}. There is no save at this iteration; the newest "
+                "one is whatever the run wrote before it."
+            )
+            self.printer(f"checkpoint    FAILED at the halt: {type(exc).__name__}: {exc}")
+        return self._dump_bundle(alarm, note=note)
 
     def _dump_bundle(self, alarm: AlarmResult | None = None, note: str = "") -> str | None:
         try:
