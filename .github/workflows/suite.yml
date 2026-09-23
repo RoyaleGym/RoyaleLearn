@@ -10,9 +10,15 @@
 # so RoyaleGym is checked out and installed FIRST, and if that line ever stops being true this job
 # is where it shows.
 #
-# What is NOT here: the Rust toolchain and a royalesim build. `addopts` in pyproject.toml already
-# selects `not slow and not engine`, so the tests needing a freshly built engine are deselected
-# rather than skipped, and the cross-repo workflow is where an engine build belongs.
+# What is NOT here: the Rust toolchain and a royalesim BUILD. `addopts` in pyproject.toml already
+# selects `not slow and not engine`, so the tests needing a freshly built engine are deselected,
+# and the cross-repo workflow is where a build belongs.
+#
+# RoyaleSim is still checked out, and the first run of this file is how that was learnt: without
+# it, 295 tests error and 21 fail with "RoyaleSim data directory not found". The fast suite needs
+# no compiled extension and it does need the CARD CATALOGUE, because MockEngine reads the same
+# data the real one does. The README clones four repos and this workflow had checked out two,
+# which is the whole reason the rule is to use the README's own sequence.
 name: suite
 
 on:
@@ -39,6 +45,12 @@ jobs:
         with:
           repository: RoyaleGym/RoyaleViser
           path: RoyaleViser
+      # Not installed and not built: only its data/ is needed, and the catalogue is what the
+      # environment reads whichever engine is behind it.
+      - uses: actions/checkout@v4
+        with:
+          repository: RoyaleGym/RoyaleSim
+          path: RoyaleSim
 
       - uses: actions/setup-python@v5
         with:
@@ -62,6 +74,11 @@ jobs:
 
       - name: suite
         working-directory: RoyaleLearn
+        # Named rather than left to the sibling-directory search. The search works from this
+        # layout, and saying it outright means a change to either layout fails loudly here
+        # instead of falling back to "no ROYALESIM_DATA_DIR" and 295 errors.
+        env:
+          ROYALESIM_DATA_DIR: ${{ github.workspace }}/RoyaleSim/data
         run: pytest -q -p no:randomly
 
       # Counts are never recorded without the build digest: a number with no build behind it
