@@ -286,8 +286,10 @@ METRICS: dict[str, MetricSpec] = {
         "the step stops being normalised by the gradient and becomes proportional to it again. "
         "The actor reaches this floor and the critic does not, which is what a grad_norm_actor "
         "of 0.0068 against a critic at 26.6 looks like from the optimizer's side. High here "
-        "with a KL near zero says to lower adam_eps rather than to raise lr_actor.",
-        high=0.5,
+        "with a KL near zero says to lower adam_eps rather than to raise lr_actor. No band: "
+        "the comparison that means something is against the CRITIC's share in the same row, "
+        "and nobody has yet trained a policy far enough to know what an absolute healthy "
+        "value is. 99.2% against a critic's 33.7% is the reading that is known to be bad.",
     ),
     "ppo/adam_eps_floor_frac_critic": _m(
         "fraction",

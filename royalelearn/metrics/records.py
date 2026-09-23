@@ -175,9 +175,17 @@ def episode_fields(
     # is not a mirror has an opponent in its other seat, and that opponent's crowns, towers,
     # elixir and card play are not the policy's behaviour: averaging them in means every one of
     # these reads as a blend of the learner and whatever it happened to be drawn against, and the
-    # blend moves as the mixture and the pool move. `random_legal` plays a card whenever it can,
-    # so it would hold `cards_per_match` up while the thing the no-op-collapse alarm watches for
-    # was happening to the learner. A mirror battle has the learner in both seats and both count.
+    # blend moves as the mixture and the pool move. `random_legal` alone kept `cards_per_match`
+    # at about 3.9, which is above the 3.0 the severe no-op-collapse alarm halts on, so a learner
+    # collapsing to nothing could be held over the line by its opponent. A mirror battle has the
+    # learner in both seats and both count.
+    #
+    # It is NOT that random_legal plays a card whenever it can; this comment said so until
+    # 2026-09-22 and the train session built an argument on it. `RANDOM_LEGAL_NOOP_PROB` is 0.9
+    # and it takes the no-op with that probability regardless of affordability
+    # (`rollout/scripted.py:52`). The uniform-over-the-action-space opponent that really does
+    # play the instant it can afford to was deliberately replaced by this one, and the constant's
+    # own docstring says why. 3.9 a match is what nine-in-ten no-ops looks like.
     own = [record for record in records if record.policy_id == LEARNER_ID]
     seat_steps = float(sum(record.episode_steps for record in own))
     fields["env/crowns_for"] = float(np.mean([record.own_crowns for record in own]))
