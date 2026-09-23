@@ -107,6 +107,32 @@ jobs:
         working-directory: RoyaleLearn
         run: ruff check royalelearn tests
 
+      # MEASURED rather than derived, and the two figures do not reconcile by arithmetic.
+      # `collected` counts ITEMS; `passed + skipped` counts OUTCOMES, and a module-level
+      # `pytest.importorskip` produces an outcome with NO collected item -- zero items, one skip.
+      # This repo has importorskip in 18 test files, so the difference is not hypothetical, and
+      # subtracting one figure from the other recovers nothing. Both selections are emitted so a
+      # certification row can state each one instead of inferring either.
+      #
+      # Found by the integrator in its own work: its repo refused to reconcile at 117 collected
+      # against 118 executed, bracketing the suite with a collection on each side gave 117 both
+      # times, and the missing item was one importorskip with no engine on the runner.
+      - name: collect
+        working-directory: RoyaleLearn
+        shell: bash
+        env:
+          ROYALESIM_DATA_DIR: ${{ github.workspace }}/RoyaleSim/data
+        run: |
+          {
+            echo "### collected, by selection"
+            echo '```'
+            echo -n 'default (not slow and not engine): '
+            pytest -q --collect-only -p no:randomly | tail -1
+            echo -n 'slow suite (slow and not engine):  '
+            pytest -q --collect-only -p no:randomly -m "slow and not engine" | tail -1
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: suite
         working-directory: RoyaleLearn
         # Named rather than left to the sibling-directory search. The search works from this
