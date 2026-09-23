@@ -11,7 +11,9 @@ cannot crash a sink, and a sink that does not understand a key writes it anyway.
 
 from __future__ import annotations
 
+import contextlib
 import gzip
+import os
 import shutil
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -61,6 +63,12 @@ class JsonlSink(MetricsSink):
         self._handles: dict[str, BinaryIO] = {}
         self._rows = 0
         self._iterations = 0
+        #: Whether the episode log has been archived yet. A flag rather than an equality on the
+        #: iteration count, so an attempt that could not run is tried again next iteration
+        #: instead of being spent.
+        self._compacted = False
+        #: Attempts that could not complete, for anyone asking why the log is still here.
+        self.compaction_failures = 0
 
     def open(self, *, identity: RunIdentity, config_json: str, run_dir: Path) -> None:
         self.run_dir = Path(run_dir)
@@ -96,7 +104,9 @@ class JsonlSink(MetricsSink):
     def save_checkpoint(self, folder: Path) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "jsonl.json").write_bytes(
-            msgspec.json.encode({"iterations": self._iterations})
+            msgspec.json.encode(
+                {"iterations": self._iterations, "compacted": self._compacted}
+            )
         )
 
     def load_checkpoint(self, folder: Path, *, strict: bool = True) -> None:
@@ -105,7 +115,12 @@ class JsonlSink(MetricsSink):
             if strict:
                 raise FileNotFoundError(str(path))
             return
-        self._iterations = int(msgspec.json.decode(path.read_bytes())["iterations"])
+        state = msgspec.json.decode(path.read_bytes())
+        self._iterations = int(state["iterations"])
+        # Absent in checkpoints written before 2026-09-23. False is right for those: the old
+        # trigger was an equality on the iteration count, so a resume past the threshold never
+        # compacted anyway, and one late archive is better than none.
+        self._compacted = bool(state.get("compacted", False))
 
     # -- internals ----------------------------------------------------------
 
@@ -132,9 +147,25 @@ class JsonlSink(MetricsSink):
 
         Episodes are the largest stream a run writes and the one nobody reads until something
         looks wrong, which is exactly the shape of a file that should be compressed in place.
+
+        ARCHIVING MUST NOT BE ABLE TO END A RUN, and before 2026-09-23 it could. On Windows
+        ``unlink`` raises ``PermissionError`` while any other process holds a handle on the
+        file -- and reading ``episodes.jsonl`` during a run is what the train session's job
+        requires. That exception came out of ``write``, which the coordinator calls between
+        setting ``_learner_ahead_of_rows`` and clearing it, so the run fell over AND its
+        emergency checkpoint was suppressed. It was not one-shot either: the iteration counter
+        is restored from the pre-threshold checkpoint, so a resumed run reached the same line
+        and died again.
+
+        THE RENAME IS THE PROBE. Moving the file aside costs nothing and fails in exactly the
+        same way the delete would, so a held file is discovered before the expensive copy rather
+        than after it -- and the original is out of the way before the archive exists, which is
+        what stops a complete ``episodes.jsonl`` sitting beside a complete
+        ``episodes.jsonl.gz`` that claims to have replaced it. If the copy then fails, the
+        original goes back.
         """
         keep = self.keep_episode_log_iterations
-        if not keep or self._iterations != keep or self.run_dir is None:
+        if not keep or self._compacted or self._iterations < keep or self.run_dir is None:
             return
         handle = self._handles.pop(EPISODES_NAME, None)
         if handle is not None:
@@ -142,10 +173,29 @@ class JsonlSink(MetricsSink):
             handle.close()
         source = self.run_dir / EPISODES_NAME
         if not source.exists():
+            self._compacted = True
             return
-        with source.open("rb") as raw, gzip.open(source.with_suffix(".jsonl.gz"), "wb") as out:
-            shutil.copyfileobj(raw, out)
-        source.unlink()
+        staged = source.with_suffix(".jsonl.compacting")
+        archive = source.with_suffix(".jsonl.gz")
+        try:
+            os.replace(source, staged)
+        except OSError:
+            # Somebody is holding it. Nothing has moved, the log keeps growing, and the next
+            # iteration tries again.
+            self.compaction_failures += 1
+            return
+        try:
+            with staged.open("rb") as raw, gzip.open(archive, "wb") as out:
+                shutil.copyfileobj(raw, out)
+            staged.unlink()
+        except OSError:
+            self.compaction_failures += 1
+            with contextlib.suppress(OSError):
+                archive.unlink()
+            with contextlib.suppress(OSError):
+                os.replace(staged, source)
+            return
+        self._compacted = True
 
 
 class ConsoleSink(MetricsSink):

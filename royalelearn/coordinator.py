@@ -21,6 +21,7 @@ import hashlib
 import math
 import os
 import signal
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -771,6 +772,33 @@ class EnvBattlePlayer:
 # ---------------------------------------------------------------------------
 
 
+#: The encodings a reader's shell actually writes, in the order they are tried. `utf-8-sig`
+#: FIRST because it is the plain-UTF-8 decoder plus a BOM it discards, so it covers both the
+#: Python-written file and every PowerShell redirection: `>`, `Set-Content` and
+#: `Out-File -Encoding utf8` all emit a BOM on 5.1, and `﻿` is not whitespace, so `.strip()`
+#: left it and the first character of the file was the BOM rather than the letter.
+#: `Out-File -Encoding unicode` is UTF-16, which is not UTF-8 at all.
+CONTROL_ENCODINGS: tuple[str, ...] = ("utf-8-sig", "utf-16", "latin-1")
+
+
+def _control_letter(raw: bytes) -> str:
+    """The first letter of a control file, whichever documented shell wrote it.
+
+    ``latin-1`` last as a decoder that cannot fail, so a file of arbitrary bytes gives a letter
+    that is simply not one of the three rather than an exception. A control file is a
+    convenience and must not be able to end a run: a UnicodeDecodeError is a ValueError with no
+    OSError in it, so before 2026-09-23 a UTF-16 file escaped this method's guard, went through
+    ``_collect`` and ``_iterate``, and reached ``learn``.
+    """
+    for encoding in CONTROL_ENCODINGS:
+        try:
+            text = raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        return text.strip().lstrip("﻿").strip()[:1].lower()
+    return ""  # pragma: no cover - latin-1 decodes every byte string
+
+
 class _Control:
     """``c`` checkpoint, ``q`` checkpoint and quit, ``p`` pause, read once per round.
 
@@ -779,10 +807,17 @@ class _Control:
     turns Ctrl-C into ``q``, which is a checkpoint rather than a lost afternoon.
     """
 
-    def __init__(self, run_dir: Path, *, install_signal: bool = True) -> None:
+    def __init__(
+        self,
+        run_dir: Path,
+        *,
+        install_signal: bool = True,
+        printer: Callable[[str], None] | None = None,
+    ) -> None:
         self.path = run_dir / CONTROL_FILE
         self.pending: str = ""
         self.resume = threading.Event()
+        self.printer = printer or (lambda _line: None)
         self._previous: Any = None
         self._installed = False
         if install_signal:
@@ -807,11 +842,22 @@ class _Control:
         try:
             if not self.path.exists():
                 return ""
-            letter = self.path.read_text(encoding="utf-8").strip()[:1].lower()
+            raw = self.path.read_bytes()
             self.path.unlink()
         except OSError:
             return ""
-        return letter if letter in ("c", "q", "p") else ""
+        letter = _control_letter(raw)
+        if letter in ("c", "q", "p"):
+            return letter
+        if raw.strip():
+            # Said rather than swallowed. The file is consumed either way -- a letter has to act
+            # once -- and the difference is whether anybody learns why nothing happened. This is
+            # the half that made the BOM invisible for as long as it was there.
+            self.printer(
+                f"control file held {raw[:16]!r}, which is not c, q or p; ignored. "
+                "Write one letter, and Ctrl-C always works"
+            )
+        return ""
 
     def wait_while_paused(self, printer: Callable[[str], None]) -> str:
         """Block until something says to go on, and return what it said.
@@ -1035,7 +1081,11 @@ class LearningCoordinator:
         )
         self.store = DirCheckpointStore(self.run_dir, keep=config.checkpoint.keep)
         self.components = self._components()
-        self.control = _Control(self.run_dir, install_signal=self.install_signal_handler)
+        self.control = _Control(
+            self.run_dir,
+            install_signal=self.install_signal_handler,
+            printer=self.printer,
+        )
         if self.resume_from is not None:
             self._load(self.resume_from)
         self._entered = True
@@ -2486,6 +2536,29 @@ def _vram_peak_mb() -> float:
         return 0.0
 
 
+#: The POSIX platforms whose ``ru_maxrss`` is in BYTES. Everywhere else it is kilobytes, which
+#: is Linux and therefore this project's CI. The list is short and knowable; the magnitude test
+#: it replaced was not, and it was wrong by a factor of 1000 for exactly the processes worth
+#: measuring -- see ``_rss_megabytes``.
+RSS_IN_BYTES: tuple[str, ...] = ("darwin",)
+
+
+def _rss_megabytes(peak: int, platform: str) -> float:
+    """``ru_maxrss`` in megabytes, given which POSIX system produced it.
+
+    Kilobytes on Linux, bytes on macOS and the BSDs. Until 2026-09-23 this decided between them
+    by MAGNITUDE -- bytes above 1 GiB, kilobytes below -- which is right for a small process on
+    Linux and wrong for a big one: a 2 GB parent reports 2,097,152 KiB, which is above the
+    threshold, and was published as 2 MB. One thousandth of the truth, in the only measured RSS
+    the harness has, on the platform its CI runs, about the resource that ends runs here.
+
+    The platform is knowable. The size was a guess that failed at the size that mattered.
+    """
+    if platform.startswith(RSS_IN_BYTES):
+        return float(peak) / 1e6
+    return float(peak) * 1024.0 / 1e6
+
+
 def _rss_peak_mb() -> float | None:
     """The parent's peak resident memory, where the platform will say, and None where it will not.
 
@@ -2511,7 +2584,7 @@ def _rss_peak_mb() -> float | None:
         import resource
 
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        return float(peak) / 1e6 if peak > 1 << 20 else float(peak) / 1e3
+        return _rss_megabytes(peak, sys.platform)
     except ImportError:
         try:
             import ctypes

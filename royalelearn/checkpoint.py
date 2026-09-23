@@ -176,6 +176,9 @@ class DirCheckpointStore(CheckpointStore):
     def __init__(self, run_dir: str | Path, *, keep: int = 10) -> None:
         self.run_dir = Path(run_dir)
         self.keep = int(keep)
+        #: Folders a prune could not remove, cumulative. See ``prune``: housekeeping must not be
+        #: able to end a run, and a folder that stayed is a folder the next prune tries again.
+        self.prune_failures = 0
 
     def folder(self, run_dir: Path | None = None) -> Path:
         return (run_dir or self.run_dir) / CHECKPOINTS_DIR
@@ -288,25 +291,51 @@ class DirCheckpointStore(CheckpointStore):
         return self.folder(run_dir) / newest.name
 
     def prune(self, run_dir: Path | None = None, keep: int | None = None) -> list[Path]:
-        """Keep the newest ``keep`` and remove the rest, along with any abandoned partial."""
+        """Keep the newest ``keep`` and remove the rest, along with any abandoned partial.
+
+        HOUSEKEEPING MUST NOT BE ABLE TO END A RUN. ``shutil.rmtree`` raises ``PermissionError``
+        on Windows while any file inside the folder is open, and reading a checkpoint while a run
+        continues is an ordinary thing to do. This is called at every checkpoint -- about 1,990
+        times in a long run -- and before 2026-09-23 a single open handle anywhere in the oldest
+        folder would have ended it.
+
+        A folder that could not be removed STAYS IN THE INDEX, so the next prune tries it again
+        rather than losing track of it, and it is not reported as removed. The returned list is
+        what actually went.
+
+        Reported by the train session's platform-portability hunt, which measured it here rather
+        than arguing it.
+        """
         root = self.folder(run_dir)
         limit = self.keep if keep is None else int(keep)
         entries = sorted(
             self._entries(root), key=lambda e: (e.cumulative_env_steps, e.created_unix_ns)
         )
         removed: list[Path] = []
+        stuck: set[str] = set()
         for entry in entries[: max(0, len(entries) - limit)]:
             folder = root / entry.name
-            if folder.is_dir():
-                shutil.rmtree(folder)
+            try:
+                if folder.is_dir():
+                    shutil.rmtree(folder)
+            except OSError:
+                self.prune_failures += 1
+                stuck.add(entry.name)
+                continue
             removed.append(folder)
         if root.is_dir():
             for partial in sorted(root.glob(f"*{PARTIAL_SUFFIX}")):
-                if partial.is_dir():
-                    shutil.rmtree(partial)
-                    removed.append(partial)
+                try:
+                    if partial.is_dir():
+                        shutil.rmtree(partial)
+                except OSError:
+                    self.prune_failures += 1
+                    continue
+                removed.append(partial)
         kept = {entry.name for entry in entries[max(0, len(entries) - limit) :]}
-        self._index_write(root, [entry for entry in entries if entry.name in kept])
+        self._index_write(
+            root, [entry for entry in entries if entry.name in kept or entry.name in stuck]
+        )
         return removed
 
     # -- the index ----------------------------------------------------------
