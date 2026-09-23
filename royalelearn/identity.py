@@ -279,6 +279,15 @@ def dirty_sources(config_path: Path | None = None) -> tuple[str, ...]:
     anything a component reads at call time from somewhere else. Hashing each resolved component's
     source would be the thorough answer and it is a much larger one.
 
+    THE ENGINE'S COMPILED CODE IS THE GAP WORTH KNOWING ABOUT. The extension is installed rather
+    than imported from a checkout, so there is no working tree here to ask, and it exposes no
+    build commit: ``build_digest`` is over the DATA compiled into it, not over the Rust it was
+    compiled from. A run can therefore execute an engine built from uncommitted source and nothing
+    anywhere says so. Reaching into a sibling checkout to guess at that would put back the guessed
+    path this function just removed; the fix is for the extension to carry its own build commit,
+    and this reads it the way it reads the data directory once it does. Measured and put to the
+    engine's session by the integrator, 2026-09-22.
+
     The first version of this checked ``git describe --dirty`` on two hardcoded packages. It
     missed the engine's data, missed RoyaleViser, and was blind to untracked files -- including,
     at the time it was written, the config of the run then in flight. Found by the integrator,
