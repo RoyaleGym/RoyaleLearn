@@ -346,13 +346,27 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: measurement of the policy it is actually training.
     probe_every_iterations: int = 0
     #: Battles per rung per probe, paired: ``probe_games // 2`` seeds, each played from both
-    #: sides. At 40 the 95% interval on a score rate is about ten points wide, which is enough
-    #: to see a collapse and not enough to see a small improvement; that is the trade a probe is
-    #: for, and the gate is what measures small improvements.
+    #: sides. It is a wide instrument and the width is measured, not assumed. At 40 (20 seeds)
+    #: the published interval is 20.0 points at a score of 0.750 and 22.5 at 0.600
+    #: (``bootstrap_interval([1.0]*10 + [0.5]*10, derive_generator(1, "a/b"), 10000)`` gives
+    #: [0.650, 0.850]), and five probes of an UNCHANGED policy against ``scripted:random_legal``
+    #: read 0.375, 0.275, 0.225, 0.400, 0.350 -- a spread of 17.5 points with nothing moving,
+    #: because each probe is a new comparison id and so a new acting stream **[M]**. So a
+    #: probe-to-probe change under about 18 points against that rung is the instrument, not the
+    #: policy. Against ``scripted:noop`` the same five probes were identical, because that rung
+    #: does not act, which is what makes it the readable one. Measured 2026-09-22 by the
+    #: integrator. Raise this to narrow it; the gate, at 1000 battles, is what measures a small
+    #: improvement.
     probe_games: int = 40
     #: The rungs. Scripted ids, because the point of a rung is that it never changes: a snapshot
     #: improves with the pool and a score against it says nothing on its own.
     probe_opponents: tuple[str, ...] = ("scripted:noop", "scripted:random_legal")
+    #: All three of these are in the run identity, and they are meant to be, although the
+    #: integrator measured that two runs differing only in them produce the same weights at every
+    #: iteration. That measurement is about the WEIGHTS and the identity's question is wider: a
+    #: run that probes plays battles the other does not, writes games into the shared result log
+    #: under its own ids, draws on the same frozen seed set and takes materially longer. Two such
+    #: runs are two experiments, and saying so is what the identity is for.
     gate: GateConfig = GateConfig()
     rater: RaterConfig = RaterConfig()
 
@@ -722,6 +736,15 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
         for opponent in ladder.probe_opponents
         if opponent not in known
     ]
+    repeated = sorted({name for name in ladder.probe_opponents
+                       if ladder.probe_opponents.count(name) > 1})
+    if repeated:
+        # The rungs are keyed by name in the row, so a repeat plays every battle twice and
+        # publishes one key: the run pays double and the reader cannot see that it did.
+        problems.append(
+            f"ladder.probe_opponents names {', '.join(repeated)} more than once; each rung is "
+            "one key in the row, so a repeat costs its battles twice and publishes once"
+        )
     if ladder.probe_every_iterations < 0:
         problems.append(
             f"ladder.probe_every_iterations {ladder.probe_every_iterations} is negative; 0 is "
@@ -738,6 +761,14 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
         problems.append(
             f"ladder.probe_games {ladder.probe_games} is below the two battles a paired "
             "comparison is: one seed, played from both sides"
+        )
+    elif ladder.probe_games % 2:
+        # A comparison takes games // 2 seeds and plays each twice, so an odd count silently
+        # plays one fewer battle than it says. A number in a config that is not the number the
+        # run uses is the kind of thing somebody later measures against.
+        problems.append(
+            f"ladder.probe_games {ladder.probe_games} is odd, and a probe plays each seed from "
+            f"both sides: it would play {ladder.probe_games - 1}. Ask for an even number"
         )
     elif ladder.probe_games // 2 > ladder.eval_seed_count:
         problems.append(

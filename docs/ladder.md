@@ -330,13 +330,29 @@ a snapshot against something else, because the gate hands snapshot ids to the ev
 the id `learner` never appears in the evaluation results, and anything looked up under that
 id comes back empty.
 
-**`ladder/score_vs_noop` and `ladder/score_vs_random_legal` will not appear at all.** Until
-commit `b106aa1` on 2026-09-22 they were published as 0.5 in every row, which was
-indistinguishable from a genuine even contest. They are now omitted when the pair has no
-games, which is always. Measured 2026-09-22 across the metrics rows in `runs/`: 127 rows
-written before the fix carry a flat 0.5, and every row written since omits the key. If you are
-reading an older run's file, ignore those two columns entirely. Making them real needs the live
-bot evaluated against the anchors, which is a new cost per iteration and has not been decided.
+**`ladder/score_vs_noop` and `ladder/score_vs_random_legal` appear on probe iterations, and
+nowhere else.** Until commit `b106aa1` on 2026-09-22 they were published as 0.5 in every row,
+which was indistinguishable from a genuine even contest; then they were omitted, because the
+pair they asked about had no games and never could. Measured 2026-09-22 across the metrics rows
+in `runs/`: 127 rows written before that fix carry a flat 0.5. If you are reading an older run's
+file, ignore those two columns entirely.
+
+The decision that was open is now taken. Set `ladder.probe_every_iterations` and every
+`ladder.probe_every_iterations` iterations the run plays the LIVE bot against each rung in
+`ladder.probe_opponents` and publishes, for each of them:
+
+| key | what it is |
+|---|---|
+| `ladder/score_vs/{rung}` | the live bot's score against that rung, 1.0 for a win |
+| `ladder/score_vs_n/{rung}` | how many SEEDS it was measured over, each played from both sides |
+| `ladder/score_vs_ci95_lo/{rung}`, `..._hi/{rung}` | the interval around it |
+
+`ladder/score_vs_noop` and `ladder/score_vs_random_legal` are the same numbers under their old
+names, for the two rungs that have always been the anchors. It is off by default, because it
+costs battles nobody was paying for: at the shipped 40 battles a rung it is under 4% of one
+gate. Read the interval before the score. At 20 seeds the instrument's own repeat spread against
+`scripted:random_legal` is about 18 points with the policy unchanged, so a smaller move than that
+is the instrument. `scripted:noop` does not act, so it does not have that noise.
 
 **`ladder/rating_above_v0` was minus the first snapshot's rating, and is now absent instead.**
 It is meant to be the live bot's rating above the run's first snapshot. The live bot has no

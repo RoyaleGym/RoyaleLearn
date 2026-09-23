@@ -154,6 +154,14 @@ def bootstrap_interval(
         return 0.0, 1.0
     if sample.size == 1:
         return float(sample[0]), float(sample[0])
+    if sample.min() == sample.max():
+        # A percentile bootstrap over a sample with no spread resamples the same number, so it
+        # reports a 95% interval of zero width: the policy swept the rung, and the row says it
+        # is CERTAIN to. That is the case a reader watches most, and twenty seeds cannot support
+        # certainty. The Wilson bound is what a proportion at the end of its range is for, and
+        # it is over seeds here for the same reason the bootstrap is.
+        from .rating import wilson_interval
+        return wilson_interval(float(sample[0]), int(sample.size))
     draws = rng.integers(0, sample.size, size=(int(resamples), sample.size))
     means = sample[draws].mean(axis=1)
     tail = (1.0 - confidence) / 2.0

@@ -2887,9 +2887,10 @@ enemy-elixir field was an estimate on some episodes and the alarm below says so)
 **`ladder/`**: `rating`, `rating_se`, `rating_ci95_lo/hi` per member, `rating_above_v0`,
 `elo_readout`, `champion_id`, `champion_step`, `pool_size`, `sampler_size`, `gate_attempts`,
 `gate_passes`, `gate_observed_rate`, `gate_lower_bound`, `gate_failed_condition`, `gate_seconds_frac`,
-`score_vs_noop`, `score_vs_random_legal`, `transitivity_residual`, `paired_rho`, `draw_rate_eval`,
-`eval_games_total`, `evictions`, and on a probe iteration `score_vs/<rung>` with `score_vs_n/<rung>`
-and `score_vs_ci95_lo/hi/<rung>`, plus `probe_seconds_frac`.
+`transitivity_residual`, `paired_rho`, `draw_rate_eval`, `eval_games_total`, `evictions` and
+`probe_seconds_frac`; and on a probe iteration ONLY, `score_vs/<rung>` with `score_vs_n/<rung>` and
+`score_vs_ci95_lo/hi/<rung>`, of which `score_vs_noop` and `score_vs_random_legal` are the two
+anchors under their older names.
 
 **`health/`**: `illegal_action_rate` (**exactly zero by construction; this is an alert, not a plot**),
 `mask_disagreements` (from the start-up gate), `worker_restarts`, `worker_failures_by_kind`,

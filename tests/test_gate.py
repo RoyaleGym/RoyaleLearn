@@ -182,6 +182,31 @@ def test_the_bootstrap_covers_a_known_rate_at_the_nominal_level() -> None:
     assert 0.88 <= covered / replications <= 1.0
 
 
+def test_a_swept_rung_does_not_report_a_zero_width_interval() -> None:
+    """The case a reader watches most is the one a percentile bootstrap cannot speak about.
+
+    Resampling a sample with no spread draws the same number every time, so twenty seeds all won
+    published a 95% interval of [1.000, 1.000]: the row said the policy is CERTAIN to sweep the
+    rung, off twenty battles. The probe's keys are read by a person directly, and a zero-width
+    interval reads as certainty the sample does not support. A Wilson bound over the same seeds
+    is what a proportion at the end of its range is for.
+    """
+    rng = np.random.default_rng(11)
+
+    lo, hi = bootstrap_interval([1.0] * 20, rng, 10_000)
+    assert hi == 1.0
+    assert 0.8 < lo < 1.0, "twenty wins out of twenty is not certainty"
+
+    lost_lo, lost_hi = bootstrap_interval([0.0] * 20, rng, 10_000)
+    assert lost_lo == 0.0
+    assert 0.0 < lost_hi < 0.2
+
+    # A sample that DOES have spread is still the bootstrap's, unchanged.
+    mixed_lo, mixed_hi = bootstrap_interval([1.0] * 10 + [0.5] * 10, rng, 10_000)
+    assert mixed_lo == pytest.approx(0.65, abs=0.05)
+    assert mixed_hi == pytest.approx(0.85, abs=0.05)
+
+
 def test_the_paired_correlation_is_reported(tmp_path) -> None:
     both = SwapPlayer(blue_wins=set(range(1000)), red_wins=set(range(0, 1000, 2)))
     comparison = _runner(both, tmp_path, seeds=40).compare("a", "b", games=40)

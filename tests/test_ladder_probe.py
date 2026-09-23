@@ -99,6 +99,47 @@ def _runner(player: Any, log: ResultLog | None = None, *, kind: str = KIND_EVAL)
 # -- who the live learner is -------------------------------------------------
 
 
+def test_a_probe_count_that_is_not_the_count_it_plays_is_refused() -> None:
+    """A comparison takes ``games // 2`` seeds and plays each twice, so 41 plays 40.
+
+    A number in a config that is not the number the run uses is the kind of thing somebody
+    measures against later, and neither of them is wrong about what they read.
+    """
+    import msgspec
+
+    from royalelearn.config import check_consistency, profile
+
+    base = profile("laptop")
+    odd = msgspec.structs.replace(
+        base,
+        ladder=msgspec.structs.replace(
+            base.ladder, probe_every_iterations=5, probe_games=41
+        ),
+    )
+    problems = [problem for problem in check_consistency(odd) if "probe_games" in problem]
+    assert problems and "would play 40" in problems[0]
+
+
+def test_a_rung_named_twice_is_refused() -> None:
+    """Each rung is one key in the row, so a repeat pays for its battles twice and publishes
+    once: the run is slower and nothing in the row says why."""
+    import msgspec
+
+    from royalelearn.config import check_consistency, profile
+
+    base = profile("laptop")
+    doubled = msgspec.structs.replace(
+        base,
+        ladder=msgspec.structs.replace(
+            base.ladder,
+            probe_every_iterations=5,
+            probe_opponents=("scripted:noop", "scripted:noop"),
+        ),
+    )
+    problems = [problem for problem in check_consistency(doubled) if "more than once" in problem]
+    assert problems, check_consistency(doubled)
+
+
 def test_a_probe_names_the_learner_and_the_step_it_was_taken_at() -> None:
     """Two probes of one run are two players, and the id has to say so.
 
