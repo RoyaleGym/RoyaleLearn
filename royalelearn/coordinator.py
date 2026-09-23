@@ -1913,6 +1913,12 @@ class LearningCoordinator:
 
         metrics.ppo = dict(update_fields(result))
         metrics.ppo["ppo/advantage_std_pre_norm"] = float(self.update.advantage_std_pre_norm)
+        metrics.ppo["ppo/advantage_std_choice_pre_norm"] = float(
+            getattr(self.update, "advantage_std_choice_pre_norm", 0.0)
+        )
+        metrics.ppo["ppo/advantage_mean_choice"] = float(
+            getattr(self.update, "advantage_mean_choice", 0.0)
+        )
         stats_of = self.update.advantage_stats
         metrics.ppo["ppo/return_running_mean"] = (
             float(stats_of.raw_return_mean) if stats_of else 0.0

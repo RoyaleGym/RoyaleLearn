@@ -160,6 +160,12 @@ METRICS: dict[str, MetricSpec] = {
     ),
     # -- ppo ---------------------------------------------------------------
     "ppo/policy_loss": _m("loss", "The clipped surrogate, averaged over samples."),
+    "ppo/policy_loss_choice": _m(
+        "loss",
+        "The clipped surrogate over the rows whose mask offered more than the no-op. The "
+        "companion to policy_loss, which is a mean over every row and therefore a reading of "
+        "the elixir bar as much as of the policy; compare two arms of ppo.forced_rows on this.",
+    ),
     "ppo/value_loss": _m("loss", "The critic's loss on standardised returns."),
     "ppo/entropy": _m("nats", "Mean entropy of the masked action distribution."),
     "ppo/entropy_normalised": _m(
@@ -201,6 +207,28 @@ METRICS: dict[str, MetricSpec] = {
         low=0.5,
         high=0.9,
     ),
+    "ppo/explained_variance_choice": _m(
+        "fraction",
+        "Explained variance over the cells that had a choice. The critic trains on every cell "
+        "under every value of ppo.forced_rows, and this is the part of its accuracy the policy "
+        "actually reads, so it is the first guardrail when the actor's population changes.",
+    ),
+    "ppo/forced_frac": _m(
+        "fraction",
+        "Share of trainable cells whose mask left one action, from the stored column. The "
+        "companion to policy/forced_noop_frac, which samples the same quantity in the rollout: "
+        "the two disagreeing is a mask the update and the rollout do not share.",
+    ),
+    "ppo/actor_rows": _m(
+        "count",
+        "Rows the actor's forward was given this iteration, epochs included. Under "
+        "ppo.forced_rows 'all' it is the trainable rows times the epochs; under the skipping "
+        "values it is the rows that had a choice, and nothing else in this group moves.",
+        dtype="int",
+    ),
+    "ppo/actor_forwards": _m(
+        "count", "Forwards the actor ran this iteration, epochs included.", dtype="int"
+    ),
     "ppo/grad_norm_actor": _m(
         "norm",
         "Actor gradient norm before clipping. Pinned at max_grad_norm every step means the clip "
@@ -221,6 +249,18 @@ METRICS: dict[str, MetricSpec] = {
     ),
     "ppo/advantage_std_pre_norm": _m(
         "units", "Advantage standard deviation before standardisation."
+    ),
+    "ppo/advantage_std_choice_pre_norm": _m(
+        "units",
+        "Advantage standard deviation before standardisation, over the cells that had a "
+        "choice. Its ratio to advantage_std_pre_norm is how much the entropy terms' weight "
+        "against the policy term moves between the values of ppo.forced_rows.",
+    ),
+    "ppo/advantage_mean_choice": _m(
+        "units",
+        "Mean standardised advantage over the cells that had a choice. Zero by construction "
+        "under ppo.forced_rows 'critic_only_choice_mean'; under the other two it is how far "
+        "the actor's baseline sits from the population the actor is applied to.",
     ),
     "ppo/return_running_mean": _m(
         "units", "The return scaler's running mean, recorded and never subtracted."

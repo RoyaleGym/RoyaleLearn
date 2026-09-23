@@ -304,6 +304,13 @@ class PPOUpdate(Update):
         #: The advantage spread before standardisation, which is the thing standardisation
         #: hides and the thing a collapsing policy shows first.
         self.advantage_std_pre_norm = 0.0
+        #: The same spread over the cells that had a choice, and their mean AFTER
+        #: standardisation. Under ``critic_only_choice_mean`` that mean is zero by
+        #: construction; under the other two it is how far the actor's baseline sits from the
+        #: population it is actually applied to, and the ratio of the two spreads is what moves
+        #: the entropy terms' weight against the policy term between the arms.
+        self.advantage_std_choice_pre_norm = 0.0
+        self.advantage_mean_choice = 0.0
         #: What the estimator saw last: the raw return statistics, the divisor it applied and
         #: how much of the batch the reward clip touched. Kept here rather than folded into
         #: ``UpdateResult`` because it describes the rewards, not the optimisation.
@@ -401,6 +408,10 @@ class PPOUpdate(Update):
         self.advantage_std_pre_norm = (
             float(selected.std(unbiased=True).item()) if selected.numel() > 1 else 0.0
         )
+        chosen = advantages[choice]
+        self.advantage_std_choice_pre_norm = (
+            float(chosen.std(unbiased=True).item()) if chosen.numel() > 1 else 0.0
+        )
         if config.advantage_standardization:
             # Over the cells that READ an advantage, which is ``standardise``'s own rule. Under
             # ``critic_only_choice_mean`` a forced cell reaches only the critic, and the critic
@@ -409,6 +420,9 @@ class PPOUpdate(Update):
             # off it -- and would move the entropy terms' weight against the policy term by the
             # ratio of the two spreads.
             advantages = standardise(advantages, choice if self._choice_mean else mask)
+        self.advantage_mean_choice = (
+            float(advantages[choice].mean().item()) if int(choice.sum()) else 0.0
+        )
         buffer.set_advantages(advantages, returns)
 
         before_actor = parameters_to_vector(self.actor_params).detach().clone()
@@ -488,6 +502,10 @@ class PPOUpdate(Update):
             n_samples=n_samples,
             epochs=config.n_epochs,
             explained=explained_variance(returns[mask], values[: buffer.cycles][mask]),
+            explained_choice=explained_variance(
+                returns[choice], values[: buffer.cycles][choice]
+            ),
+            forced_frac=(1.0 - int(choice.sum()) / n_samples) if n_samples else 0.0,
             update_actor=float((after_actor - before_actor).norm().item()),
             update_critic=float((after_critic - before_critic).norm().item()),
             seconds=time.perf_counter() - started,
@@ -542,6 +560,7 @@ class PPOUpdate(Update):
             )
             return
         result: BackpropResult = self.model.backprop(minibatch.obs, minibatch.actions)
+        diagnostics.actor_forward(minibatch.n)
         log_probs = result.log_probs
         if check:
             assert bool(torch.isfinite(log_probs).all()), (
@@ -629,6 +648,7 @@ class PPOUpdate(Update):
 
         if minibatch.n_choice:
             distribution = self.model.distribution_on_rows(minibatch.obs, rows)
+            diagnostics.actor_forward(minibatch.n_choice)
             actions = minibatch.actions.index_select(0, rows)
             log_probs = distribution.log_prob(actions)
             if check:
@@ -913,6 +933,12 @@ class _Diagnostics:
         self.samples = 0
         self.minibatches = 0
         self.steps = 0
+        #: Rows the ACTOR was handed, over the whole update, and the forwards they arrived in.
+        #: Counted where the forward is issued rather than derived from the row count and the
+        #: arm, because the whole point of publishing it is that the two can be read against
+        #: each other.
+        self.actor_rows = 0
+        self.actor_forwards = 0
         #: Rows whose mask offered more than the no-op. The play/wait entropy is a mean over
         #: these and not over every row; see ``_Diagnostics.minibatch``.
         self._chose = torch.zeros((), dtype=torch.float32, device=device)
@@ -937,7 +963,13 @@ class _Diagnostics:
         self._epoch_clip = [
             torch.zeros((), dtype=torch.float32, device=device) for _ in range(self.epochs)
         ]
-        self._epoch_n = [0 for _ in range(self.epochs)]
+        # On the device, like every other accumulator here. Read back as a python float it put
+        # a synchronisation between every backward pass and the next forward -- which this
+        # class's own docstring forbids, and which biases the very timing the forced-row arms
+        # are compared on.
+        self._epoch_n = [
+            torch.zeros((), dtype=torch.float32, device=device) for _ in range(self.epochs)
+        ]
         self._grad_actor: list[Tensor] = []
         self._grad_critic: list[Tensor] = []
         #: The FIRST minibatch's worst ratio deviation, and deliberately only that one.
@@ -1040,7 +1072,12 @@ class _Diagnostics:
         index = min(epoch, self.epochs - 1)
         self._epoch_kl[index] += kl * chose_n
         self._epoch_clip[index] += clip * chose_n
-        self._epoch_n[index] += float(chose_n.item())
+        self._epoch_n[index] += chose_n
+
+    def actor_forward(self, rows: int) -> None:
+        """One forward the actor ran, and how many rows it was given."""
+        self.actor_rows += int(rows)
+        self.actor_forwards += 1
 
     def gradients(self, actor: Tensor, critic: Tensor) -> None:
         self._grad_actor.append(actor.detach())
@@ -1058,6 +1095,8 @@ class _Diagnostics:
         seconds: float,
         critic_pass_seconds: float = 0.0,
         gae_seconds: float = 0.0,
+        explained_choice: float = 0.0,
+        forced_frac: float = 0.0,
     ) -> UpdateResult:
         total = max(1, self.samples)
         means = {name: float((value / total).item()) for name, value in self._sums.items()}
@@ -1093,6 +1132,11 @@ class _Diagnostics:
             clip_fraction=means["clip_fraction"],
             dual_clip_fraction=means["dual_clip_fraction"],
             explained_variance=explained,
+            explained_variance_choice=explained_choice,
+            forced_frac=forced_frac,
+            actor_rows=self.actor_rows,
+            actor_forwards=self.actor_forwards,
+            policy_loss_choice=means["policy_loss_choice"],
             ratio_max_abs_dev=self.ratio_value,
             grad_norm_actor=_mean_of(self._grad_actor),
             grad_norm_critic=_mean_of(self._grad_critic),
@@ -1110,11 +1154,13 @@ class _Diagnostics:
         )
 
 
-def _per_epoch(sums: Sequence[Tensor], counts: Sequence[int]) -> list[float]:
-    return [
-        float((value / count).item()) if count else 0.0
-        for value, count in zip(sums, counts, strict=True)
-    ]
+def _per_epoch(sums: Sequence[Tensor], counts: Sequence[Tensor]) -> list[float]:
+    """Per-epoch means, read off the device once, after the update's one synchronisation."""
+    out: list[float] = []
+    for value, count in zip(sums, counts, strict=True):
+        rows = float(count.item())
+        out.append(float((value / rows).item()) if rows else 0.0)
+    return out
 
 
 def _mean_of(values: Sequence[Tensor]) -> float:

@@ -58,6 +58,19 @@ class UpdateResult(msgspec.Struct):
     #: of the update's own time rather than of the residual it is compared against.
     critic_pass_seconds: float = 0.0
     gae_seconds: float = 0.0
+    #: What the ACTOR was shown, which is the one thing ``ppo.forced_rows`` changes that no
+    #: gradient, loss or KL can show: the point of its exact arm is that they do not move.
+    #: ``actor_rows`` counts rows over the whole update, epochs included, and ``actor_forwards``
+    #: counts the forwards those rows arrived in.
+    actor_rows: int = 0
+    actor_forwards: int = 0
+    #: The share of trainable cells whose mask left one action, from the stored column rather
+    #: than from the rollout's own sample of the same quantity.
+    forced_frac: float = 0.0
+    #: The two quantities above conditioned on the cells that had a choice, so that they mean
+    #: the same thing whichever population the arm optimises over.
+    policy_loss_choice: float = 0.0
+    explained_variance_choice: float = 0.0
 
 
 class Update(ABC, Checkpointable):

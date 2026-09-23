@@ -721,6 +721,42 @@ def test_the_choice_mean_moves_the_actor_by_the_ratio_of_the_denominators(
         assert torch.equal(mine, theirs), "the critic's step is not this field's business"
 
 
+@pytest.mark.parametrize("arm", FORCED_ROW_ARMS)
+def test_an_update_says_how_many_rows_its_actor_actually_ran_on(
+    rect: Fixture, arm: str
+) -> None:
+    """Two arms that differ only in what the actor was shown look identical in every other key.
+
+    The point of the whole field is a row count, and a row count is the one thing a gradient, a
+    loss and a KL cannot show: ``critic_only`` is built so that they do not move. So the count
+    is published, and ``ppo/forced_frac`` is published beside it from the column rather than
+    from the rollout's sample, so that a reader can check one against the other and check both
+    against the arm the run identity names.
+    """
+    model = build_model(rect.spec)
+    plant_forced(rect, FORCED_CELLS)
+    buffer = collect(rect, model)
+    config = msgspec.structs.replace(CONFIG, n_epochs=3, forced_rows=arm)
+    counted = build_model(rect.spec)
+    seen = count_rows(counted.actor)
+
+    result = update_for(counted, config).step(buffer, SCHEDULE)
+
+    rows = int(buffer.trainable().sum())
+    choice = int(((buffer.n_legal[:CYCLES] > 1) & buffer.trainable()).sum())
+    expected = rows if arm == "all" else choice
+    assert result.n_samples == rows
+    assert result.actor_rows == expected * config.n_epochs == sum(seen)
+    assert result.actor_forwards == len(seen)
+    assert result.forced_frac == pytest.approx(1.0 - choice / rows)
+    # The identity phase 1 of section 18.1 checks, in the arm it checks it in. Under `all` the
+    # actor is shown every trainable row of every epoch and the forced fraction is a report
+    # about the batch rather than about what was skipped.
+    epochs = config.n_epochs
+    share = 1.0 if arm == "all" else 1.0 - result.forced_frac
+    assert result.actor_rows == pytest.approx(result.n_samples * epochs * share)
+
+
 def test_a_batch_with_no_choice_row_still_steps_both_optimizers(rect: Fixture) -> None:
     """Under ``all`` such a batch hands the actor a gradient of zeros, and Adam does not ignore
     one.
