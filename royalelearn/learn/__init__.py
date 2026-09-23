@@ -43,6 +43,7 @@ _EXPORTS: dict[str, str] = {
     "ValueHead": ".nets",
     "WelfordReturnScaler": ".returns",
     "WelfordState": ".returns",
+    "adam_eps_floor_frac": ".ppo",
     "approx_kl": ".ppo",
     "autocast_context": ".actor_critic",
     "bootstrap_values": ".gae",

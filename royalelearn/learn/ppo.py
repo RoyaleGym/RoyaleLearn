@@ -72,6 +72,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "PPOUpdate",
+    "adam_eps_floor_frac",
     "approx_kl",
     "chunked_critic_pass",
     "clipped_fraction",
@@ -531,6 +532,8 @@ class PPOUpdate(Update):
             seconds=time.perf_counter() - started,
             critic_pass_seconds=critic_pass_seconds,
             gae_seconds=gae_seconds,
+            eps_floor_actor=adam_eps_floor_frac(self.actor_optimizer),
+            eps_floor_critic=adam_eps_floor_frac(self.critic_optimizer),
         )
         if self.backoff is not None and self.backoff.observe(result.kl):
             print(
@@ -1117,6 +1120,8 @@ class _Diagnostics:
         gae_seconds: float = 0.0,
         explained_choice: float = 0.0,
         forced_frac: float = 0.0,
+        eps_floor_actor: float | None = None,
+        eps_floor_critic: float | None = None,
     ) -> UpdateResult:
         total = max(1, self.samples)
         means = {name: float((value / total).item()) for name, value in self._sums.items()}
@@ -1171,6 +1176,8 @@ class _Diagnostics:
             seconds=seconds,
             critic_pass_seconds=critic_pass_seconds,
             gae_seconds=gae_seconds,
+            adam_eps_floor_frac_actor=eps_floor_actor,
+            adam_eps_floor_frac_critic=eps_floor_critic,
         )
 
 
@@ -1187,6 +1194,35 @@ def _mean_of(values: Sequence[Tensor]) -> float:
     if not values:
         return 0.0
     return float(torch.stack([value.reshape(()) for value in values]).mean().item())
+
+
+def adam_eps_floor_frac(optimizer: Optimizer) -> float | None:
+    """Share of this optimizer's parameters whose ``sqrt(v)`` sits under its own ``eps``.
+
+    Adam steps by ``lr * m / (sqrt(v) + eps)``, and the division is what makes one learning rate
+    work across layers whose gradients differ by orders of magnitude. Under the eps floor the
+    denominator stops tracking the gradient: the step becomes ``lr * m / eps``, proportional to
+    the gradient rather than normalised by it, and for a gradient this small that is a fraction
+    of the step the schedule names.
+
+    Measured 2026-09-22 on a three-iteration toy run: 57.6% of the actor's parameters under the
+    floor against 33.7% of the critic's, and the train session measured 99.2% of the actor's on
+    a real one, beside ``grad_norm_actor`` 0.0068, ``grad_norm_critic`` 26.6 and a KL of 1e-5.
+    That asymmetry was called unexplained for as long as nothing published this.
+
+    ``None`` before the optimizer has stepped, because no second moments is not the same reading
+    as no parameters on the floor, and a 0.0 there says the optimizer is fully adaptive.
+    """
+    floored = total = 0
+    for group in optimizer.param_groups:
+        eps = float(group.get("eps", 0.0))
+        for param in group["params"]:
+            second = optimizer.state.get(param, {}).get("exp_avg_sq")
+            if second is None:
+                continue
+            floored += int((second.sqrt() < eps).sum().item())
+            total += second.numel()
+    return floored / total if total else None
 
 
 def _adam(params: Iterable[Parameter], **kwargs: Any) -> Optimizer:

@@ -146,8 +146,13 @@ class MaskedCategorical(ActionDistribution):
         return -(p * p.log() + (1 - p) * (1 - p).log())
 
     def p_noop(self) -> Tensor:
-        """``(B,)`` float32: p(no-op), unclamped. The rollout diagnostic behind
-        ``policy/cards_per_match``."""
+        """``(B,)`` float32: p(no-op), unclamped.
+
+        Summed over the learner's rollout rows into ``policy/rollout_hold_rate`` and, against
+        each row's own uniform baseline, ``policy/rollout_hold_lift``. It said it was behind
+        ``policy/cards_per_match`` until 2026-09-22 and was behind nothing: the accumulator
+        summed it and no reader read it.
+        """
         return self._logp[:, NOOP].exp()
 
     def n_legal(self) -> Tensor:

@@ -24,12 +24,14 @@ from royalelearn.identity import EngineBuild, RunIdentity
 from royalelearn.ladder.evaluate import Comparison
 from royalelearn.ladder.pool import SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL, LadderPool
 from royalelearn.ladder.results import GameResult, ResultLog
+from royalelearn.learn.inference import RoundStats
 from royalelearn.metrics import schema
 from royalelearn.metrics.records import (
     IterationMetrics,
     episode_fields,
     flatten,
     ladder_fields,
+    rollout_policy_fields,
     schedule_fields,
     unknown_keys,
     update_fields,
@@ -169,6 +171,8 @@ def _update() -> UpdateResult:
         dual_clip_fraction=0.001,
         explained_variance=0.72,
         ratio_max_abs_dev=1e-7,
+        adam_eps_floor_frac_actor=0.992,
+        adam_eps_floor_frac_critic=0.337,
         grad_norm_actor=0.3,
         grad_norm_critic=0.28,
         update_magnitude_actor=0.004,
@@ -275,6 +279,27 @@ def _probe() -> dict[str, Comparison]:
     }
 
 
+def _rollout_stats() -> RoundStats:
+    """One iteration of rollout forwards: 100 learner rows, 10 of which had a choice.
+
+    The numbers are a policy holding at 15.3x uniform over 250 legal actions, which is what
+    hog26-2 was doing at iteration 124.
+    """
+    return RoundStats(
+        rows=100,
+        forwards=4,
+        rounds=4,
+        seconds=1.5,
+        entropy=540.0,
+        p_noop=90.6,
+        n_legal=2590.0,
+        choice_rows=10,
+        hold=0.612,
+        hold_lift=153.0,
+        choice_n_legal=2500.0,
+    )
+
+
 def _row(tmp_path) -> dict:
     pool = _pool(tmp_path)
     state = ScheduleState(
@@ -304,6 +329,7 @@ def _row(tmp_path) -> dict:
             rungs=_probe(),
             probe_seconds_frac=0.02,
         ),
+        policy=rollout_policy_fields(_rollout_stats()),
     )
     return metrics.row()
 

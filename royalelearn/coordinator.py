@@ -67,6 +67,7 @@ from .metrics.records import (
     IterationMetrics,
     episode_fields,
     ladder_fields,
+    rollout_policy_fields,
     schedule_fields,
     update_fields,
 )
@@ -2011,6 +2012,9 @@ class LearningCoordinator:
         metrics.policy = {
             key: value for key, value in aggregate.fields.items() if key.startswith("policy/")
         }
+        # What the policy did while it was choosing, as opposed to what the optimizer saw. These
+        # sums were accumulated at every rollout forward and read by nobody until 2026-09-22.
+        metrics.policy.update(rollout_policy_fields(stats))
         for key, value in probe.items():
             (metrics.env if key.startswith("env/") else metrics.policy)[key] = value
         metrics.env.setdefault("env/illegal_action_rate", 0.0)

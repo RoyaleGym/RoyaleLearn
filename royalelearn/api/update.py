@@ -58,6 +58,11 @@ class UpdateResult(msgspec.Struct):
     #: of the update's own time rather than of the residual it is compared against.
     critic_pass_seconds: float = 0.0
     gae_seconds: float = 0.0
+    #: Share of each optimizer's parameters whose second moment sits under its own ``eps``, where
+    #: Adam stops normalising and the step becomes proportional to the gradient again. ``None``
+    #: before an optimizer has stepped: no second moments is not "nothing is on the floor".
+    adam_eps_floor_frac_actor: float | None = None
+    adam_eps_floor_frac_critic: float | None = None
     #: What the ACTOR was shown, which is the one thing ``ppo.forced_rows`` changes that no
     #: gradient, loss or KL can show: the point of its exact arm is that they do not move.
     #: ``actor_rows`` counts rows over the whole update, epochs included, and ``actor_forwards``

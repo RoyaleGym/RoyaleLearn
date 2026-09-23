@@ -31,6 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.update import UpdateResult
     from ..ladder.evaluate import Comparison
     from ..ladder.pool import LadderPool
+    from ..learn.inference import RoundStats
 
 __all__ = [
     "EpisodeAggregate",
@@ -38,6 +39,7 @@ __all__ = [
     "episode_fields",
     "flatten",
     "ladder_fields",
+    "rollout_policy_fields",
     "schedule_fields",
     "unknown_keys",
     "update_fields",
@@ -283,6 +285,44 @@ def update_fields(result: UpdateResult) -> dict[str, MetricValue]:
         fields[f"ppo/kl_epoch{epoch}"] = value
     for epoch, value in enumerate(result.clip_fraction_by_epoch):
         fields[f"ppo/clip_fraction_epoch{epoch}"] = value
+    # Absent before an optimizer has stepped. A 0.0 there would say "fully adaptive", which is
+    # the reading the key exists to correct.
+    for side in ("actor", "critic"):
+        floor = getattr(result, f"adam_eps_floor_frac_{side}", None)
+        if floor is not None:
+            fields[f"ppo/adam_eps_floor_frac_{side}"] = floor
+    return fields
+
+
+def rollout_policy_fields(stats: RoundStats) -> dict[str, MetricValue]:
+    """What the policy did at DECISION time, from the rollout's own forwards.
+
+    ``update_fields`` describes the policy the optimizer saw, over the rows it trained on and
+    after the first epoch has already moved them. This describes the policy that actually chose
+    the actions, and it costs nothing: ``_StatAccumulator`` has summed these quantities since the
+    file was written and no reader ever read them.
+
+    ``rollout_hold_lift`` is the key the harness was missing. A policy's hold rate on its own is
+    uninterpretable -- it is high because the elixir bar is usually empty -- and the entropy is
+    nearly blind to it: over 250 legal actions, a policy putting **15.3x uniform mass** on the
+    no-op still reads 0.980 of maximum normalised entropy, because the other 249 actions carry
+    almost all of the sum. That pair was measured on hog26-2 at iteration 124 and reproduced from
+    first principles in ``tests/test_hold_lift.py``. The lift divides each row's hold mass by the
+    uniform baseline of its own width, so 1.0 is a policy that has learnt nothing about when to
+    wait and the distance from 1.0 is the only part of it that is about the policy.
+    """
+    if stats.rows <= 0:
+        return {}
+    fields: dict[str, MetricValue] = {
+        "policy/rollout_choice_frac": stats.choice_rows / stats.rows,
+    }
+    if not stats.choice_rows:
+        # A lift of 1.0 reads as "the policy is exactly uniform on its hold", which is a
+        # measurement. An iteration whose every decision was forced made no measurement.
+        return fields
+    fields["policy/rollout_hold_rate"] = stats.hold / stats.choice_rows
+    fields["policy/rollout_hold_lift"] = stats.hold_lift / stats.choice_rows
+    fields["policy/rollout_legal_actions"] = stats.choice_n_legal / stats.choice_rows
     return fields
 
 

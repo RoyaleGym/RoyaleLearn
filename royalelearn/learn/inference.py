@@ -151,6 +151,14 @@ class RoundStats(NamedTuple):
     entropy: float
     p_noop: float
     n_legal: float
+    #: The three below are over the rows whose mask offered more than the no-op, and they are
+    #: separate sums rather than a ratio because the mean has to be taken over the rows it is a
+    #: mean of. ``hold_lift`` is the sum of p(no-op) * n_legal: each row's hold mass against the
+    #: uniform baseline of its OWN width, so averaging them is an average of comparable numbers.
+    choice_rows: int
+    hold: float
+    hold_lift: float
+    choice_n_legal: float
 
 
 class InferenceResult(NamedTuple):
@@ -329,7 +337,19 @@ class BatchedInference:
 class _StatAccumulator:
     """Running sums over the rounds of one iteration."""
 
-    __slots__ = ("entropy", "forwards", "n_legal", "p_noop", "rounds", "rows", "seconds")
+    __slots__ = (
+        "choice_n_legal",
+        "choice_rows",
+        "entropy",
+        "forwards",
+        "hold",
+        "hold_lift",
+        "n_legal",
+        "p_noop",
+        "rounds",
+        "rows",
+        "seconds",
+    )
 
     def __init__(self) -> None:
         self._reset()
@@ -342,6 +362,10 @@ class _StatAccumulator:
         self.entropy = 0.0
         self.p_noop = 0.0
         self.n_legal = 0.0
+        self.choice_rows = 0
+        self.hold = 0.0
+        self.hold_lift = 0.0
+        self.choice_n_legal = 0.0
 
     def round(self, *, forwards: int, seconds: float) -> None:
         self.forwards += forwards
@@ -351,9 +375,23 @@ class _StatAccumulator:
     def policy(self, distribution: MaskedCategorical, rows: int) -> None:
         """The learner's own rows only: a frozen opponent's entropy is not this run's."""
         self.rows += rows
+        p_noop = distribution.p_noop()
+        n_legal = distribution.n_legal()
         self.entropy += float(distribution.entropy().sum().item())
-        self.p_noop += float(distribution.p_noop().sum().item())
-        self.n_legal += float(distribution.n_legal().sum().item())
+        self.p_noop += float(p_noop.sum().item())
+        self.n_legal += float(n_legal.sum().item())
+        # A row with one legal action holds with probability 1 and lifts by exactly 1, whatever
+        # the policy is. Nine decisions in ten are that row on this environment, so a mean over
+        # every row would report the elixir curve dragging a concentrated policy back towards
+        # uniform -- the same defect that took `noop_entropy` and `entropy_normalised` onto
+        # choice rows only.
+        choice = n_legal > 1
+        held = p_noop[choice]
+        widths = n_legal[choice].to(held.dtype)
+        self.choice_rows += int(choice.sum().item())
+        self.hold += float(held.sum().item())
+        self.hold_lift += float((held * widths).sum().item())
+        self.choice_n_legal += float(widths.sum().item())
 
     def drain(self) -> RoundStats:
         stats = RoundStats(
@@ -364,6 +402,10 @@ class _StatAccumulator:
             entropy=self.entropy,
             p_noop=self.p_noop,
             n_legal=self.n_legal,
+            choice_rows=self.choice_rows,
+            hold=self.hold,
+            hold_lift=self.hold_lift,
+            choice_n_legal=self.choice_n_legal,
         )
         self._reset()
         return stats

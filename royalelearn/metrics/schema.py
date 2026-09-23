@@ -280,6 +280,20 @@ METRICS: dict[str, MetricSpec] = {
         low=0.0,
         high=0.0,
     ),
+    "ppo/adam_eps_floor_frac_actor": _m(
+        "fraction",
+        "Share of the actor's parameters whose Adam second moment sits under adam_eps, where "
+        "the step stops being normalised by the gradient and becomes proportional to it again. "
+        "The actor reaches this floor and the critic does not, which is what a grad_norm_actor "
+        "of 0.0068 against a critic at 26.6 looks like from the optimizer's side. High here "
+        "with a KL near zero says to lower adam_eps rather than to raise lr_actor.",
+        high=0.5,
+    ),
+    "ppo/adam_eps_floor_frac_critic": _m(
+        "fraction",
+        "The same share for the critic, published beside the actor's because the ASYMMETRY is "
+        "the reading: one number alone cannot say whether a floor is this network or this side.",
+    ),
     "ppo/lr_backoff_events": _m("count", "Learning-rate backoffs so far in this run.", dtype="int"),
     # -- policy ------------------------------------------------------------
     "policy/cards_per_match": _m(
@@ -306,6 +320,32 @@ METRICS: dict[str, MetricSpec] = {
     "policy/forced_noop_frac": _m(
         "fraction",
         "Share of decisions with exactly one legal action, which carry no policy gradient.",
+    ),
+    "policy/rollout_choice_frac": _m(
+        "fraction",
+        "Share of the learner's rollout decisions whose mask offered more than the no-op. The "
+        "denominator of the three rollout keys below, and the elixir curve read directly: on "
+        "this environment it is about one decision in ten.",
+    ),
+    "policy/rollout_hold_rate": _m(
+        "fraction",
+        "Mean p(no-op) at DECISION time over the rows that had a choice. Not comparable across "
+        "iterations on its own -- it moves with how many actions were legal -- which is what "
+        "rollout_hold_lift is for.",
+    ),
+    "policy/rollout_hold_lift": _m(
+        "ratio",
+        "The same hold mass against the uniform baseline of each row's OWN width, averaged over "
+        "choice rows. 1.0 is a policy that has learnt nothing about when to wait; hog26-2 reached "
+        "15.3 at iteration 124 while entropy_normalised read 0.980, which is why this key exists: "
+        "entropy over 250 actions is nearly blind to the one action with a distinct meaning. No "
+        "healthy band, because nobody has yet trained a policy far enough to know what one is.",
+    ),
+    "policy/rollout_legal_actions": _m(
+        "count",
+        "Legal actions per CHOICE decision, from the rollout forwards. The baseline "
+        "rollout_hold_lift divides by, published so that a lift can be checked against the width "
+        "it was computed over rather than assumed.",
     ),
     "policy/tile_entropy": _m("nats", "Entropy of the play distribution over tiles."),
     "policy/tile_top1_share": _m(
@@ -707,6 +747,16 @@ CONDITIONAL: dict[str, str] = {
     "health/vram_available_mb": "a CUDA device is present",
     "health/vram_needed_mb": "a CUDA device is present, and the preflight gate is enabled",
     "health/vram_alloc_retries": "a CUDA device is present",
+    # An iteration whose every decision was forced measured nothing about the policy. A lift of
+    # 1.0 would read as "exactly uniform", a hold rate of 1.0 as "it never plays", and both are
+    # statements about the elixir bar.
+    "ppo/adam_eps_floor_frac_actor": "the actor's optimizer has taken a step",
+    "ppo/adam_eps_floor_frac_critic": "the critic's optimizer has taken a step",
+    "policy/rollout_hold_rate": "a rollout decision this iteration had more than one legal action",
+    "policy/rollout_hold_lift": "a rollout decision this iteration had more than one legal action",
+    "policy/rollout_legal_actions": (
+        "a rollout decision this iteration had more than one legal action"
+    ),
 }
 
 
