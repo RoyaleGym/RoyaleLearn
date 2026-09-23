@@ -797,6 +797,125 @@ def test_a_batch_with_no_choice_row_still_steps_both_optimizers(rect: Fixture) -
         )
 
 
+#: The benchmark's rectangle and the forced-row rate planted in it. The rate is the one the
+#: first real iterations reported, 0.88-0.93, so that the share of the actor's work being
+#: skipped is the share a run would skip.
+BENCH_CYCLES, BENCH_SLOTS, BENCH_FORCED = 32, 32, 0.9
+
+
+def bench_rectangle(
+    spec: Any, observations: list[dict[str, np.ndarray]], arch: Any
+) -> Any:
+    """A rectangle large enough to time, with nine rows in ten forced, played by a real policy.
+
+    The policy that plays it is built from the same architecture the update will be timed on,
+    so the stored log-probabilities are the ones a fresh forward reproduces and the timing is
+    taken on a rectangle an update would accept.
+    """
+    from royalelearn.learn.nets import DefaultNetworkFactory
+
+    built = Fixture(spec, observations, cycles=BENCH_CYCLES, slots=BENCH_SLOTS)
+    built.fill()
+    model = DefaultNetworkFactory(SEED).build(built.spec, arch, "cpu")
+    rng = np.random.default_rng(SEED)
+    cells = [(cycle, slot) for cycle in range(BENCH_CYCLES) for slot in range(BENCH_SLOTS)]
+    chosen = rng.permutation(len(cells))[: int(BENCH_FORCED * len(cells))]
+    plant_forced(built, [cells[index] for index in chosen])
+
+    buffer = built.buffer
+    plan = plan_for(BENCH_SLOTS)
+    buffer.begin_iteration(plan, BENCH_CYCLES)
+    engine = BatchedInference(buffer, model, master_seed=SEED)
+    engine.begin_iteration(plan)
+    slots = np.arange(BENCH_SLOTS, dtype=np.int64)
+    for cycle in range(BENCH_CYCLES + 1):
+        played = round_for(
+            cycle,
+            slots,
+            rows=np.array([buffer.layout.row_index(cycle, int(s)) for s in slots]),
+            reward=rng.normal(size=BENCH_SLOTS).astype(np.float32),
+        )
+        if cycle == BENCH_CYCLES:
+            buffer.record_round(played, None, None)
+            continue
+        answer = engine.act(played)
+        buffer.record_round(played, answer.actions, answer.log_probs)
+    return built
+
+
+@pytest.mark.slow
+def test_skipping_the_forced_rows_is_the_faster_update(
+    env_spec: Any, observations: list[dict[str, np.ndarray]]
+) -> None:
+    """The saving, measured rather than argued, on MockEngine and the CPU.
+
+    What is timed is the epochs, which is ``seconds`` less the critic's pass over the rectangle
+    and the advantage recursion: those two run before the first epoch and are identical under
+    both values, so leaving them in would report the saving diluted by a constant that depends
+    on the geometry.
+
+    The two arms alternate and the best of the repeats is taken, because a slower run on a
+    contended machine says something about the machine. The assertion is only the direction --
+    the size of the saving is a number this prints, and it belongs in a commit message and in
+    section 18.1 rather than in a threshold that would fail on somebody else's laptop.
+
+    This is not the figure the A/B predicts. That one is for the shipped network on a GPU, where
+    the actor is about 53% of the per-row compute; here the network is small enough to run on
+    the CPU, so a larger share of each minibatch is the gather and the copy, which neither value
+    skips.
+    """
+    from royalelearn.learn.nets import DefaultNetworkFactory
+    from test_inference import ARCH
+
+    arch = msgspec.structs.replace(
+        ARCH, channels=32, blocks=2, vector_embed=8, value_hidden=64, card_embed=32
+    )
+    built = bench_rectangle(env_spec, observations, arch)
+    config = msgspec.structs.replace(
+        CONFIG,
+        n_epochs=1,
+        timesteps_per_iteration=BENCH_CYCLES * BENCH_SLOTS,
+        batch_size=BENCH_CYCLES * BENCH_SLOTS,
+        minibatch_size=256,
+        critic_chunk=1024,
+        debug_assert_iterations=0,
+        check_ratio_invariant_every=0,
+    )
+    try:
+        epochs: dict[str, list[float]] = {"all": [], "critic_only": []}
+        whole: dict[str, list[float]] = {"all": [], "critic_only": []}
+        forced = 0.0
+        for repeat in range(4):
+            for arm in epochs:
+                model = DefaultNetworkFactory(SEED).build(built.spec, arch, "cpu")
+                update = update_for(model, msgspec.structs.replace(config, forced_rows=arm))
+                result = update.step(built.buffer, SCHEDULE)
+                if repeat == 0:  # a warm-up: torch picks its kernels on the first forward
+                    forced = result.forced_frac
+                    continue
+                whole[arm].append(result.seconds)
+                epochs[arm].append(
+                    result.seconds - result.critic_pass_seconds - result.gae_seconds
+                )
+    finally:
+        built.close()
+
+    best = {arm: min(values) for arm, values in epochs.items()}
+    total = {arm: min(values) for arm, values in whole.items()}
+    print(
+        f"\nforced_frac {forced:.3f} over {BENCH_CYCLES * BENCH_SLOTS} rows; epochs "
+        f"{best['all']:.3f}s -> {best['critic_only']:.3f}s "
+        f"({best['critic_only'] / best['all']:.3f}x); whole update "
+        f"{total['all']:.3f}s -> {total['critic_only']:.3f}s "
+        f"({total['critic_only'] / total['all']:.3f}x)"
+    )
+    assert forced == pytest.approx(BENCH_FORCED, abs=0.01)
+    assert best["critic_only"] < best["all"], (
+        f"the epochs took {best['critic_only']:.3f}s skipping {forced:.0%} of the rows against "
+        f"{best['all']:.3f}s training the actor on all of them"
+    )
+
+
 def test_one_optimizer_step_per_batch_whatever_the_minibatch_size(rect: Fixture) -> None:
     model = build_model(rect.spec)
     collect(rect, model)

@@ -3531,6 +3531,14 @@ reproduces. It is the control, and after phase 1 it is never the default.
   and the 77-91 tick (38-46 s) horizon all see byte-identical inputs.
 - Compute: the actor's share times the forced fraction, less the fixed cost of gathering. That is
   0.55-0.65 of today's `time/update` at `forced_frac` 0.88-0.93 **[A]**.
+- Measured on MockEngine and the CPU, at a planted `forced_frac` of 0.899 over 1,024 rows, with a
+  32-channel two-block network and `minibatch_size` 256: the epochs went from 4.02-4.22 s to
+  2.08-2.26 s, **0.52-0.55x**, and the whole update, the critic's pass and the recursion included,
+  from 4.84-4.99 s to 2.95-3.04 s, **0.60-0.61x** **[M]**. Two repeats of
+  `pytest -m slow tests/test_ppo.py -k faster_update -s`, best of three timed runs per arm, on a
+  machine that was also running a training job. It is not the figure phase 1 will report: this
+  network is small enough for a CPU, so a larger share of each minibatch is the gather and the
+  copy, which neither value skips, and the update here is one epoch rather than three.
 
 **`critic_only_choice_mean`** has `critic_only`'s compute and changes one thing: the actor's
 population becomes the choice rows, for every statistic its loss uses.
@@ -3692,6 +3700,10 @@ Forced rows are planted by rewriting chosen cells' `action_mask` to the no-op al
 the rollout samples under that mask, the stored log-probability comes out of it, and the update reads
 the same mask back.
 
+- **The saving is measured, not argued.** A slow test plants the real forced rate on a rectangle
+  large enough to time and reports the epochs' seconds under both values; it asserts only the
+  direction, because the size of a saving is a number to read rather than a threshold to fail
+  somebody else's machine on.
 - **The gradient is `all`'s.** With the recording optimizer, in float32, every actor and critic
   gradient under `critic_only` equals `all`'s within a small fraction of its own scale, over two
   minibatch sizes and a partition whose choice rows cross a minibatch boundary.
