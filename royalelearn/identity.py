@@ -26,6 +26,7 @@ resume diffs those and prints every difference rather than refusing.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import platform
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -198,29 +199,100 @@ def _describe_repo(path: Path) -> str:
     return done.stdout.strip() or UNKNOWN if done.returncode == 0 else UNKNOWN
 
 
-def dirty_sources() -> tuple[str, ...]:
-    """The sibling checkouts this process imported that have uncommitted changes.
+def _repo_root(path: Path) -> Path | None:
+    """The checkout ``path`` is in, or None. A package installed from a wheel is in none."""
+    for candidate in (path, *path.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
 
-    A run's identity records each repository by ``git describe --always --dirty``, and everything
-    else about the environment is recorded by NAME: the reward, the observation builder and the
-    action parser are dotted paths, hashed as strings. So two different bodies of
-    ``royalegym.reward.default_reward`` produce the same ``env_spec_digest``, the ladder files
-    their games under one context, and a plot puts two objectives on one line. That is not
-    hypothetical: on 2026-09-22 an uncommitted change to a sibling repo sat under a live run for
-    twenty minutes and nothing in the identity could have said so.
 
-    Hashing each component's source would be the thorough answer and it is a large one: the
-    resolved object's file, its imports, and anything it reads at call time. This is the cheap
-    one, and it catches the whole class rather than one member of it -- if the checkout is clean,
-    the commit named in the identity IS the code that ran.
+def _uncommitted(path: Path) -> tuple[str, ...]:
+    """The paths under ``path`` that git would not find in its last commit.
+
+    ``git status --porcelain`` and not ``git describe --dirty``, because describe is blind to an
+    untracked file, and an untracked file is the case that bites: the config a run is started from
+    is often one, and it is the document that says what the run IS.
     """
-    dirty = []
-    for name, (_version, described) in (
-        ("royalelearn", ("", git_describe())),
-        ("royalegym", royalegym_provenance()),
-    ):
-        if described.endswith("-dirty"):
-            dirty.append(f"{name} ({described})")
+    root = _repo_root(path)
+    if root is None:
+        return ()
+    try:
+        done = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all", "--", str(path)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if done.returncode != 0:
+        return ()
+    return tuple(line[3:].strip() for line in done.stdout.splitlines() if line.strip())
+
+
+def _watched_paths(config_path: Path | None = None) -> list[tuple[str, Path]]:
+    """What a run's behaviour is actually read from, each labelled for a message.
+
+    The PACKAGES rather than their repositories: a docs edit in one of these checkouts cannot
+    change what a run does, and a guard that fires on it is a guard people pass a flag to silence.
+    The engine's DATA directory is here for the same reason it belongs in a run's identity -- it
+    is read at runtime, not compiled in, so an edit to it moves the rules under a running process
+    -- and it is resolved the way the code resolves it rather than guessed at. The run's own
+    config file is watched because it is the document that says what the run is, and it is
+    routinely untracked.
+    """
+    watched: list[tuple[str, Path]] = []
+    for name in ("royalelearn", "royalegym", "royaleviser"):
+        try:
+            found = importlib.util.find_spec(name)
+        except (ImportError, ValueError):  # pragma: no cover - a broken install
+            continue
+        if found is not None and found.origin:
+            watched.append((name, Path(found.origin).resolve().parent))
+    try:
+        from royalegym.protocol import data_dir
+
+        watched.append(("the engine's data", data_dir().resolve()))
+    except Exception:  # pragma: no cover - reported elsewhere if the data is missing
+        pass
+    if config_path is not None:
+        watched.append((f"the run's config ({config_path.name})", config_path.resolve()))
+    return watched
+
+
+def dirty_sources(config_path: Path | None = None) -> tuple[str, ...]:
+    """What this run would read that is not in any commit, each named with what changed.
+
+    A run's identity records each repository by commit and everything else about the environment
+    by NAME: the reward, the observation builder and the action parser are dotted paths, hashed as
+    strings. So two different bodies of ``royalegym.reward.default_reward`` produce the same
+    ``env_spec_digest``, the ladder files their games under one context, and a plot draws two
+    objectives as one line. On 2026-09-22 an uncommitted change to a sibling repo sat under a live
+    run for twenty minutes and nothing in the identity could have said so.
+
+    What this covers, stated rather than implied: the python packages this process resolved, the
+    engine's data directory, and the config file the run was started from. What it does not: any
+    other file in those checkouts, a package installed from a wheel rather than a checkout, and
+    anything a component reads at call time from somewhere else. Hashing each resolved component's
+    source would be the thorough answer and it is a much larger one.
+
+    The first version of this checked ``git describe --dirty`` on two hardcoded packages. It
+    missed the engine's data, missed RoyaleViser, and was blind to untracked files -- including,
+    at the time it was written, the config of the run then in flight. Found by the integrator,
+    who measured all three rather than arguing them.
+    """
+    dirty: list[str] = []
+    for label, path in _watched_paths(config_path):
+        changed = _uncommitted(path)
+        if not changed:
+            continue
+        shown = ", ".join(changed[:3])
+        if len(changed) > 3:
+            shown += f", and {len(changed) - 3} more"
+        dirty.append(f"{label}: {shown}")
     return tuple(dirty)
 
 

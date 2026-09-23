@@ -334,7 +334,7 @@ def _train(args: argparse.Namespace) -> int:
     """A new run."""
     from .identity import dirty_sources
 
-    refuse_dirty_sources(args.allow_dirty, dirty_sources())
+    refuse_dirty_sources(args.allow_dirty, dirty_sources(args.config))
     config = _config_of(args)
     if args.run_name:
         config.run_name = args.run_name

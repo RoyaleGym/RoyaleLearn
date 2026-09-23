@@ -13,6 +13,68 @@ import pytest
 
 from royalelearn.cli import build_parser, refuse_dirty_sources
 from royalelearn.errors import PreflightError
+from royalelearn.identity import _uncommitted, dirty_sources
+
+
+def _repo(tmp_path, name: str = "repo"):
+    """A real git repository with one committed file, because this reads real git output."""
+    import subprocess
+
+    root = tmp_path / name
+    (root / "pkg").mkdir(parents=True)
+    (root / "pkg" / "code.py").write_text("x = 1\n", encoding="utf-8")
+    run = lambda *args: subprocess.run(  # noqa: E731
+        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+    )
+    run("init", "-q")
+    run("config", "user.email", "test@example.invalid")
+    run("config", "user.name", "test")
+    run("add", "-A")
+    run("commit", "-qm", "one")
+    return root
+
+
+def test_a_committed_tree_has_nothing_uncommitted(tmp_path) -> None:
+    assert _uncommitted(_repo(tmp_path) / "pkg") == ()
+
+
+def test_a_modified_file_is_found(tmp_path) -> None:
+    root = _repo(tmp_path)
+    (root / "pkg" / "code.py").write_text("x = 2\n", encoding="utf-8")
+    assert _uncommitted(root / "pkg") == ("pkg/code.py",)
+
+
+def test_an_untracked_file_is_found(tmp_path) -> None:
+    """The case ``git describe --dirty`` cannot see, and the one that bit us.
+
+    The config a run is started from is routinely untracked, and it is the document that says
+    what the run IS. The first version of this guard used describe and was blind to it.
+    """
+    root = _repo(tmp_path)
+    (root / "pkg" / "new.py").write_text("y = 1\n", encoding="utf-8")
+    assert _uncommitted(root / "pkg") == ("pkg/new.py",)
+
+
+def test_a_change_elsewhere_in_the_repo_is_not_this_paths_business(tmp_path) -> None:
+    """A docs edit cannot change what a run does, and a guard that fires on one gets silenced."""
+    root = _repo(tmp_path)
+    (root / "README.md").write_text("notes\n", encoding="utf-8")
+    assert _uncommitted(root / "pkg") == ()
+
+
+def test_a_path_in_no_checkout_reports_nothing(tmp_path) -> None:
+    """A package installed from a wheel has no commit to be dirty against."""
+    (tmp_path / "loose").mkdir()
+    assert _uncommitted(tmp_path / "loose") == ()
+
+
+def test_the_runs_own_config_is_watched(tmp_path) -> None:
+    root = _repo(tmp_path)
+    config = root / "configs" / "run.json"
+    config.parent.mkdir()
+    config.write_text("{}\n", encoding="utf-8")
+    named = dirty_sources(config)
+    assert any("run.json" in line for line in named), named
 
 
 def test_a_clean_checkout_runs() -> None:
