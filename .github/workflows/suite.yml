@@ -33,7 +33,21 @@ on:
 
 jobs:
   suite:
-    runs-on: ubuntu-latest
+    # Two operating systems, because a single-OS run cannot see the difference that matters most
+    # here: `..` normalises lexically on Windows and is WALKED on POSIX, and this package handles
+    # run directories, shared-memory segment names and a peak-working-set reading that is Windows
+    # ctypes on one side and /proc on the other. A sibling repo was certified green on a Windows
+    # box on 2026-09-23 and failed two tests on a clean Linux one, which is the same lesson from
+    # the other direction.
+    #
+    # fail-fast is off so that one platform going red still reports the other. A green Linux run
+    # beside a red Windows one is the useful output; stopping the pair at the first failure would
+    # hide which half is platform-specific.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,6 +86,9 @@ jobs:
       # before anything constructs an environment.
       - name: generate RoyaleSim's data tables
         working-directory: RoyaleSim
+        # bash on both platforms: the four commands are identical and the forward slashes work
+        # under Windows Python, so naming the shell is cheaper than maintaining two copies.
+        shell: bash
         run: |
           python tools/extract_arena.py
           python tools/extract_cards.py --vintage 2018
@@ -79,6 +96,7 @@ jobs:
           python tools/extract_globals.py
 
       - name: install
+        shell: bash
         run: |
           pip install -e RoyaleGym
           pip install -e RoyaleViser
@@ -103,6 +121,7 @@ jobs:
       - name: record what this run was
         if: always()
         working-directory: RoyaleLearn
+        shell: bash
         run: |
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
