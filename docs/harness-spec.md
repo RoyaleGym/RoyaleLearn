@@ -163,11 +163,12 @@ are additive, with no overlap of their own.** Standing a fixed 5 ms cost after e
 That inverts the obvious intuition: sharding is worth most where battles per worker is *small*,
 because a worker with many battles has already amortised inference by batching. At the laptop
 profile a shard is 16 battles against three batched forwards, which sits in the middle of that table.
-Two things keep the number honest rather than assumed: a fixed sleep releases the interpreter cleanly
-while a real forward competes for cores, so the table is the optimistic case; and `royalelearn bench`
-measures the ratio against the network actually configured and prints what a second shard is worth on
-that machine. If it prints under about 10%, set `shards_per_worker = 1` and spend the thread on a
-worker instead.
+One thing keeps the number honest rather than assumed: a fixed sleep releases the interpreter cleanly
+while a real forward competes for cores, so the table is the optimistic case. What is NOT built, though
+this section claimed it was until 2026-09-22: `royalelearn bench` does not print what a second shard is
+worth. Nothing in it separates the shards. The measurement is two runs of `bench` on a quiet machine
+with `rollout.shards_per_worker` at 1 and at 2, compared on collection seconds; if the second shard
+buys under about 10%, set it to 1 and spend the thread on a worker instead.
 
 The buffer row is `(T + obs.frame_stack) × R × row_bytes`: `T+1` cycles for the bootstrap row plus
 `frame_stack - 1` history cycles carried over from the previous iteration (section 9.1). At the laptop
@@ -1144,6 +1145,9 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `eval_seed_count` | 500 | seeds | |
 | `release_mode` | `"stochastic"` | | rating both the sampled and the argmax variant doubles the pool and the cost for no decision |
 | `refit_every_iterations` | 10 | | |
+| `probe_every_iterations` | 0 | iterations | 0 is off, and off is the default: a probe plays real battles in the parent. Section 11.9 |
+| `probe_games` | 40 | battles per rung | paired, so 20 seeds of the frozen set, each from both sides |
+| `probe_opponents` | `("scripted:noop", "scripted:random_legal")` | | the rungs, refused at config time if one is not a scripted opponent |
 | `gate.champion_games` | 1000 | battles | 500 seeds times 2 side assignments |
 | `gate.champion_lower_bound` | 0.52 | score rate | requires an observed 55.2% or better, about 35 Elo |
 | `gate.anchor_games` | 200 | battles per anchor | |
@@ -2452,10 +2456,19 @@ decision value.
 `ladder/results.py`. An append-only `ladder/games.jsonl`, one line per battle:
 
 ```json
-{"a": "learner@12500000", "b": "snap:v17", "score_a": 1.0, "seed_index": 311, "side_a": "blue",
+{"a": "snap:v18", "b": "snap:v17", "score_a": 1.0, "seed_index": 311, "side_a": "blue",
  "context": "9f3c1a2b4d5e6f70", "kind": "eval", "run_id": "3f9a1c...", "iteration": 381,
  "wall": "2026-09-22T04:11:07Z"}
+{"a": "learner@12500000", "b": "scripted:noop", "score_a": 1.0, "seed_index": 7, "side_a": "red",
+ "context": "9f3c1a2b4d5e6f70", "kind": "probe", "run_id": "3f9a1c...", "iteration": 381,
+ "wall": "2026-09-22T04:12:55Z"}
 ```
+
+The `kind` is what separates the three cuts of one file. `eval` is the authoritative one, the
+only one the rating is fitted to. `train` is the battles the mixture played, recorded because
+they are free to keep and excluded because they are PFSP-selected. `probe` is the live policy
+against a fixed rung (section 11.9), excluded for a different reason: the player it names exists
+for one moment.
 
 `context` is
 `sha256(env_factory.digest() + obs_builder_spec.digest() + deck_protocol + engine_build_digest)[:16]`.
@@ -2530,8 +2543,8 @@ once draws are counted separately. That is one more reason to store them separat
 ### 11.8 What the ladder logs
 
 The fitted rating and its 95% interval for the learner and every pool member, with the anchor named;
-`rating_above_v0`; the score rate against each scripted anchor, which is the one scale that never
-drifts; every gate outcome with the condition that failed; the draw rate; `paired_rho`; the pool and
+`rating_above_v0`; the live policy's score rate against each scripted anchor, which is the one scale
+that never drifts and which the probe of section 11.9 is what measures; every gate outcome with the condition that failed; the draw rate; `paired_rho`; the pool and
 sampler sizes; eviction events; per-snapshot evaluation game counts; and the **transitivity
 residual**, which is the fraction of head-to-head pairs with at least 30 games whose observed score
 contradicts the fit by more than two standard errors.
@@ -2543,6 +2556,74 @@ so it already holds the dense matrix such a method needs. Publishing the number 
 `royalegym/selfplay.py`'s honest docstring caveat about non-transitivity becomes a measurement instead
 of a warning, and it is far better discovered by a logged diagnostic in month one than by a confusing
 ladder in month six.
+
+### 11.9 The probe of the live policy
+
+Everything above measures a **frozen snapshot**. The gate names `snap:v{n}` and hands it to the
+evaluation runner, so the id `learner` never appears in an evaluation result and a run publishes
+no score for the policy it is actually changing. `ladder/score_vs_noop` and
+`ladder/score_vs_random_legal` asked the result log about a pair nothing could write, and read
+0.5 in every row until they were made absent instead (b106aa1).
+
+The probe is that missing measurement. Every `ladder.probe_every_iterations` iterations, after
+the update, the coordinator plays the **live model** against each of `ladder.probe_opponents`:
+`probe_games` battles per rung, paired, through the same `EvalRunner` machinery as the gate.
+
+Four things define it.
+
+**It names the policy and the moment.** The id is `learner@{cumulative_env_steps}`, so the
+result log says which weights were measured. A policy at 4 million steps and the same policy at
+40 million are different players, and a single `learner` id would pool their games into one row
+of the matrix.
+
+**Its games are not the fit.** They are written `kind="probe"` and `eval_view` reads `eval`
+only, so a probe moves no fitted rating, no gate condition, no anchor reference and not
+`ladder/eval_games_total`. Two reasons, and both matter. The rungs never change and the learner
+does, so a probe is a reading against a ruler rather than a game between two rated players; and
+each probe is a one-moment id, so admitting them would grow the fit by a column per probe, each
+too thinly played to place, and let the rating scale move because the run measured itself.
+
+**The positions are fixed.** A comparison takes the **first** `probe_games / 2` seeds of the
+frozen evaluation set, never a fresh draw, so every probe of a run plays the same start states
+and two of them differ by the policy rather than by the sample. The acting uniforms are not
+shared: the stream is addressed by the comparison id, which carries the step, so each probe
+draws its own action noise. The start state is the part worth controlling, and it is controlled.
+
+**It is off by default.** `probe_every_iterations = 0` is the shipped value, so no existing run
+changes and nothing is paid until a run asks for it.
+
+What it does **not** do: it is not the gate, it admits and promotes nothing, and it gives the
+learner no fitted rating. So `ladder/rating_above_v0` stays absent and the PFSP weighting still
+has no rating for the live policy. Both of those want a rated player, which is what a snapshot
+is; the probe deliberately makes a different trade.
+
+What it publishes, on the iterations it runs and on no others: `ladder/score_vs_noop` and
+`ladder/score_vs_random_legal` for the anchors, and for every rung
+`ladder/score_vs/{rung}` with `ladder/score_vs_n/{rung}` and the two ends of its 95% bootstrap
+interval over seeds. `n` is **seeds**, not battles: the two battles of a seed are correlated.
+`time/probe` is what the iteration spent and `ladder/probe_seconds_frac` the share of wall clock
+since the run started. A rung nobody probed has no key, because 0.5 is what an even contest also
+looks like.
+
+**The cost.** The battles are played one at a time in the parent process, so a probe is
+`len(probe_opponents) * probe_games` full matches of the evaluation environment, and full means
+untruncated. Measured on MockEngine, CPU, one seat driven by the live network:
+a probe of the two anchors at `probe_games = 40` -- 80 untruncated matches -- cost **95.5 s** on
+its first iteration and **100.0 s** on its second, which is **1.25 s a battle** **[M]**. Two
+scripted seats on the same environment cost 0.54 s a battle **[M]**, so about half of a probe is
+the live network's forward pass, one decision at a time, and the other half is the environment.
+Both numbers were taken on the development laptop with another training run on the machine, so
+they are an upper bound rather than a quiet-machine figure; the command is the tiny MockEngine
+config of `tests/test_coordinator.py` with `probe_every_iterations = 1`, reading `time/probe`
+off the metric row (2026-09-22).
+
+The gate is the comparison to set it against. At the shipped settings a gate plays
+1000 + 2x200 + 8x100 = 2200 battles, about every two hours, and the table above budgets that at
+5% of wall clock. A probe of the two anchors is 80 battles, under 4% of one gate. So one probe
+per gate interval is noise and a probe every iteration is not, which is why the field is an
+interval in iterations rather than a flag. `ladder/probe_seconds_frac` is what a run is watched
+with, and `time/probe` is in the attributed sum rather than in `time/residual`, so the minutes
+show up under a name.
 
 ---
 
@@ -2807,7 +2888,8 @@ enemy-elixir field was an estimate on some episodes and the alarm below says so)
 `elo_readout`, `champion_id`, `champion_step`, `pool_size`, `sampler_size`, `gate_attempts`,
 `gate_passes`, `gate_observed_rate`, `gate_lower_bound`, `gate_failed_condition`, `gate_seconds_frac`,
 `score_vs_noop`, `score_vs_random_legal`, `transitivity_residual`, `paired_rho`, `draw_rate_eval`,
-`eval_games_total`, `evictions`.
+`eval_games_total`, `evictions`, and on a probe iteration `score_vs/<rung>` with `score_vs_n/<rung>`
+and `score_vs_ci95_lo/hi/<rung>`, plus `probe_seconds_frac`.
 
 **`health/`**: `illegal_action_rate` (**exactly zero by construction; this is an alert, not a plot**),
 `mask_disagreements` (from the start-up gate), `worker_restarts`, `worker_failures_by_kind`,
@@ -3000,7 +3082,12 @@ while cumulative_timesteps < limit:
         ladder.apply(decision)
     if iteration % cfg.ladder.refit_every_iterations == 0:
         ratings = rater.fit(results.eval_view())
-    row = merge(run_fields, throughput, time, result, probe, episode_stats(episodes), ladder_fields)
+    if cfg.ladder.probe_every_iterations and iteration % cfg.ladder.probe_every_iterations == 0:
+        rungs = {rung: probe_runner.compare(f"learner@{cumulative_env_steps}", rung,
+                                            games=cfg.ladder.probe_games)
+                 for rung in cfg.ladder.probe_opponents}   # kind="probe"; section 11.9
+    row = merge(run_fields, throughput, time, result, probe, episode_stats(episodes),
+                ladder_fields(rungs))
     sinks.write(row); sinks.write_episodes(episodes)     # before the alarms read it
     alarms.evaluate(row)                                  # may raise AlarmHalt
     if crossed(cfg.checkpoint.every_env_steps):
@@ -3073,7 +3160,7 @@ therefore recorded in the checkpoint and in the ladder's `context` like any othe
 |---|---|
 | `config [--profile laptop\|workstation\|many-core] [-o run.json]` | write a fully populated default config |
 | `doctor [--config F]` | the start-up gates of section 7.7 on their own: build one env, print the engine build digests, the observation space and the codec table, run `mask_disagreements` over all 2304 non-no-op actions, check the action-layout identity, print the RAM ledger, the credit horizon, the geometry and the `run_id`. Seconds, and it catches most first-run failures |
-| `bench [--config F] [--seconds 60]` | measure and print section 2.3's table for **this** machine: env milliseconds per game-step, codec microseconds per row, boundary microseconds per round, inference milliseconds per round, update timesteps per second, peak VRAM, the rollout/update capacity ratio, and `ratio_max_abs_dev` over ten rounds beside the configured `ratio_atol`. Writes the "measured on" block in `docs/throughput.md` |
+| `bench [--config F] [--seconds 60]` | measure and print section 2.3's table for **this** machine: env milliseconds per game-step, codec microseconds per row, boundary microseconds per round, inference milliseconds per round, update timesteps per second, peak VRAM, the rollout/update capacity ratio, and `ratio_max_abs_dev` over ten rounds beside the configured `ratio_atol`. It PRINTS that block; nothing writes `docs/throughput.md`, which is a page kept by hand, and a command that overwrote it would lose the prose around the numbers. `--iterations` caps the loop (default 3) and `--seconds` is a lower bound checked between iterations, never inside one |
 | `train --config F [--run-name N] [--until-timesteps T] [--inline] [--device cuda\|cpu]` | a new run |
 | `resume --run DIR [--checkpoint PATH] [--until-timesteps T] [--allow-identity-drift]` | continue; refuses on an identity mismatch by default and names every differing field |
 | `verify-resume --config F [--iterations 6] [--split 3]` | section 12.4's proof, on the user's own machine |

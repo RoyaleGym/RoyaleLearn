@@ -90,6 +90,36 @@ The harness runs: `royalelearn train` collects rollouts, updates, rates, checkpo
 `royalelearn resume` continues a run from what it wrote. What is not settled is written down
 here, so nobody has to rediscover it.
 
+**The live policy is measured at last, and it still has no rating.** Every evaluation battle a
+run plays is a frozen snapshot against something, because the gate is what drives the evaluator:
+it takes a snapshot, names it `snap:v{n}` and hands that name to the runner. The id `learner`
+therefore never appeared in an evaluation result, and the two keys that report the score against
+the scripted anchors were asking the result log about a pair nothing could write. They read a
+flat 0.5 -- what an unplayed pair answers, and also what a genuine even contest looks like -- in
+all 124 metric rows on disk, until b106aa1 made them absent instead.
+
+`ladder.probe_every_iterations` turns on the measurement that was missing. The live model plays
+`probe_games` paired battles against each of `ladder.probe_opponents` on the first seeds of the
+frozen evaluation set, under the id `learner@{env_step}`, and the row carries each score with
+its n and a bootstrap interval over seeds. It is off by default and costs 1.25 s a battle on
+MockEngine, so 100 s for the two anchors at the shipped count; `harness-spec.md` section 11.9
+has the rest of the cost.
+
+What it deliberately does not do is give the learner a fitted rating. Its games carry
+`kind="probe"` and the authoritative fit never reads them, because a probe names a player that
+exists for one moment: admitting them would add a column per probe to the fit every ladder
+decision is made on, each too thinly played to place, and would let the rating scale move
+because the run measured itself. So `ladder/rating_above_v0` is still absent and the PFSP
+weighting still has no rating for the live policy. Both of those want a rated player rather than
+a reading against a ruler, and the nearest rated player is the newest snapshot, one gate cadence
+stale. Whether that is what `rating_above_v0` should publish is open.
+
+Also open: the four scripted opponents beyond the two anchors (`first_affordable`, `defend`,
+`push`, `patient`) are still played by nothing in a default run. The matchmaker's scripted slots
+draw from the two anchors, and `probe_opponents` defaults to the same two. Naming them in
+`probe_opponents` is now the way to get a number against them, and what they are worth as
+training opponents is a separate question from what they are worth as rungs.
+
 **Every run recorded before this batch optimised a different objective, because the rewards
 reached the buffer one cycle late.** A worker publishes the result of stepping cycle `c` as cycle
 `c + 1`, and `RectBuffer.record_round` filed the reward and the two done flags at the cycle the
