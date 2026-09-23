@@ -63,6 +63,26 @@ def aligned_config(tmp_path: Path) -> cfg.RunConfig:
     return config
 
 
+#: Keys that measure the MACHINE rather than the run, and so cannot be part of "two runs of one
+#: configuration agree row for row". A second process has its own peak working set, and the free
+#: memory of a shared card is whatever else is on it at that instant. They were compared until
+#: 2026-09-22 and did not fail only because both read a constant zero: making them real
+#: (health/rss_peak_mb in afe30e7) turned them into a flake, and the vram pair had already been
+#: seen failing this comparison while another session held the GPU.
+MACHINE_READINGS = frozenset(
+    {
+        "health/rss_peak_mb",
+        "health/vram_available_mb",
+        "health/vram_driver_free_mb",
+        "health/vram_reserved_mb",
+        "health/vram_peak_mb",
+        "health/vram_inactive_split_mb",
+        "health/vram_alloc_retries",
+        "health/vram_needed_mb",
+    }
+)
+
+
 def rows(run_dir: Path) -> list[dict[str, Any]]:
     """Every metric row a run wrote, in order."""
     text = (run_dir / "metrics.jsonl").read_text(encoding="utf-8")
@@ -115,7 +135,8 @@ def test_a_run_is_a_pure_function_of_its_identity(tmp_path: Path) -> None:
         differing = {
             key: (left.get(key), right.get(key))
             for key in sorted(set(left) | set(right))
-            if not key.startswith(("time/", "throughput/", "run/wall_seconds"))
+            if key not in MACHINE_READINGS
+            and not key.startswith(("time/", "throughput/", "run/wall_seconds"))
             and left.get(key) != right.get(key)
         }
         assert not differing, f"iteration {index} differs in {differing}"
@@ -170,7 +191,8 @@ def test_a_resume_continues_the_original_row_for_row(tmp_path: Path) -> None:
         differing = {
             key: (original.get(key), resumed.get(key))
             for key in sorted(set(original) | set(resumed))
-            if not key.startswith(("time/", "throughput/", "run/wall_seconds"))
+            if key not in MACHINE_READINGS
+            and not key.startswith(("time/", "throughput/", "run/wall_seconds"))
             and original.get(key) != resumed.get(key)
         }
         assert not differing, f"iteration {index + 1} differs in {differing}"
