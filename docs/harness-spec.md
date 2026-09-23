@@ -2177,6 +2177,22 @@ therefore reports `terminal`, `PotentialCrownReward`, `PotentialTowerHPReward` a
 `CommittedElixirPotential`. The acceptance criterion, checked by the `shaping_dominates` alarm, is that
 the sum of the absolute shaping terms stays below the terminal term's magnitude.
 
+**What that alarm means under a POTENTIAL reward, which is not what it meant under the other one.**
+A potential term pays `gamma * Phi(s') - Phi(s)` every step, so over an episode it telescopes to
+`gamma^T * Phi(s_T) - Phi(s_0)`, and with the terminal potential taken as zero (2ba3895) only
+`-Phi(s_0)` survives. The shares are per-episode sums, so a potential term that is behaving
+contributes a small number however loud it is step to step. Measured in production on 2026-09-22 by
+the train session, over the last twenty iterations of a real run on this composition: terminal
+0.9762, `PotentialTowerHPReward` 0.0151, `PotentialCrownReward` 0.0075, `CommittedElixirPotential`
+0.0055 **[M]**. All the shaping together is 2.9% of the objective, and the elixir term -- the one a
+reader reaches for when a policy looks like it is dumping cards -- is 0.56%.
+
+So the alarm is not a weight check any more, and reading it as one would make it look vestigial. It
+now says: a shaping term has stopped telescoping. That is the defect 2ba3895 fixed, where a finished
+battle still had a potential and the shaping paid for the margin of a win, and it is the defect a new
+term that is not a difference of a potential would have. A run whose shaping share climbs towards its
+terminal term has a term that is no longer policy-invariant, whatever its weight says.
+
 The two shares that alarm reads, `env/reward_shaping_abs` and `env/reward_terminal_abs`, are sums of
 those per-seat magnitudes. The signed mean is kept because it is how a term that is not antisymmetric
 shows itself. Both shares were wrong until 1065b78 and c38dc82: the absolute value was taken on the
@@ -2951,7 +2967,7 @@ being hunted, and a false halt costs everything the run was for.
 | `draw_equilibrium` | `env/draw_rate > 0.5` and `env/episode_steps_at_cap_frac > 0.8` | 5 | warn | the turtle equilibrium |
 | `seat_bias` | `env/win_rate_by_seat`'s 95% interval excludes 0.45-0.55 | 3 | warn | an unseeded reset, a reward asymmetry, or an observation mirror bug; a few points inside that band can be the shipped engine's own seat asymmetry, which is why this warns rather than halts and why the ladder's paired evaluation swaps sides on every seed |
 | `elixir_count_inexact` | `env/elixir_count_exact_frac < 0.99` | 3 | warn | the observation's opponent-elixir field is an estimate on some episodes: a repeated card in a deck, or an engine whose elixir law is not the calibration's. The policy is reading a documented-exact slot that is not. A value near zero rather than slightly under one is the second cause and not a broken counter: it says the engine build and the card data disagree about elixir, so read the run's `identity.json` `engine_build` before anything else. The row itself carries no engine digest: `run/state_digest` is the learner's weights, not the engine |
-| `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | shaping has taken over the objective. Until 1065b78 and c38dc82 it compared two structural zeros, so it has not yet been validated on a real run (section 10) |
+| `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | under a potential reward this says a shaping term has stopped telescoping, which is what a term that is not a difference of a potential does; it is not a check on the weights. Measured quiet in production 2026-09-22 at 2.9% of the objective (section 10). Until 1065b78 and c38dc82 it compared two structural zeros |
 | `vram_spilling` | `time/update >= 2 x the best update this run has had` AND `health/vram_driver_free_mb < 128` | 3 | warn | the update is several times slower than this run has managed, on a card the driver says is full. That is what an allocation backed by host memory over PCIe looks like from inside the process, and the platform gives no other sign: it does not refuse an oversubscribed allocation, it serves it and reports success. The memory reading is there to tell a spill from a busy machine, which slows an update by 1.4 to 1.7 rather than by 4. The bar is a running minimum, so a slow iteration cannot raise the bar it is judged against and the first iteration's warm-up cannot lower it. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It stays silent on a run with no CUDA device, because `health/vram_driver_free_mb` is then absent |
 | `transitivity` | `ladder/transitivity_residual > 0.10` | 3 | warn | the scalar rating is lying |
 | `gate_starved` | five consecutive gate failures | 1 | warn | the plateau signal, stated as an event |

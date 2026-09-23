@@ -312,7 +312,10 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
             "shaping_dominates",
             lambda shaping, terminal: shaping > terminal,
             patience=5,
-            meaning="the shaping terms have taken over the objective",
+            meaning=(
+                "the shaping terms have taken over the objective; under a potential reward that "
+                "means one of them has stopped telescoping rather than that a weight is wrong"
+            ),
         ),
         # The only threshold here measured on the machine it is applied to. `needed` is the
         # device peak the preflight measured for THIS minibatch on THIS card, plus the
