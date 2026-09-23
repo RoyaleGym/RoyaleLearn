@@ -4,6 +4,10 @@ This page is for the person sitting in front of a run. It covers starting one, r
 scrolls past, the 23 alarms and what to do about each, the two ways a shared machine eats an
 afternoon, and the one memory setting that is worth understanding before you touch it.
 
+Every command block on this page is written for Windows PowerShell, the shell that opens by
+default on Windows 10 and 11, which is why the paths use backslashes. On macOS or Linux the same
+commands work with forward slashes and `.venv/bin/python` in place of `.venv\Scripts\python`.
+
 It is not the specification. [harness-spec.md](harness-spec.md) is the dense version.
 [metrics.md](metrics.md) describes every number in a row. [checkpoints.md](checkpoints.md)
 covers saving and resuming. [throughput.md](throughput.md) covers how fast it goes. Every claim
