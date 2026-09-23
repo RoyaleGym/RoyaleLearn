@@ -4,7 +4,7 @@
   "runs_dir": "runs",
   "master_seed": 20260921,
   "profile": "laptop",
-  "timestep_limit": 100000000,
+  "timestep_limit": 2700000,
   "env": {
     "engine": {
       "cls": "royalegym.rust_engine.RustEngine",
