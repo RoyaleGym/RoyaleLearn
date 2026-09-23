@@ -57,7 +57,9 @@ there is for a mask, codec or weight-version drift, and every one of those failu
 silent.
 
 **D6. The mask travels with the transition, bit-packed, and the same mask is applied at update.**
-289 bytes, 2.2% of a row. A rollout/update mask disagreement pins the clip fraction at 1.0 in one
+289 bytes of the 14,163-byte row computed in section 7.2, so 2.0%. Both numbers are on this line
+because the percentage is derived from the other one: it read 2.2% until 2026-09-23, which is
+289/13,136 and a row this codec has not produced since the mask planes were folded in. A rollout/update mask disagreement pins the clip fraction at 1.0 in one
 direction and produces `log π = -inf` in the other; storing the mask makes both impossible.
 
 **D7. Inference runs in the parent, one model, one CUDA context, one batched forward per distinct
@@ -1432,8 +1434,10 @@ def worker_main(w: int, cfg: WorkerConfig, handles: Handles) -> None:
 ```
 
 - **The scripted opponents run here.** `RandomLegalOpponent(noop_prob=0.9)` is about 5 microseconds
-  of numpy per row; routing 15% of battles through the GPU would cost a forward pass and a boundary
-  crossing for nothing. They draw from a per-slot generator seeded from
+  of numpy per row; routing the scripted share of battles through the GPU would cost a forward pass
+  and a boundary crossing for nothing. That share is `ladder.mix`, which ships as
+  `(0.50, 0.35, 0.15)` -- mirror, pool, scripted -- so it is a configured proportion rather than a
+  measurement, and a run that changes the mixture changes it here too. They draw from a per-slot generator seeded from
   `scripted/worker/{w}/slot/{r}/gen/{g}`, so they stay reproducible.
 - **A battle's assignment changes only at that battle's episode boundary, and the parent decides
   it.** The worker holds no pending plan and makes no draw: when a round reports `episode_end`, the
