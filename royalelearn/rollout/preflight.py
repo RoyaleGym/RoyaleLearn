@@ -433,10 +433,23 @@ def _sample(vec: Any, master_seed: int, count: int) -> list[dict[str, np.ndarray
 
 
 def _mask_disagreement_gate(env: Any, say: Callable[[str], None]) -> None:
-    """Gate 5: the mask and the engine agree about every action, for both seats.
+    """Gate 5: the mask and the engine agree about every action, for both seats, AT ONE STATE.
 
-    Exhaustive, because a policy trained against a wrong mask is worthless and because the
-    check is already written in RoyaleGym and nobody runs it.
+    Exhaustive over ACTIONS and a single sample over STATES, and the difference matters enough
+    to be in the first line rather than discovered. A policy trained against a wrong mask is
+    worthless, and the check is already written in RoyaleGym where nobody runs it.
+
+    The one state is the opening one -- ``env.engine.state()`` on a freshly built environment --
+    which is the right sample for the disagreement most likely to exist, because rules that
+    gate the START of a battle apply there and nowhere else. RoyaleGym found one on 2026-09-23:
+    the mask offered all four cards while the engine refused them all with ``TOO_EARLY``, for
+    the length of a deploy lockout, so a seat was penalised for obeying its own mask. This gate
+    stands exactly where that bites and will refuse a run that reintroduces it.
+
+    WHAT IT CANNOT SEE is a disagreement that only appears LATER: a rule that opens when a tower
+    falls, a card whose legality depends on what is already on the board, a zone that changes at
+    overtime. Sampling several states through a played-out battle would cover those, and would
+    need the engine, which is why it is named here rather than quietly absent.
     """
     from royalegym.action import mask_disagreements
     from royalegym.protocol import TEAMS
