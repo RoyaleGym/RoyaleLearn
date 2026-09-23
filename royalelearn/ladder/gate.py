@@ -83,6 +83,13 @@ def floor_decision(candidate: str, champion: str | None) -> GateDecision:
     )
 
 
+def _skipped() -> ConditionResult:
+    """A condition that was not played because the decision was already settled."""
+    return ConditionResult(
+        passed=False, n=0, observed=0.0, bound=0.0, reference=0.0, skipped=True
+    )
+
+
 class WilsonGate(PromotionGate):
     """The three conditions, evaluated in order, with the numbers that decided each."""
 
@@ -139,22 +146,36 @@ class WilsonGate(PromotionGate):
                 )
             )
 
+        # Stop as soon as the decision is settled, and SAY which conditions were not played.
+        # `admit` is `beats and anchors_held` and `promote` is `admit and no_collapse`, so a
+        # failed champion condition fixes all three outcomes and everything after it is spent on
+        # an answer already known. Measured 2026-09-23: an evaluation battle is 8.02 s with real
+        # networks, so the 1,200 battles below the champion comparison are 2.7 hours per gate,
+        # and a 500-iteration run fires six gates. Nobody had felt it because this path has never
+        # executed: every gate any run has ever run was the unconditional admission of the first
+        # snapshot into an empty pool.
+        #
+        # What is NOT done is stopping early INSIDE a comparison. The seeds are the first
+        # `games // 2` of the frozen set, so a variable count means two gates played different
+        # positions and stopped being comparable. That property is load-bearing and stays.
         conditions: dict[str, ConditionResult] = {}
         conditions[CONDITION_CHAMPION] = self._beats_champion(candidate, champion, runner)
-        for anchor in self.anchors:
-            conditions[f"{CONDITION_ANCHORS}:{anchor}"] = self._anchor(
-                candidate, champion, anchor, pool, runner
-            )
-        conditions[CONDITION_POOL] = self._pool_collapse(candidate, champion, pool, runner)
-
         beats = conditions[CONDITION_CHAMPION].passed
-        anchors_held = all(
-            result.passed
-            for name, result in conditions.items()
-            if name.startswith(CONDITION_ANCHORS)
+
+        anchor_names = [f"{CONDITION_ANCHORS}:{anchor}" for anchor in self.anchors]
+        if beats:
+            for anchor, name in zip(self.anchors, anchor_names, strict=True):
+                conditions[name] = self._anchor(candidate, champion, anchor, pool, runner)
+        else:
+            for name in anchor_names:
+                conditions[name] = _skipped()
+        anchors_held = beats and all(conditions[name].passed for name in anchor_names)
+
+        admit = beats and anchors_held
+        conditions[CONDITION_POOL] = (
+            self._pool_collapse(candidate, champion, pool, runner) if admit else _skipped()
         )
         no_collapse = conditions[CONDITION_POOL].passed
-        admit = beats and anchors_held
         return self._record(
             GateDecision(
                 candidate=candidate,

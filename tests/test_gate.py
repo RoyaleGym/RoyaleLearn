@@ -441,3 +441,105 @@ def test_a_candidate_that_is_already_the_champion_is_not_played_against_itself(t
     assert decision.candidate == decision.champion == CHAMPION
     assert decision.admit and decision.promote and not decision.cycle
     assert decision.conditions == {}, "there is nothing to decide, so nothing is recorded"
+
+
+# -- what a settled decision still pays for ----------------------------------
+
+
+def _battles(player: QuotaPlayer) -> int:
+    return len(player.played)
+
+
+def test_a_candidate_that_loses_the_champion_stops_there(tmp_path) -> None:
+    """2,200 battles, no short-circuit, and 1,200 of them after the answer is known.
+
+    ``admit`` is ``beats and anchors_held`` and ``promote`` is ``admit and no_collapse``, so once
+    the champion condition has failed neither the anchors nor the pool-collapse check can move
+    any of the three outcomes. Measured 2026-09-23: an evaluation battle is 8.02 s with real
+    networks, so those 1,200 battles are 2.7 hours per gate spent on a decision already made,
+    and a 500-iteration run was going to pay it six times.
+    """
+    pool = _pool(tmp_path)
+    player = QuotaPlayer(_rates(0.40))
+    decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(player, tmp_path))
+
+    assert not decision.admit and not decision.promote and not decision.cycle
+    assert _battles(player) == 1000, (
+        "the champion comparison is 1000 battles; anything more was spent after the decision"
+    )
+
+
+def test_a_skipped_condition_says_so_rather_than_being_absent(tmp_path) -> None:
+    """A condition nobody measured is not a condition that failed, and not one that passed.
+
+    The recorded conditions are the evidence for why a candidate was refused, and a reader has
+    to be able to tell "it also lost to the anchors" from "nobody asked". Absence would read as
+    the gate not having that condition at all.
+    """
+    pool = _pool(tmp_path)
+    decision = _gate(tmp_path).evaluate(
+        CANDIDATE, pool, _runner(QuotaPlayer(_rates(0.40)), tmp_path)
+    )
+
+    champion = decision.conditions[CONDITION_CHAMPION]
+    assert not champion.passed and not champion.skipped and champion.n == 1000
+
+    others = {
+        name: result for name, result in decision.conditions.items() if name != CONDITION_CHAMPION
+    }
+    assert others, "the skipped conditions are still named"
+    for name, result in others.items():
+        assert result.skipped, f"{name} was not marked as skipped"
+        assert result.n == 0, f"{name} claims to have measured {result.n} battles"
+        assert not result.passed, f"{name} reads as having passed without being played"
+
+
+def test_a_candidate_that_beats_everything_still_plays_everything(tmp_path) -> None:
+    """The other half. Without it, "stop early" would pass by never playing anything."""
+    pool = _pool(tmp_path)
+    player = QuotaPlayer(_rates(0.7))
+    decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(player, tmp_path))
+
+    assert decision.admit
+    assert _battles(player) == 1000 + 2 * 200 + 8 * 100
+    assert not any(result.skipped for result in decision.conditions.values())
+
+
+def test_a_failed_anchor_stops_before_the_pool(tmp_path) -> None:
+    """Beating the champion is not enough: a candidate that lost an anchor cannot be admitted.
+
+    So the pool-collapse check, which is 800 of the 2,200, is spent on a settled decision too.
+    """
+    pool = _pool(tmp_path)
+    player = QuotaPlayer(_rates(0.7, anchors=0.0))
+    decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(player, tmp_path))
+
+    assert not decision.admit
+    assert _battles(player) == 1000 + 2 * 200
+    assert decision.conditions[CONDITION_POOL].skipped
+
+
+def test_stopping_early_does_not_change_any_decision(tmp_path) -> None:
+    """The property the saving rests on, over the whole grid rather than one case.
+
+    For every combination of champion, anchor and pool outcomes, the three flags are what the
+    unconditional gate produced. ``admit = beats and anchors_held`` and
+    ``promote = admit and no_collapse`` are the definitions this is checking against, so a
+    future condition that does NOT factor this way fails here rather than quietly costing
+    hours or quietly changing an admission.
+    """
+    for champion_rate, beats in ((0.7, True), (0.4, False)):
+        for anchor_rate, anchors_held in ((1.0, True), (0.0, False)):
+            for member_rate in (0.9, 0.1):
+                name = f"{champion_rate}-{anchor_rate}-{member_rate}"
+                pool = _pool(tmp_path / name)
+                player = QuotaPlayer(
+                    _rates(champion_rate, anchors=anchor_rate, members=member_rate)
+                )
+                decision = _gate(tmp_path / name).evaluate(
+                    CANDIDATE, pool, _runner(player, tmp_path / name)
+                )
+                assert decision.admit == (beats and anchors_held), name
+                assert decision.promote == (decision.admit and not decision.cycle), name
+                if not decision.admit:
+                    assert not decision.promote and not decision.cycle, name

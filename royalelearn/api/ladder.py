@@ -108,6 +108,12 @@ class ConditionResult(msgspec.Struct):
     observed: float
     bound: float
     reference: float
+    #: True when the condition was NOT PLAYED because the decision was already settled. A
+    #: condition nobody measured is not one that failed and not one that passed, and the
+    #: difference is the whole evidence for why a candidate was refused: "it also lost to the
+    #: anchors" and "nobody asked" are different findings. ``passed`` is False and ``n`` is 0 on
+    #: a skipped condition, so anything reading either without reading this reads a refusal.
+    skipped: bool = False
 
 
 class GateDecision(msgspec.Struct):
