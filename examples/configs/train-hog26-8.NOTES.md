@@ -19,5 +19,18 @@ to 4M looks like "a bit longer" and is a run somebody kills at hour six believin
 If you want a real gate, raise it deliberately and budget for it. If you want a longer TRAINING
 run, raise `ladder.candidate_every_env_steps` in step so the candidate count stays at one.
 
-The full procedure is `RoyaleLive/docs/2026-09-23-long-run-procedure.md`; the measurements behind
-every number here are in `RoyaleLive/docs/2026-09-22-training-log.md`.
+## The numbers above, and where they came from
+
+All of them were measured on one laptop, on the runs this config descends from, so treat them as
+the shape of the cost rather than as constants:
+
+    env steps per iteration      5,472   identical on two 134- and 147-iteration runs
+    seconds per iteration        27-30   medians 29.3 and 27.5, p90 30.7 and 28.5
+    evaluation battle, net v net  8.02 s  median of 3, randomly initialised network on CPU
+    evaluation battle, scripted   0.195 s
+    peak VRAM                    2,011 MB, with zero worker restarts
+    projected system RAM          2,412 MB, and the preflight prints it against what is free
+
+The last one is the one that bites. It is a projection made at start-up, and a run that begins with
+headroom and loses it two hours later dies two hours later. Watch free memory for the whole run,
+not at the door.
