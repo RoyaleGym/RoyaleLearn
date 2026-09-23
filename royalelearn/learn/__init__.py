@@ -15,6 +15,7 @@ _EXPORTS: dict[str, str] = {
     "AdvantageInputs": ".buffer",
     "BackoffState": ".schedules",
     "Batch": ".buffer",
+    "batch_count": ".buffer",
     "BatchedInference": ".inference",
     "BehaviourSnapshot": ".actor_critic",
     "ClashActor": ".actor_critic",

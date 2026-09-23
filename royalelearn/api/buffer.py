@@ -151,5 +151,8 @@ class ExperienceBuffer(ABC, Checkpointable):
         rng_for_epoch: Callable[[int], np.random.Generator],
     ) -> Iterator[Batch]:
         """Yield batches; each Batch knows its true sample count and iterates device-resident
-        minibatches. A batch never straddles an epoch boundary: the epoch's remainder is its own
-        smaller batch, correctly weighted. Gathers per MINIBATCH, never per batch."""
+        minibatches. A batch never straddles an epoch boundary, and an epoch holds as many whole
+        batches as it can fill with the rows over spread one each across them, so every batch is
+        at least ``batch_size`` and an epoch is exactly ``n // batch_size`` optimizer steps. An
+        epoch with nothing trainable in it yields no batches at all. Each minibatch is weighted by
+        its share of its own batch. Gathers per MINIBATCH, never per batch."""

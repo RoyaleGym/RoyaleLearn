@@ -464,6 +464,39 @@ def test_the_kl_and_the_clip_fraction_are_reported_per_epoch(rect: Fixture) -> N
     assert result.kl_by_epoch[-1] > result.kl_by_epoch[0]
 
 
+def test_the_last_epoch_is_reported_when_the_batch_size_does_not_divide_the_rows(
+    rect: Fixture,
+) -> None:
+    """The epoch a batch is labelled with is counted, and it was counted a second way.
+
+    The update divided the trainable rows by the batch size and rounded UP, which was right while
+    an epoch ended in a remainder batch. Since the rows over are spread across whole batches there
+    are FEWER batches than that ceiling, so the labels ran ahead of the batches and the last epoch
+    was never reached: with three epochs the diagnostics for the third stayed at their initial
+    value and the progress line stopped saying "epoch 3/3". The test above cannot see it, because
+    its batch size divides its fixture exactly and the two counts agree. This one picks a size
+    that does not.
+
+    It is a diagnostics defect and not a learning one: the label reaches the per-epoch numbers and
+    the progress line, never a gradient. But "epoch three's clip fraction against epoch one's" is
+    the documented rule for lowering n_epochs, so a reader would act on it.
+    """
+    from royalelearn.learn.buffer import batch_count
+
+    model = build_model(rect.spec)
+    collect(rect, model)
+    rows = int(rect.buffer.trainable().sum())
+    size = (rows // 3) + 1
+    assert rows % size, "this test needs a batch size that does not divide the rows"
+    config = msgspec.structs.replace(CONFIG, n_epochs=3, batch_size=size)
+    assert batch_count(rows, size) < -(-rows // size), "and one the old ceiling overcounts"
+
+    result = update_for(model, config).step(rect.buffer, SCHEDULE)
+
+    assert len(result.kl_by_epoch) == 3
+    assert result.kl_by_epoch[-1] != 0.0, "the last epoch was never labelled"
+
+
 def test_the_entropy_bonus_reaches_no_critic_parameter(rect: Fixture) -> None:
     """Separate trunks make it structural rather than a matter of remembering to detach: there
     is no tensor between the two, so the gradient has no path to take."""

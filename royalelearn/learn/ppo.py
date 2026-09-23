@@ -41,7 +41,6 @@ shrink the policy's step.
 from __future__ import annotations
 
 import json
-import math
 import time
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -378,7 +377,16 @@ class PPOUpdate(Update):
         before_critic = parameters_to_vector(self.critic_params).detach().clone()
 
         n_samples = int(mask.sum().item())
-        per_epoch = math.ceil(n_samples / max(1, config.batch_size)) if n_samples else 0
+        # The buffer's own rule, imported rather than restated. This used to be a math.ceil of
+        # the same division, which was right while an epoch ended in a remainder batch and wrong
+        # the moment it stopped: with the rows over spread across whole batches there are FEWER
+        # batches than the ceiling, so the labels ran ahead and the last epoch was never named.
+        # It reaches the progress line and the per-epoch diagnostics, not a gradient, but a
+        # diagnostic that says epoch 2 of 3 for the last third of an update is one a reader will
+        # act on.
+        from .buffer import batch_count
+
+        per_epoch = batch_count(n_samples, config.batch_size) if n_samples else 0
         diagnostics = _Diagnostics(config.n_epochs, self.device)
         checking = self._asserts_due(sched.iteration)
         batches = buffer.batches(
