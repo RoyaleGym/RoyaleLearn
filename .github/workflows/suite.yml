@@ -14,11 +14,16 @@
 # selects `not slow and not engine`, so the tests needing a freshly built engine are deselected,
 # and the cross-repo workflow is where a build belongs.
 #
-# RoyaleSim is still checked out, and the first run of this file is how that was learnt: without
-# it, 295 tests error and 21 fail with "RoyaleSim data directory not found". The fast suite needs
-# no compiled extension and it does need the CARD CATALOGUE, because MockEngine reads the same
-# data the real one does. The README clones four repos and this workflow had checked out two,
-# which is the whole reason the rule is to use the README's own sequence.
+# RoyaleSim is still checked out AND its data tables are generated, and the first two runs of
+# this file are how that was learnt: 295 tests error without the checkout, and the same 295 error
+# again with the checkout but without Stage 3, because the tables are generated rather than
+# stored. The fast suite needs no compiled extension and it does need the CARD CATALOGUE, since
+# MockEngine reads the same data the real engine does.
+#
+# The README clones four repos and generates the tables in Stage 3. This workflow first checked
+# out two and skipped Stage 3 -- twice the same deviation, both times caught by a machine that
+# had never seen the project, which is the whole argument for using the README's own sequence
+# rather than what you believe the suite needs.
 name: suite
 
 on:
@@ -60,6 +65,18 @@ jobs:
       # would be downloading a GPU runtime onto a runner with no GPU.
       - name: install torch (cpu)
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      # The README's Stage 3, verbatim. RoyaleSim's data tables are GENERATED rather than stored,
+      # so a fresh clone does not have them, and the second run of this workflow is how that was
+      # learnt: `data/derived/arena.json is absent` on 295 tests. Seconds, and it has to happen
+      # before anything constructs an environment.
+      - name: generate RoyaleSim's data tables
+        working-directory: RoyaleSim
+        run: |
+          python tools/extract_arena.py
+          python tools/extract_cards.py --vintage 2018
+          python tools/extract_cards.py --vintage 2018 --out data/derived/cards.json
+          python tools/extract_globals.py
 
       - name: install
         run: |
