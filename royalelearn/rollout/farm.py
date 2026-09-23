@@ -434,7 +434,22 @@ class ProcessRolloutSource(RolloutSourceBase):
                 f"{self.config.rollout.max_restarts_per_worker}: the failure is not transient"
             )
         self._spawn(child, self._handle)
-        child.report = self._await_report(child)
+        try:
+            child.report = self._await_report(child)
+        except PreflightError as exc:
+            # "Failed to start" and "stopped being able to start" have the same symptom and
+            # opposite causes, and the reader's next action is opposite too: debug the config,
+            # or wait for whatever changed to change back. This worker came up once in this
+            # process, so the configuration was sound and something moved under the run. On
+            # 2026-09-22 four sessions each had to be TOLD that a RustEngine which would not
+            # construct was a sibling rebuilding rather than their own code.
+            raise PreflightError(
+                f"rollout worker {worker} came up once in this process (generation "
+                f"{self.generation[worker] - 1}) and its replacement did not. The configuration "
+                "started successfully at least once, so this is something that CHANGED under "
+                "the run -- an engine rebuilt against different data, a file moved, a device "
+                f"taken -- rather than a configuration that was never going to work.\n{exc}"
+            ) from exc
         # Up, and out of the iteration: its battles started from a new seed, so the matches its
         # slots were collecting are gone and its cells arrive invalid until the next plan.
         self.live[worker] = False

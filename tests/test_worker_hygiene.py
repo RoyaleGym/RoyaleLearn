@@ -476,3 +476,60 @@ def test_a_token_left_by_an_earlier_command_is_slept_through() -> None:
     assert seen is True, "a stale token's wake was taken as the answer"
     assert tokens.sleeps == 2
     assert tokens.count == 0
+
+
+def test_a_replacement_that_cannot_start_says_the_worker_had_already_started() -> None:
+    """"Failed to start" and "stopped being able to start" have opposite causes.
+
+    They have the same symptom -- no startup report -- and the reader's next action differs by
+    everything: debug the configuration, or wait for whatever changed to change back. A worker
+    that came up once in THIS process proves the configuration was sound, so a replacement that
+    cannot come up means something moved underneath the run.
+
+    It is not hypothetical. On 2026-09-22 a sibling repository rebuilt its engine against edited
+    calibration data and ``RustEngine()`` stopped constructing across the whole workspace; four
+    sessions each had to be told that the failure was not their own code. The engine is not
+    reachable from this test, so the environment is broken the same way a child sees it: its
+    reward component names a module that is not there, which is a construction failure in the
+    worker, before the first round, exactly like an engine that will not build.
+    """
+    import msgspec
+
+    from royalelearn.errors import PreflightError
+
+    source, buffer, report, planner = _sources(round_timeout_s=3.0)
+    try:
+        source.begin_iteration(planner.mirror_plan(0), buffer, 0)
+        _step(source, timeout=10.0)
+        victim = report.geometry.workers - 1
+        # It came up once. That is the whole premise of the message under test, so it is
+        # asserted rather than assumed.
+        assert source.startup_reports()[victim] is not None
+        source.workers[victim].process.terminate()
+        with pytest.raises(WorkerTimeout):
+            for _ in range(CYCLES):
+                _step(source, timeout=3.0)
+        source.drain_failures()
+
+        # What the child is given changes under the run, which is what a rebuilt engine or a
+        # moved file does. The parent is untouched.
+        source.config = msgspec.structs.replace(
+            source.config,
+            env=msgspec.structs.replace(
+                source.config.env,
+                reward_fn=ComponentSpec("royalelearn.no_such_module.NoSuchReward", {}),
+            ),
+        )
+
+        with pytest.raises(PreflightError) as raised:
+            source.restart(victim)
+        message = str(raised.value)
+        assert "came up once in this process" in message
+        assert "CHANGED under the run" in message
+        assert f"worker {victim}" in message
+        # And the child's own text is still carried: the discrimination is added to the cause,
+        # not substituted for it.
+        assert "no_such_module" in message or "NoSuchReward" in message
+    finally:
+        source.close()
+        buffer.close()
