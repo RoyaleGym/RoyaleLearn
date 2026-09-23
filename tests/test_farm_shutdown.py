@@ -52,6 +52,16 @@ class _Process:
             self.alive = False
 
 
+class _Inbox:
+    """A queue that takes its stop words, like a started farm's."""
+
+    def __init__(self) -> None:
+        self.sent: list[Any] = []
+
+    def put(self, item: Any) -> None:
+        self.sent.append(item)
+
+
 def _farm(*procs: _Process) -> tuple[EvalFarm, list[str]]:
     lines: list[str] = []
     farm = EvalFarm.__new__(EvalFarm)
@@ -59,7 +69,7 @@ def _farm(*procs: _Process) -> tuple[EvalFarm, list[str]]:
     farm.terminate_failures = 0
     farm.unkilled = []
     farm._procs = list(procs)
-    farm._inbox = None
+    farm._inbox = _Inbox()
     farm._outbox = None
     return farm, lines
 
@@ -154,7 +164,7 @@ def test_the_stop_word_goes_out_before_any_signal() -> None:
     sent: list[Any] = []
     order: list[str] = []
 
-    class _Inbox:
+    class _Watching(_Inbox):
         def put(self, item: Any) -> None:
             sent.append(item)
             order.append("stop_word")
@@ -166,9 +176,43 @@ def test_the_stop_word_goes_out_before_any_signal() -> None:
 
     proc = _Watched("royalelearn-eval-0", obeys="kill")
     farm, _ = _farm(proc)
-    farm._inbox = _Inbox()
+    farm._inbox = _Watching()
 
     farm.close()
 
     assert sent == [None]
     assert order == ["stop_word", "terminate"]
+
+
+def test_a_stop_word_that_never_went_out_is_not_blamed_on_the_workers() -> None:
+    """The message must not charge a worker with ignoring something it never received.
+
+    A wrong cause is worse than a missing one: it is a complete sentence, it arrives with the
+    credibility of a real failure, and it sends the reader to the workers when the queue is what
+    broke.
+    """
+
+    class _BrokenInbox(_Inbox):
+        def put(self, item: Any) -> None:
+            raise OSError("the handle is closed")
+
+    stuck = _Process("royalelearn-eval-0", obeys="nothing")
+    farm, lines = _farm(stuck)
+    farm._inbox = _BrokenInbox()
+
+    farm.close()
+
+    assert farm.terminate_failures == 1
+    assert "did not reach 1 of 1" in lines[0], "close() blamed the worker for the queue"
+    assert "survived a stop word" not in lines[0]
+
+
+def test_a_delivered_stop_word_is_not_second_guessed() -> None:
+    """The control. A note that always appears names nothing."""
+    stuck = _Process("royalelearn-eval-0", obeys="nothing")
+    farm, lines = _farm(stuck)
+
+    farm.close()
+
+    assert farm.terminate_failures == 1
+    assert "did not reach" not in lines[0]

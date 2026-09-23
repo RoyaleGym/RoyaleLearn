@@ -324,10 +324,12 @@ class EvalFarm:
         """
         if not self._procs:
             return
+        delivered = 0
         if self._inbox is not None:
             for _ in self._procs:
                 with _suppress():
                     self._inbox.put(None)
+                    delivered += 1
         leaked = []
         for process in self._procs:
             process.join(timeout=STOP_WORD_TIMEOUT_S)
@@ -344,10 +346,21 @@ class EvalFarm:
         if leaked:
             self.terminate_failures += len(leaked)
             self.unkilled.extend(leaked)
+            # The stop word is put under _suppress, so a broken queue is as silent as a
+            # delivered one. Saying "survived a stop word" when none went out is a WRONG cause
+            # rather than a missing one: it reads as a complete explanation and sends the reader
+            # to the workers when the queue is what broke.
+            missed = len(self._procs) - delivered
+            note = (
+                f" The stop word did not reach {missed} of {len(self._procs)}, so this may be "
+                "the queue rather than the workers."
+                if missed
+                else ""
+            )
             self.printer(
-                f"{len(leaked)} evaluation worker(s) survived a stop word, a terminate and a "
-                f"kill: {', '.join(p.name for p in leaked)}. They hold memory until this run "
-                "ends."
+                f"{len(leaked)} evaluation worker(s) survived every signal close() has: "
+                f"{', '.join(p.name for p in leaked)}. They hold memory until this run "
+                f"ends.{note}"
             )
         self._procs = []
         self._inbox = None
