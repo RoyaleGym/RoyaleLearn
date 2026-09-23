@@ -50,6 +50,7 @@ __all__ = [
     "catalogue_digest",
     "compute_identity",
     "describe_device",
+    "dirty_sources",
     "engine_build",
     "identity_differences",
     "royalegym_provenance",
@@ -195,6 +196,32 @@ def _describe_repo(path: Path) -> str:
     except (OSError, subprocess.SubprocessError):
         return UNKNOWN
     return done.stdout.strip() or UNKNOWN if done.returncode == 0 else UNKNOWN
+
+
+def dirty_sources() -> tuple[str, ...]:
+    """The sibling checkouts this process imported that have uncommitted changes.
+
+    A run's identity records each repository by ``git describe --always --dirty``, and everything
+    else about the environment is recorded by NAME: the reward, the observation builder and the
+    action parser are dotted paths, hashed as strings. So two different bodies of
+    ``royalegym.reward.default_reward`` produce the same ``env_spec_digest``, the ladder files
+    their games under one context, and a plot puts two objectives on one line. That is not
+    hypothetical: on 2026-09-22 an uncommitted change to a sibling repo sat under a live run for
+    twenty minutes and nothing in the identity could have said so.
+
+    Hashing each component's source would be the thorough answer and it is a large one: the
+    resolved object's file, its imports, and anything it reads at call time. This is the cheap
+    one, and it catches the whole class rather than one member of it -- if the checkout is clean,
+    the commit named in the identity IS the code that ran.
+    """
+    dirty = []
+    for name, (_version, described) in (
+        ("royalelearn", ("", git_describe())),
+        ("royalegym", royalegym_provenance()),
+    ):
+        if described.endswith("-dirty"):
+            dirty.append(f"{name} ({described})")
+    return tuple(dirty)
 
 
 @lru_cache(maxsize=1)

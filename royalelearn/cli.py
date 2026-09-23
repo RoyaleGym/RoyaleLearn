@@ -42,7 +42,7 @@ from .config import (  # noqa: E402
     profile,
     validate,
 )
-from .errors import RoyaleLearnError  # noqa: E402
+from .errors import PreflightError, RoyaleLearnError  # noqa: E402
 
 __all__ = ["build_parser", "main"]
 
@@ -89,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--until-timesteps", type=int, default=None)
     train.add_argument("--inline", action="store_true", help="one process, no worker farm")
     train.add_argument("--device", default=None, choices=("cuda", "cpu"))
+    train.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="run although a sibling checkout has uncommitted changes",
+    )
     train.set_defaults(handler=_train)
 
     resume = commands.add_parser("resume", help="continue a run from a checkpoint")
@@ -298,8 +303,38 @@ def _doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def refuse_dirty_sources(allow: bool, sources: Sequence[str]) -> None:
+    """Stop a run that could not be reproduced from the commits its identity will name.
+
+    A run records each repository by ``git describe``, and records the rest of the environment by
+    NAME: the reward, the observation builder and the action parser are dotted paths, hashed as
+    strings. Two different bodies of one function therefore produce the same ``env_spec_digest``,
+    and the ladder files their games under one context. On 2026-09-22 an uncommitted change to a
+    sibling repo sat under a live run for twenty minutes, and nothing in the identity could have
+    said so.
+
+    Only a real run is stopped. The suite builds coordinators constantly and a developer's tree is
+    dirty by definition while they work, so this lives on ``train`` and ``resume`` rather than in
+    the coordinator. ``--allow-dirty`` runs anyway, for the case where the tree is dirty in a way
+    the runner knows does not matter; the identity still cannot prove it.
+    """
+    if allow or not sources:
+        return
+    named = ", ".join(sources)
+    raise PreflightError(
+        f"uncommitted changes in {named}.\n"
+        "  A run names the commit it ran, and everything else about the environment by name, so "
+        "two different bodies of one function are one identity and the ladder pools them.\n"
+        "  Commit or stash, or pass --allow-dirty to run anyway and accept that this run's "
+        "identity does not say what code produced it."
+    )
+
+
 def _train(args: argparse.Namespace) -> int:
     """A new run."""
+    from .identity import dirty_sources
+
+    refuse_dirty_sources(args.allow_dirty, dirty_sources())
     config = _config_of(args)
     if args.run_name:
         config.run_name = args.run_name
