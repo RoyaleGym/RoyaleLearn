@@ -2076,6 +2076,45 @@ apart (section 8.2). `ratio_atol` is therefore `1e-4` with autocast off and `2e-
 `royalelearn bench` measures the actual `ratio_max_abs_dev` over ten rounds on the machine it is run
 on and prints it beside the tolerance, so a user can see the margin rather than trust it.
 
+**AND THE TOLERANCE IS NOT A PROPERTY OF THE PRECISION ALONE. It is a property of the precision AND
+of how peaked the policy is, and a run at `net.noop_bias 8.0` died at iteration 6 on 2026-09-23
+because nobody had noticed the second half.** The arithmetic is one line:
+
+```
+log p_i = z_i - logsumexp(z)        so        d(log p_i) / d(z_max) = -p_max
+```
+
+An error in the LARGEST logit is multiplied into every other action's log-probability by the
+probability that logit holds. At `noop_bias 0` the no-op holds about 1/450 of the mass and bf16's
+error is invisible -- 383 iterations across three runs never came near the guard. At `noop_bias 8.0`
+it holds 0.87, and bf16's spacing at magnitude 8 is 0.0625, so the same arithmetic lands on 0.02.
+Measured that night, same engine, same bias, six iterations each:
+
+| | worst `ratio_max_abs_dev` | tolerance | |
+|---|---|---|---|
+| bfloat16 | 0.0261 | 0.02 | died at iteration 6 |
+| float32 | 9.54e-07 | 1e-4 | healthy, and reproduced independently by two sessions |
+
+**The deviation is a TAIL quantity and the spread is the signature of quantisation, not of luck.**
+The bf16 iterations ran 6.1e-05, 2.3e-03, 7.0e-03, 1.9e-02, 2.6e-02 -- a 428x spread -- because two
+forwards whose pre-rounding values differ by a hair land on the same grid point most of the time and
+on adjacent points occasionally. Mostly float noise, sometimes a full grid step. So the criterion is
+TOLERANCE OVER WORST CASE, and a typical value tells you nothing.
+
+`_ratio_precision_gate` in `rollout/preflight.py` computes `p_max * ulp(magnitude)` from
+`net.noop_bias`, the action space and `net.autocast_dtype`, prints it beside `ratio_atol`, and
+REFUSES a run that exceeds it. It is an upper bound: within 15% on float32 and about 2x
+conservative on bf16, which is the right direction for a gate.
+
+**Two things that follow and are worth knowing before choosing a dtype.** Moving the bias out of
+the reduced-precision sum -- promoting before the `+ noop_bias` rather than after -- lowers the
+worst case about 20x, to a 4.5x margin, and does NOT help for a long run: bf16's spacing doubles at
+every power of two, the head's own output grows during training (`actor.head.query.weight` went
+0.22 to 1.82 over 147 iterations), and a 4.5x margin absorbs about two doublings. float32 has
+sixteen more mantissa bits and absorbs about 65,000x of growth. And float32 costs 2.3x the wall
+clock, 62.2 s an iteration against 26.9, while using LESS memory: `vram_peak` 1,882 MB against
+2,011. Nobody predicted the memory going the way it did.
+
 What `2e-2` still detects is the whole reason the check exists, because every failure it is aimed at
 produces a deviation of order **one**, not of order 1e-2:
 
