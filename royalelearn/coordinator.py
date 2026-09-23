@@ -573,9 +573,7 @@ class PolicyProbe:
                 fields[f"policy/card_play_rate/{card}"] = played_count / affordable
         return fields
 
-    def _availability(
-        self, onehot: np.ndarray, slot_legal: np.ndarray
-    ) -> dict[str, MetricValue]:
+    def _availability(self, onehot: np.ndarray, slot_legal: np.ndarray) -> dict[str, MetricValue]:
         """How often each card was in the hand at all, and how often it was affordable.
 
         Without these, a per-card play share answers a question nobody asked. A three-cost card
@@ -754,9 +752,7 @@ class EnvBattlePlayer:
         for _ in range(self.max_decisions):
             uniforms = rng.random(2, dtype=np.float32)
             actions = {
-                agents[seat]: int(
-                    policies[seat](obs[agents[seat]], float(uniforms[seat]), rng)
-                )
+                agents[seat]: int(policies[seat](obs[agents[seat]], float(uniforms[seat]), rng))
                 for seat in (0, 1)
             }
             obs, _reward, terminated, truncated, infos = env.step(actions)
@@ -1038,8 +1034,7 @@ class LearningCoordinator:
             n_slots=self.geometry.n_slots,
             device=self.device,
             discard_opponent_rows=config.ppo.discard_opponent_rows,
-            segment_name=f"{buffer_segment_name(self.run_id)}-{os.getpid():x}"
-            f"-{next(_SEGMENTS)}",
+            segment_name=f"{buffer_segment_name(self.run_id)}-{os.getpid():x}-{next(_SEGMENTS)}",
         )
         self.buffer.set_static_planes(report.statics)
         self.source = self._build_source()
@@ -1073,12 +1068,8 @@ class LearningCoordinator:
             jsonl={"keep_episode_log_iterations": config.metrics.keep_episode_log_iterations},
         )
         self.config_json = dump_config(config, indent=2)
-        self.sinks.open(
-            identity=self.identity, config_json=self.config_json, run_dir=self.run_dir
-        )
-        self.alarms = AlarmSet(
-            config.alarms, ratio_atol=self._ratio_atol(), printer=self.printer
-        )
+        self.sinks.open(identity=self.identity, config_json=self.config_json, run_dir=self.run_dir)
+        self.alarms = AlarmSet(config.alarms, ratio_atol=self._ratio_atol(), printer=self.printer)
         self.store = DirCheckpointStore(self.run_dir, keep=config.checkpoint.keep)
         self.components = self._components()
         self.control = _Control(
@@ -1215,8 +1206,10 @@ class LearningCoordinator:
         self.eviction = HallOfFameEviction()
         self.seeds: SeedSet = eval_seed_set(config.master_seed, config.ladder.eval_seed_count)
         (ladder_dir / "eval_seeds.json").write_bytes(msgspec.json.encode(self.seeds))
-        eval_env = config.eval_env if config.eval_env is not None else msgspec.structs.replace(
-            config.env, truncation=[]
+        eval_env = (
+            config.eval_env
+            if config.eval_env is not None
+            else msgspec.structs.replace(config.env, truncation=[])
         )
         self.eval_env_spec = eval_env
         # One object rather than three methods, so that a process which only wants to PLAY
@@ -1519,9 +1512,7 @@ class LearningCoordinator:
         self.rng.iteration = self.iteration
         self.rng.shard_streams = self.rollout_component.shard_streams()
 
-        plan = self.matchmaker.plan(
-            self.iteration, self.pool, self.ratings, self.geometry
-        )
+        plan = self.matchmaker.plan(self.iteration, self.pool, self.ratings, self.geometry)
         self.buffer.begin_iteration(plan, self.geometry.cycles)
         self.source.begin_iteration(plan, self.buffer, self.iteration)
         self.inference.begin_iteration(plan)
@@ -1632,9 +1623,7 @@ class LearningCoordinator:
         for cycle in range(geo.cycles):
             for _shard in range(geo.shards_per_worker):
                 round_ = source.next_round(timeout)
-                check_round(
-                    round_, cycle=cycle, slots=self.planner.round_slots(round_.shard)
-                )
+                check_round(round_, cycle=cycle, slots=self.planner.round_slots(round_.shard))
                 env_seconds += float(round_.timings.get("env_ms", 0.0)) / 1000.0
                 assigned = self._assign(plan, round_, group, opponent, seat, episodes)
                 round_.group[:] = group[round_.slots]
@@ -1645,9 +1634,7 @@ class LearningCoordinator:
                         actions=answer.actions.astype(np.int16),
                         gamma=sched.gamma,
                         group=group[slots] if assigned else np.zeros(0, dtype=np.int8),
-                        opponent_ix=(
-                            opponent[slots] if assigned else np.zeros(0, dtype=np.int8)
-                        ),
+                        opponent_ix=(opponent[slots] if assigned else np.zeros(0, dtype=np.int8)),
                         learner_seat=(
                             seat[self.planner.slot_battle[slots][::2]]
                             if assigned
@@ -1793,9 +1780,7 @@ class LearningCoordinator:
                 f"{self.config.ladder.mix} implies {expected:.3f}"
             )
         try:
-            assignments_constant_within_episodes(
-                buffer.group[: buffer.cycles], buffer.episode_end
-            )
+            assignments_constant_within_episodes(buffer.group[: buffer.cycles], buffer.episode_end)
         except ValueError as exc:
             raise AssignmentInsideEpisode(str(exc)) from exc
 
@@ -1913,9 +1898,7 @@ class LearningCoordinator:
         self.pool.note_refit(self.ratings)
         folder = self.run_dir / "ladder" / "ratings"
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / f"{self.iteration:06d}.json").write_bytes(
-            msgspec.json.encode(self.ratings)
-        )
+        (folder / f"{self.iteration:06d}.json").write_bytes(msgspec.json.encode(self.ratings))
 
     # -- the row -------------------------------------------------------------
 
@@ -1967,9 +1950,7 @@ class LearningCoordinator:
             "time/collection": collection_seconds,
             "time/inference": inference_seconds,
             "time/env": float(collection["env_seconds"]),
-            "time/codec": float(source_stats.get("codec_ms", 0.0))
-            * collection["rounds"]
-            / 1000.0,
+            "time/codec": float(source_stats.get("codec_ms", 0.0)) * collection["rounds"] / 1000.0,
             "time/ipc": ipc_seconds,
             "time/critic_pass": float(result.critic_pass_seconds),
             "time/gae": float(result.gae_seconds),
@@ -2030,17 +2011,13 @@ class LearningCoordinator:
         metrics.ppo["ppo/return_running_mean"] = (
             float(stats_of.raw_return_mean) if stats_of else 0.0
         )
-        metrics.ppo["ppo/return_running_std"] = (
-            float(stats_of.raw_return_std) if stats_of else 0.0
-        )
+        metrics.ppo["ppo/return_running_std"] = float(stats_of.raw_return_std) if stats_of else 0.0
         metrics.ppo["ppo/reward_clip_frac"] = (
             float(stats_of.clipped_reward_frac) if stats_of else 0.0
         )
         metrics.ppo["ppo/lr_backoff_events"] = self.schedules.backoff.events
 
-        aggregate = episode_fields(
-            episodes, truncation_steps=_truncation_steps(self.config)
-        )
+        aggregate = episode_fields(episodes, truncation_steps=_truncation_steps(self.config))
         metrics.env = {
             key: value for key, value in aggregate.fields.items() if key.startswith("env/")
         }
@@ -2083,33 +2060,35 @@ class LearningCoordinator:
                 # Absent until a probe has run, rather than a zero that reads as "probing is
                 # free" on a run that never probes.
                 probe_seconds_frac=(
-                    self.rung_seconds_total / max(1e-9, wall)
-                    if self.rung_seconds_total
-                    else None
+                    self.rung_seconds_total / max(1e-9, wall) if self.rung_seconds_total else None
                 ),
             )
         )
 
         failures = getattr(self, "failures_by_kind", {})
+        housekeeping = _housekeeping_counts(self)
         metrics.health = {
             "health/illegal_action_rate": float(metrics.env["env/illegal_action_rate"]),
             "health/mask_disagreements": 0,
             "health/worker_restarts": int(sum(getattr(self.source, "restarts", []) or [0])),
-            "health/rows_dropped_dead_worker": int(
-                (~buffer.valid[: buffer.cycles]).sum()
-            ),
+            "health/rows_dropped_dead_worker": int((~buffer.valid[: buffer.cycles]).sum()),
             "health/obs_codec_clipped": int(getattr(self.codec, "clipped", 0)),
             "health/samples_unused_frac": float(result.samples_unused_frac),
             "health/nan_guard_trips": _nan_guard_trips(result),
             "health/vram_peak_mb": _vram_peak_mb(),
-            **_vram_regime(
-                getattr(self, "vram_needed_mb", None), device=str(self.device)
-            ),
+            **_vram_regime(getattr(self, "vram_needed_mb", None), device=str(self.device)),
             **_optional("health/rss_peak_mb", _rss_peak_mb()),
             "health/buffer_fill_frac": _fill_frac(buffer, collection["rounds"], geo),
+            "health/housekeeping_failures": sum(housekeeping.values()),
         }
         for kind, n in sorted(failures.items()):
             metrics.health[f"health/worker_failures/{kind}"] = int(n)
+        # The total is always present, like its neighbours, so a zero is a measurement. The
+        # breakdown appears only when there is something to break down, which is the same shape
+        # ``worker_failures`` uses one line above.
+        for kind, n in sorted(housekeeping.items()):
+            if n:
+                metrics.health[f"health/housekeeping/{kind}"] = int(n)
         return metrics.row()
 
     def _paired_rho(self) -> float:
@@ -2132,9 +2111,7 @@ class LearningCoordinator:
 
     def _checkpoint_due(self) -> bool:
         every = self.config.checkpoint.every_env_steps
-        return bool(
-            every > 0 and self.cumulative_env_steps - self._last_checkpoint_step >= every
-        )
+        return bool(every > 0 and self.cumulative_env_steps - self._last_checkpoint_step >= every)
 
     def manifest(self) -> Manifest:
         """What one checkpoint is, beside the folders that hold it."""
@@ -2173,9 +2150,7 @@ class LearningCoordinator:
         """Resume from a checkpoint: refuse an identity that moved, or a learner the run's own
         record does not contain, then restore everything."""
         assert self.identity is not None
-        manifest = msgspec.json.decode(
-            (Path(path) / "manifest.json").read_bytes(), type=Manifest
-        )
+        manifest = msgspec.json.decode((Path(path) / "manifest.json").read_bytes(), type=Manifest)
         drift = check_resume(
             manifest,
             self.identity,
@@ -2196,9 +2171,7 @@ class LearningCoordinator:
                     {name: [str(was), str(now)] for name, (was, now) in differences.items()}
                 )
             )
-        self.store.read(
-            Path(path), self.components, strict=self.config.checkpoint.strict_load
-        )
+        self.store.read(Path(path), self.components, strict=self.config.checkpoint.strict_load)
         self.iteration = manifest.iteration
         self.cumulative_env_steps = manifest.cumulative_env_steps
         self.cumulative_timesteps = manifest.cumulative_timesteps
@@ -2405,9 +2378,9 @@ def _check_pairs(episodes: Iterable[EpisodeRecord]) -> None:
     """Both seats of a battle report the episode, or neither does."""
     counts: dict[tuple[int, int, int, int], list[EpisodeRecord]] = {}
     for record in episodes:
-        counts.setdefault(
-            (record.worker, record.shard, record.battle, record.ordinal), []
-        ).append(record)
+        counts.setdefault((record.worker, record.shard, record.battle, record.ordinal), []).append(
+            record
+        )
     for key, group in counts.items():
         if len(group) != 2:
             raise EpisodesUnpaired(
@@ -2473,6 +2446,34 @@ def _hash_tensors(digest: Any, mapping: Mapping[str, Any]) -> None:
         digest.update(str(tensor.dtype).encode("utf-8"))
         digest.update(str(tuple(tensor.shape)).encode("utf-8"))
         digest.update(tensor.reshape(-1).numpy().tobytes())
+
+
+def _housekeeping_counts(run: Any) -> dict[str, int]:
+    """Failures from the actions that retry silently, by source.
+
+    THESE COUNTERS EXISTED AND NOTHING READ THEM. ``prune_failures``,
+    ``compaction_failures`` and ``terminate_failures`` were each added with a test proving they
+    increment, and each then lived on an object that is discarded at the end of the run. A counter
+    whose only reader is the test that proves it counts is not a channel -- it is the same silence
+    with a variable in it, and all three guard actions whose success and failure otherwise look
+    identical: a directory that would not delete, a file that would not rename, a worker that
+    would not die.
+
+    Absent sources read zero rather than raising, because this is called while building a row and
+    a health metric that can break the row it is reporting on is worse than no metric.
+    """
+    counts = {
+        "prune": int(getattr(getattr(run, "store", None), "prune_failures", 0) or 0),
+        "eval_shutdown": int(
+            getattr(getattr(run, "eval_player", None), "terminate_failures", 0) or 0
+        ),
+    }
+    sinks = getattr(run, "sinks", None)
+    compaction = int(getattr(sinks, "compaction_failures", 0) or 0)
+    for sink in getattr(sinks, "sinks", ()) or ():
+        compaction += int(getattr(sink, "compaction_failures", 0) or 0)
+    counts["compaction"] = compaction
+    return counts
 
 
 def _optional(key: str, value: float | None) -> dict[str, MetricValue]:

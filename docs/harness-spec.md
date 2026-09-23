@@ -2966,12 +2966,21 @@ anchors under their older names.
 **`health/`**: `illegal_action_rate` (**exactly zero by construction; this is an alert, not a plot**),
 `mask_disagreements` (from the start-up gate), `worker_restarts`, `worker_failures_by_kind`,
 `rows_dropped_dead_worker`, `obs_codec_clipped`, `samples_unused_frac`, `nan_guard_trips`,
+`housekeeping_failures` (plus `housekeeping/{kind}` for each kind that has failed),
 `vram_peak_mb`, `rss_peak_mb`, `buffer_fill_frac`, and the device-memory regime read at the end of
 each iteration whenever CUDA is available: `vram_reserved_mb`, `vram_inactive_split_mb`,
 `vram_driver_free_mb`, `vram_alloc_retries`, `vram_available_mb` (driver free plus what this process
 reserves) and `vram_needed_mb` (one minibatch's peak measured at startup plus
 `doctor.vram_headroom_mb`). The `vram_spilling` alarm reads `time/update` and `vram_driver_free_mb`;
 the other two are kept because they say which memory regime a slowing update is in.
+
+`housekeeping_failures` is the total of the retries that did not take, across three actions that
+each swallow their own error so the run survives them: pruning a checkpoint directory, compacting
+the metric log, and stopping an evaluation worker. Each of those counted itself from the day it
+was written and nothing read the number, so a failure incremented a variable that was discarded
+with the object. The total is unconditional -- a zero is a measurement, and it is what puts the
+key under the row test that every non-conditional key is actually emitted -- while the per-kind
+breakdown (`prune`, `compaction`, `eval_shutdown`) appears only when that kind has failed.
 
 ### 13.3 Alarms
 

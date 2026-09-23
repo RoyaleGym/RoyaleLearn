@@ -264,3 +264,81 @@ def test_an_unprunable_checkpoint_is_survived_anywhere(
 
     # And the entry stayed in the index, so the next prune tries it again rather than losing it.
     assert [path.name for path in store.prune(keep=1)] == [folders[0].name]
+
+
+# -- do the counters reach a reader? -------------------------------------------------------
+
+
+class _Sink:
+    def __init__(self, failures: int) -> None:
+        self.compaction_failures = failures
+
+
+class _Composite:
+    def __init__(self, *sinks: _Sink) -> None:
+        self.sinks = list(sinks)
+
+
+class _Run:
+    """Only the three attributes the helper reads."""
+
+    def __init__(self, *, prune: int = 0, shutdown: int = 0, compaction: tuple[int, ...] = ()):
+        self.store = type("_Store", (), {"prune_failures": prune})()
+        self.eval_player = type("_Player", (), {"terminate_failures": shutdown})()
+        self.sinks = _Composite(*(_Sink(n) for n in compaction))
+
+
+def test_each_source_reaches_the_row_with_its_own_number() -> None:
+    """Distinct values, so a sum that reads one source twice cannot look right.
+
+    Every one of these counters used to be read only by the test that proved it increments. That
+    is the same silence the counter was added to break, with a variable in it.
+    """
+    from royalelearn.coordinator import _housekeeping_counts
+
+    counts = _housekeeping_counts(_Run(prune=1, shutdown=2, compaction=(4, 8)))
+
+    assert counts == {"prune": 1, "eval_shutdown": 2, "compaction": 12}
+    assert sum(counts.values()) == 15
+
+
+def test_a_healthy_run_reports_zero_rather_than_nothing() -> None:
+    """The control. The total is a measurement every iteration; the breakdown is conditional."""
+    from royalelearn.coordinator import _housekeeping_counts
+
+    counts = _housekeeping_counts(_Run())
+
+    assert counts == {"prune": 0, "eval_shutdown": 0, "compaction": 0}
+    assert sum(counts.values()) == 0
+
+
+def test_a_missing_source_reads_zero_and_does_not_raise() -> None:
+    """A health metric that can break the row it reports on is worse than no health metric.
+
+    ``eval_player`` is the parent's own player on a run with no farm, and it has no counter.
+    """
+    from royalelearn.coordinator import _housekeeping_counts
+
+    assert _housekeeping_counts(object()) == {
+        "prune": 0,
+        "eval_shutdown": 0,
+        "compaction": 0,
+    }
+
+
+def test_the_total_is_unconditional_so_an_existing_test_requires_it_in_the_row() -> None:
+    """The wiring, not the arithmetic -- and deliberately not by matching source text.
+
+    ``test_coordinator`` already asserts that every non-CONDITIONAL key in the schema appears in a
+    row an actual run produced. Registering the total as unconditional is what puts it under that
+    guarantee, so a helper nobody calls fails there rather than passing here. This test pins the
+    one fact that link depends on; the breakdown stays out of it, because a key that appears only
+    when something failed is exactly what CONDITIONAL means.
+    """
+    from royalelearn.metrics import schema
+
+    assert "health/housekeeping_failures" in schema.METRICS
+    assert "health/housekeeping_failures" not in schema.CONDITIONAL, (
+        "made conditional, which quietly removes it from the row test that proves it is emitted"
+    )
+    assert "health/housekeeping/{kind}" in {p.template for p in schema.PATTERNS}

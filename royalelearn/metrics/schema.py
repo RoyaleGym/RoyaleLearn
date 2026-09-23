@@ -424,8 +424,10 @@ METRICS: dict[str, MetricSpec] = {
         "fraction", "Mean of the learner's three towers' hp fraction at the end.", low=0.0, high=1.0
     ),
     "env/tower_hp_frac_end_enemy": _m(
-        "fraction", "Mean of the opponent's three towers' hp fraction at the end.", low=0.0,
-        high=1.0
+        "fraction",
+        "Mean of the opponent's three towers' hp fraction at the end.",
+        low=0.0,
+        high=1.0,
     ),
     "env/draw_rate": _m("fraction", "Share of episodes that ended in a draw.", high=0.5),
     "env/win_rate_by_seat": _m(
@@ -550,6 +552,14 @@ METRICS: dict[str, MetricSpec] = {
         low=0.0,
         high=0.0,
     ),
+    "health/housekeeping_failures": _m(
+        "count",
+        "Retries that did not take, across pruning, metric compaction and evaluation-worker "
+        "shutdown. Each of those actions swallows its own error to keep the run alive, so this "
+        "is the only place their failure is visible; a non-zero value means the run is carrying "
+        "a directory, a file or a process it meant to be rid of.",
+        dtype="int",
+    ),
     "health/worker_restarts": _m("count", "Workers restarted so far in this run.", dtype="int"),
     "health/rows_dropped_dead_worker": _m(
         "count", "Cells marked invalid because their worker was dead.", dtype="int"
@@ -620,13 +630,19 @@ METRICS: dict[str, MetricSpec] = {
 PATTERNS: tuple[MetricPattern, ...] = (
     _pattern(
         "ppo/kl_epoch{epoch}",
-        _m("nats", "KL for one epoch. Per epoch rather than averaged, because the rule for "
-                   "n_epochs is read off the spread between the first and the last."),
+        _m(
+            "nats",
+            "KL for one epoch. Per epoch rather than averaged, because the rule for "
+            "n_epochs is read off the spread between the first and the last.",
+        ),
     ),
     _pattern(
         "ppo/clip_fraction_epoch{epoch}",
-        _m("fraction", "Clip fraction for one epoch. If the last epoch's is more than twice the "
-                       "first's, lower n_epochs."),
+        _m(
+            "fraction",
+            "Clip fraction for one epoch. If the last epoch's is more than twice the "
+            "first's, lower n_epochs.",
+        ),
     ),
     _pattern(
         "policy/card_play_frac/{card}",
@@ -692,6 +708,15 @@ PATTERNS: tuple[MetricPattern, ...] = (
     _pattern(
         "ladder/rating_ci95_hi/{member}",
         _m("Elo", "Upper end of that rating's 95% interval."),
+    ),
+    _pattern(
+        "health/housekeeping/{kind}",
+        _m(
+            "count",
+            "Housekeeping failures of one kind: prune, compaction or eval_shutdown. Present "
+            "only when that kind has failed.",
+            dtype="int",
+        ),
     ),
     _pattern(
         "health/worker_failures/{kind}",

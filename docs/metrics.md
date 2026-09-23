@@ -195,6 +195,7 @@ every row they appear in. As of 2026-09-22 there were 56 metric files and 249 ro
 
 Some other rows are zero simply because nothing has happened yet, and those are fine:
 `health/worker_restarts`, `health/nan_guard_trips`, `health/obs_codec_clipped`,
+`health/housekeeping_failures`,
 `ppo/lr_backoff_events`, `ladder/evictions`, `ladder/champion_step`. Zero there is the healthy
 reading. `env/illegal_action_rate` and `health/samples_unused_frac` are zero **by construction**:
 the schema gives both a healthy range of exactly 0 to 0, and a non-zero value is a bug report.
