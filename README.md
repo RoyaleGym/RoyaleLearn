@@ -350,9 +350,14 @@ else on this page still works, and `train`, `doctor` and `bench` stop with
 
 ## Status (2026-09-23)
 
+The suite badge is the workflow's own, so it cannot say green while the suite is not. It runs the
+README's install from a clean machine every push -- four clones, the generated data tables, then
+the three packages -- and the first three runs of it were red for three different reasons the
+developer's own box could never have shown. 883 passed on Ubuntu; the handful of tests that differ
+from a Windows count are platform-specific ones that deselect.
+
 <p align="center">
-  <img alt="Fast suite: 889 passed on 2026-09-23, commit 1f84e6d" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
-  <img alt="Ruff: all checks passed" src="https://img.shields.io/badge/ruff-all%20checks%20passed-3fb950?style=flat-square">
+  <a href="https://github.com/RoyaleGym/RoyaleLearn/actions/workflows/suite.yml"><img alt="suite" src="https://github.com/RoyaleGym/RoyaleLearn/actions/workflows/suite.yml/badge.svg"></a>
   <img alt="Torch is optional" src="https://img.shields.io/badge/torch-optional-555?style=flat-square">
   <img alt="Bot: not trained yet" src="https://img.shields.io/badge/bot-not%20trained%20yet-d29922?style=flat-square">
 </p>
