@@ -271,7 +271,7 @@ dependency and pip takes it from your venv, never from PyPI. If you want torch a
 ## Status (2026-09-22)
 
 <p align="center">
-  <img alt="Fast suite: 616 passed on 2026-09-22" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
+  <img alt="Fast suite: 693 passed on 2026-09-22, commit bd6db80" src="https://img.shields.io/badge/suite-green-3fb950?style=flat-square">
   <img alt="Ruff: all checks passed" src="https://img.shields.io/badge/ruff-all%20checks%20passed-3fb950?style=flat-square">
   <img alt="Torch is optional" src="https://img.shields.io/badge/torch-optional-555?style=flat-square">
   <img alt="Bot: not trained yet" src="https://img.shields.io/badge/bot-not%20trained%20yet-d29922?style=flat-square">
@@ -310,12 +310,13 @@ What is open:
 Tests:
 
 ```
-cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 616 passed, 20 deselected, with torch installed, on 2026-09-22
+cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 693 passed, 25 deselected, with torch, on 2026-09-22 at bd6db80
 ..\.venv\Scripts\ruff check .                              # All checks passed!
 ```
 
-That run took 136 seconds on a laptop. The 20 deselected tests are left out by default so the
-run stays short. They are the slow ones and the ones that need an engine build matching
+That run took 67 seconds on a laptop. The count is pinned to a commit because it moves whenever
+tests land, and a bare number here would age badly. The 25 deselected tests are left out by
+default so the run stays short. They are the slow ones and the ones that need an engine build matching
 RoyaleSim's data files. Adding `-m ""` to the pytest line runs them too. Without torch, the tests
 that need it are skipped rather than failed, and everything else still runs.
 
