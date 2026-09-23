@@ -162,14 +162,17 @@ bound applies to a checkpoint written before the alignment fix: its carried
 `history_episode_end` column is in the old convention, so the first iteration after such a
 resume mis-stacks one row per slot, again only above a frame stack of one.
 
-**The forced-row decision, which is the one that changes what the next version is.** In the
-first real iterations, 93% of collected decisions had exactly one legal action: the elixir bar
-could afford nothing, so the mask left only the no-op. Those rows carry no policy gradient, and
-the update that chews through them three times is 97.7% of the iteration's wall clock.
-`docs/harness-spec.md` section 18 records the measurement and the three responses (drop the
-rows at collection, keep them for the critic but exclude them from the policy loss, or raise
-`decision_ms`), with what each does to the value function and to the wall clock. None is
-obviously right and the evidence for choosing is two iterations.
+**Which rows the actor trains on, which is the decision that changes what the next version
+is.** In the first real iterations, 93% of collected decisions had exactly one legal action:
+the elixir bar could afford nothing, so the mask left only the no-op. Those rows carry no policy
+gradient, and the update that chews through them three times is 97.7% of the iteration's wall
+clock. `ppo.forced_rows` now ships the three answers the learner can give. `all` is today's
+update and the default; `critic_only` lets the actor skip the rows whose mask leaves only the
+no-op, for the same gradient and about 40% less update **[A]**; `critic_only_choice_mean` takes
+the actor's loss and its advantage statistics over the rows that had a choice, so its step stops
+following the elixir bar. Which of the three is right is a measurement nobody has made:
+`docs/harness-spec.md` 18.1 has the two-phase A/B that makes it, the deferred `smdp` design for
+the value side, and the transition-alignment defect that phase 2 waits on.
 
 **Two regions guarded by their ordering rather than by a flag.** A worker's actions region and
 the parent's finals region are both written before the control word that announces them, which

@@ -3421,40 +3421,11 @@ run with, and each is a number the harness already logs.
    from. (The first iteration reads 84% because it pays for cuDNN's first look at each shape:
    `time/inference` 76.6 s then 10.2 s.)
 
-   This is a measurement and not yet a decision, and the decision it feeds is the one to make
-   deliberately: whether a forced row should be collected at all, whether it should be stored
-   but excluded from the policy loss while still feeding the critic and the reward chain that
-   GAE walks, or whether `decision_ms` should rise until a decision is usually a decision.
-   The three differ on two axes and not one. On the value function: dropping a row removes it
-   from the critic's targets as well as the policy's, and removes a link from the chain GAE
-   walks backwards. On the wall clock: dropping at collection saves almost the whole update,
-   because the rows never reach the trunk; and raising `decision_ms` saves both while being
-   the only one of the three that changes what the agent *is* rather than what the learner does
-   with it. That is why `forced_noop_frac` and the `time/` group are in the metric list rather
-   than constants in the code.
-
-   **An earlier version of this paragraph said excluding forced rows from the policy loss alone
-   "saves nothing, because they still go through it". That is false for the shipped default and
-   it steered the reader away from the cheapest branch** **[M]**. `net.separate_trunks` defaults
-   to true and `SeparateActorCritic` gives the actor and the critic a trunk each with no shared
-   tensor, so forced rows can be dropped from the *actor's* forward and backward while the
-   critic and GAE keep every row. The saving is real but bounded. It is the actor's share of
-   the update, not the update, and it is a fourth option rather than a variant of the first.
-
-   **There is also a fifth, which is a denominator rather than a filter, and it is not about
-   speed at all.** The actor's three loss terms are means over every row in the minibatch
-   (`ppo.py`: `dual.mean()`, `result.entropy.mean()`, `result.noop_entropy.mean()`), while a
-   forced row contributes exactly zero to each numerator. Its log-probability is identically
-   zero whatever the parameters, so its surrogate has no gradient and its entropies are point
-   masses. The critic's MSE is the one term where every row contributes to the numerator too.
-   So the policy gradient is divided by `1/(1 - forced_noop_frac)` more rows than contribute to
-   it: measured 2026-09-22, 10.2x on one run and 32x at `forced` 0.969 **[M]**. Two cautions
-   before anyone reaches for it. The factor **varies per iteration with the elixir economy**, so
-   it is a learning rate that moves, which is a worse problem than a learning rate that is
-   wrong. And Adam largely cancels a *uniform* rescaling: `m` and `sqrt(v)` scale together, so
-   the step changes only through `eps` and wherever `max_grad_norm` binds. That means the
-   correct test is the parameter delta after an optimizer step, not the gradient norm. A
-   gradient-norm comparison would show a clean 14x while the weights moved almost identically.
+   That is the whole of the measurement. The decision it feeds is section 18.1: `ppo.forced_rows`,
+   which is about what the UPDATE does with a forced row and not about whether one is collected.
+   Two other responses stay open beside it. Raising `decision_ms` is item 7's ablation and is the
+   only one of them that changes what the agent is rather than what the learner does with it; never
+   storing a forced row is answered in 18.1 under what was considered and not adopted.
 9. **The trunk's discrimination, against its input's.** Representation collapse is the encoder
    producing nearly the same embedding for boards that differ. If the harness ever alarms on it, the
    threshold must be **relative, never absolute**, and it must be built to three rules that a naive
@@ -3483,3 +3454,362 @@ run with, and each is a number the harness already logs.
    One thing the measurement is not for: ranking two different observation builders against each
    other. It compares a representation against itself, and across representations of different
    sparsity it is not measuring the same property twice.
+
+### 18.1 Forced rows: what the update does with them
+
+Item 8 measured the problem. This subsection holds the decision it feeds, the field that carries it,
+the test that settles what is left of it, and the part that is designed and not built.
+
+A **forced row** is a trainable cell whose stored mask has exactly one legal action. A **choice row**
+has more than one. Neither is a policy that chose to wait.
+
+#### What decides it
+
+1. **A forced row gives the actor exactly zero gradient.** A masked log-softmax over one legal entry
+   is exactly 0.0 -- the other entries are filled with `finfo.min` and drop out of the normalisation,
+   and the logits are float32 before the masking -- so the stored log-probability of such a row is the
+   literal zero and its ratio is the literal one. Its entropy is 0 and its play/wait entropy is a
+   clamped constant with no gradient. The design panel measured the actor gradient from forced rows
+   alone at exactly 0 on a network built from the real classes, with dropping them moving the gradient
+   by 2.9e-8 on a norm of 0.038 in float32 and by 1.2e-7 on 0.055 under bfloat16 autocast **[M]**.
+   Every normalisation in the trunk is per sample, so a forward over a subset computes the same
+   numbers for the rows in it.
+2. **The critic and GAE still need every row.** At `gamma` 0.997 and `gae_lambda` 0.99 the cells after
+   a choice cell carry gamma(1 - lambda)/(1 - gamma lambda) = 0.77 of its bootstrap weight, and most
+   of those cells are forced **[A]**. A forced row is not a decision, but it is a state the critic is
+   read at.
+3. **The actor trains in Adam's eps-bound regime.** In the optimizer state of a laptop-profile
+   checkpoint after 72 Adam steps, 99.2% of the actor's 415,428 coordinates had sqrt(v_hat) below
+   `adam_eps` 1e-5, median 1.0e-6, with every trunk tensor entirely below eps; the critic's share was
+   11.6% **[M]**. Below eps, Adam is SGD at lr/eps, so the actor's step is proportional to the scale
+   of its loss.
+4. **A mean over every row is therefore a learning rate the elixir bar sets.** The actor's three terms
+   are sums over choice rows divided by the batch's row count, so their scale is the choice fraction
+   c = 1 - `forced_frac`, measured between 0.09 and 0.18 over eight iterations **[M]**. Adam does not
+   remove a rescale that moves, at any eps: the first moment remembers about ten steps and the second
+   about a thousand, so the step follows c now divided by the root mean square of c over the last
+   thousand **[A]**. Replaying the measured moments, dividing by the choice rows instead makes the
+   actor's step 4.08x larger at `forced_frac` 0.925 and 3.44x at 0.88 under eps 1e-5, and 1.02x under
+   eps 1e-8 **[A]**.
+5. **`adam_eps` is the larger lever and it is not this field.** An interleaved same-seed A/B of 1e-5
+   against 1e-8 moved the actor 11.1x, 12.5x and 11.1x further per iteration at the same update time,
+   with `ppo/kl` under 4e-5 and nothing clipped **[M]**. That default is decided on its own; this
+   field is built to be right under either value.
+6. **Where the update's time goes.** The update costs 254-262 ms per 256-row minibatch across a
+   fourfold range of iteration size, so it is linear in rows **[M]**. Per 256 rows the actor's forward
+   and backward is 323 GFLOP, the critic's is 291 GFLOP and the no-gradient critic pass is 97 GFLOP,
+   all counted with torch's `FlopCounterMode` on the laptop network and the RustEngine spec **[M]**.
+   The actor is 53% of the per-row compute **[A]**.
+
+#### The field
+
+`ppo.forced_rows` is a string that `check_consistency` validates against three values. It sits in the
+PPO block, which `algo_digest` hashes whole, so a run's identity names it and a resume across a change
+is refused by name unless `--allow-identity-drift` is passed.
+
+| value | actor forward and backward | actor loss terms | advantages standardised over | critic and GAE |
+|---|---|---|---|---|
+| `all` | every row | sums over the batch, divided by its row count | trainable, valid cells | every row, per tick |
+| `critic_only` | choice rows | sums over the batch's choice rows, divided by its row count | trainable, valid cells | every row, per tick |
+| `critic_only_choice_mean` | choice rows | sums over the batch's choice rows, divided by their count | trainable, valid choice cells | every row, per tick |
+
+**`all`** is today's update. Its arithmetic and its batch order are unchanged, so every earlier run
+reproduces. It is the control, and after phase 1 it is never the default.
+
+**`critic_only`** is an exact speed-up.
+
+- Each epoch keeps `all`'s permutation and batch boundaries, so every batch holds the same cells.
+  Inside a batch the cells are stably partitioned, choice rows first, then cut into minibatches. The
+  actor therefore runs on whole minibatches of choice rows rather than on a tenth of every minibatch.
+- The critic runs forward and backward on every row at weight 1/n_batch, as today.
+- The actor runs on each minibatch's choice rows, and its three terms are sums over those rows divided
+  by n_batch. The rows it skips contribute exactly zero, so its gradient is `all`'s to rounding.
+- A batch with no choice row gives the actor a zero gradient rather than none, so Adam takes the same
+  momentum step it takes under `all`. At a 16-row remainder batch and c = 0.1 that happens about 18%
+  of the time **[A]**, which is often enough to move the two optimizer trajectories apart.
+- Value function and GAE: unchanged. The recursion, the returns, the potential shaping's telescoping
+  and the 77-91 tick (38-46 s) horizon all see byte-identical inputs.
+- Compute: the actor's share times the forced fraction, less the fixed cost of gathering. That is
+  0.55-0.65 of today's `time/update` at `forced_frac` 0.88-0.93 **[A]**.
+
+**`critic_only_choice_mean`** has `critic_only`'s compute and changes one thing: the actor's
+population becomes the choice rows, for every statistic its loss uses.
+
+- Each actor term is a sum over the batch's choice rows divided by n_choice(batch), so a choice row
+  weighs 1/n_choice(batch) whatever the minibatch partition.
+- The advantages are centred and scaled over the trainable, valid choice cells. That is `standardise`'s
+  own rule, the statistics of the cells that reach the update: under this value a forced cell reaches
+  only the critic, which never reads an advantage.
+- The critic keeps 1/n_batch over every row. The KL, clip and entropy diagnostics already condition on
+  choice rows, so `lr_backoff` reads the same quantity it read before.
+- Value function: no direct change. The critic's rows, weights, targets and pass are identical to
+  `critic_only`'s. The only indirect change is the state distribution a steadier policy produces,
+  which is why explained variance is the first guardrail.
+- GAE: the recursion, the returns and the horizon are unchanged. What changes is how the actor reads
+  the advantages, with a baseline and a scale taken over choice rows. That is a variance change, and
+  it moves the entropy terms' weight against the policy term by std_all/std_choice, which is logged.
+- The point is that the actor's step size stops following the elixir bar. At eps 1e-5 that also makes
+  the step 3.4-4.1x larger; at eps 1e-8 the steady-state step is about the same and only the drift
+  goes **[A]**.
+
+Both skipping values need `net.separate_trunks`, which is the default, and the config refuses them
+otherwise and says why: under one trunk the critic's forward IS the actor's, so a skipped row saves
+nothing and its value loss still reaches the parameters the policy gradient uses. Only the policy head
+could be left out, and a choice-row mean would then reweight value against policy inside the trunk by
+1/c.
+
+#### How a row is classed, and what checks it
+
+The whole-iteration critic pass already unpacks every cell's mask, so it returns the mask's count
+beside the value and the buffer keeps it as an int16 `(T, R)` column, cleared with every other scalar
+when an iteration opens. It is filled under all three values, from the same stored bytes the update
+applies.
+
+- In debug iterations the update asserts the column equals each minibatch's unpacked mask count. The
+  column is written from the critic's pass and read back through the minibatch gather, which sorts its
+  cells, so a drift between the two would put one row's count beside another row's observation.
+- On every iteration, two numpy comparisons check every trainable forced cell: its stored
+  log-probability must be exactly 0.0 and its action the no-op. Anything else raises and names up to
+  ten cells. This is the evidence for the zero-gradient argument the skip rests on, and it is the only
+  part of that argument that can be checked without a forward.
+- The ratio invariant then reads a first minibatch of choice rows, up to `minibatch_size` rows that
+  can move, where under `all` it sees about a tenth of that.
+
+#### What stays true
+
+- **Minibatch invariance.** Every denominator is per batch and never per minibatch, so
+  `minibatch_size` stays a pure memory knob. `tests/test_ppo.py` holds it under all three values.
+- **Determinism.** The partition is a function of the epoch's permutation and the mask bytes.
+- **Resume.** Nothing new crosses an iteration boundary.
+- **Collection.** Untouched. The farm-against-inline byte identity, `TrainableRowsShort` and
+  `cumulative_timesteps` do not move.
+- **Peak VRAM.** The first minibatch of a batch runs both trunks on `minibatch_size` rows, which is
+  what the preflight probe measures.
+
+#### New metrics
+
+- `ppo/forced_frac`, exact, from the column. `policy/forced_noop_frac` stays; it is a rollout sample
+  of the same quantity, and the two are read against each other.
+- `ppo/actor_rows` and `ppo/actor_forwards`, per iteration over all epochs. These are how a reader
+  sees the arm working: under `all`, `actor_rows` is n_samples x n_epochs exactly.
+- `ppo/policy_loss_choice`, the surrogate over choice rows, comparable across the three values.
+  `ppo/policy_loss` keeps its own meaning: under `critic_only` the skipped rows' constant terms are
+  added back analytically, so it equals `all`'s; under `critic_only_choice_mean` it is the choice-row
+  mean that value optimises.
+- `ppo/explained_variance_choice`, `ppo/advantage_std_choice_pre_norm` and
+  `ppo/advantage_mean_choice`, computed under all three values so that the arms report the same keys.
+
+Two groups from the design are not built. `ppo/actor_adam_eps_bound_frac` and
+`ppo/critic_adam_eps_bound_frac` -- the share of coordinates with sqrt(v_hat) below `adam_eps`, one
+reduction over each optimizer's state per iteration -- belong to the `adam_eps` item and are a phase-2
+mechanism readout rather than a D1 decider. `time/update_actor` and `time/update_critic` need CUDA
+events around each half of the update; under `all` the backward is fused, so they would be absent
+rather than zero, and the split is `smdp`'s prerequisite rather than this field's.
+
+The per-minibatch `.item()` in the epoch counters has gone with this work. It put a device
+synchronisation between every backward pass and the next forward, which the diagnostics' own docstring
+forbids, and it would have biased every arm's timing by a different amount.
+
+#### The default, and the rule that moves it
+
+1. The field lands with `all` as its default, so the landing commit changes no number.
+2. Phase 1 flips the default to `critic_only`. It needs four things: the pairing holds, iteration 1
+   agrees with `all`, the invariants stay silent, and `time/update` is lower in both repeats. The
+   predicted ratio is 0.55-0.65 **[A]**. A ratio above 0.8 is recorded as a model miss and explained
+   before `smdp` is considered, because `smdp`'s saving rests on the same split.
+3. Phase 2 decides between `critic_only` (S) and `critic_only_choice_mean` (C). C is adopted when its
+   guardrails hold in both pairs, or in two of three after a split. A guardrail breaks when C fails one
+   of these in a pair where S does not:
+   - C's mean `ppo/explained_variance` over iterations 51-100 is more than 0.05 below S's;
+   - C has an `lr_backoff` event or a `kl_high` alarm;
+   - C's `ppo/entropy_normalised` falls below 0.3, or C raises `noop_collapse`;
+   - C's score against `scripted:random_legal` is more than 0.05 below S's.
+
+   Adopted this way, C is recorded as decided on mechanism, with the guardrail table and the number of
+   training seeds beside it. Better play is claimed only if C scores higher in every pair with
+   non-overlapping 95% intervals.
+4. While phase 2 is open, item 8's rule "if the per-iteration KL sits below 0.003 lower `batch_size`"
+   is not applied, because this field moves the KL by the same order. A `kl_dead` warning under S at
+   eps 1e-5 is expected and is not a verdict.
+
+#### The A/B
+
+**Phase 0, CPU.** `pytest -q tests/test_ppo.py tests/test_buffer.py tests/test_config.py
+tests/test_identity.py tests/test_metric_names.py` passes.
+
+**The configuration, both GPU phases.** `examples/configs/laptop.json` with only these overrides,
+identical across the arms of a pair except the field:
+
+- `ladder.mix` [1.0, 0.0, 0.0]. A pure mirror also makes the learner seat count exact, so
+  `TrainableRowsShort` cannot fire.
+- `env.state_mutator.kwargs.decks`: one mirror deck on both teams.
+- `ppo.timesteps_per_iteration` 16,896 and `ppo.batch_size` 5,632. At 3 workers x 32 mirror battles
+  that is 88 cycles x 192 rows = 3 x 5,632, so no epoch ends in a remainder batch. Once the
+  equal-batch fix lands, use 16,384 and 4,096.
+- `ppo.adam_eps` at whatever the default is when the phase starts, recorded, and never varied inside a
+  phase.
+- A unique `run_name` per run, and a `master_seed` shared by the arms of a pair.
+
+**Phase 1, GPU, about 25 minutes on a quiet machine.** Order: `all`, `critic_only`,
+`critic_only_choice_mean`, then the same three again; two iterations each, one master seed.
+
+- Pairing: iteration 1 is collected before any update, so its `policy/*` and `env/*` keys must match to
+  the last digit across all six runs. If they do not, stop -- the pairing is broken and nothing below
+  means anything.
+- Equivalence on iteration 1, `critic_only` against `all`: `ppo/grad_norm_actor`,
+  `ppo/grad_norm_critic`, `ppo/value_loss` and `ppo/explained_variance` within 2% relative;
+  `ppo/kl`, `ppo/clip_fraction`, `ppo/entropy`, `ppo/noop_entropy` and both `update_magnitude` keys
+  within 10%; `ppo/ratio_max_abs_dev` within the bfloat16 tolerance in both arms; the forced-row
+  invariant silent; `ppo/actor_rows` exactly n_samples x n_epochs x (1 - `ppo/forced_frac`);
+  `health/vram_peak_mb` no more than 5% above `all`'s.
+- Timing: `time/update` for every run and iteration, with `time/critic_pass` and `time/gae` beside it.
+- Mechanism on iteration 1, C against S on identical data **[A]**: the `update_magnitude_actor` ratio,
+  predicted 3.4-4.1x at eps 1e-5 and 0.8-1.3x at 1e-8; the `ppo/kl` ratio, about 12-17x at 1e-5 and
+  about 1x at 1e-8. A ratio more than 1.5x outside its prediction stops the work until it is explained.
+
+**Phase 2, GPU, about 4.5 hours plus evaluation [A].** Prerequisites: phase 1 has flipped the default,
+the transition-alignment fix below has landed, and the remainder batch is gone -- by the equal-batch
+fix or by the geometry above.
+
+- Arms: S = `critic_only`, C = `critic_only_choice_mean`. Their compute is equal, so a match in env
+  steps is also a match in wall clock.
+- Pairs: two master seeds, interleaved S1 C1 S2 C2, 100 iterations each. A third pair only on a split
+  verdict. The claim rests on two training seeds, or three, and says which.
+- Outcome: each run's score against `scripted:random_legal`, with its 95% interval and the paired
+  difference. Use the live-learner probe every 25 iterations if it has landed; otherwise evaluate a
+  snapshot of the final actor, whose seed set is a function of `master_seed` and the count, so the
+  games pair across the arms.
+- Readouts at matched iterations: the guardrails above; the slope of log `update_magnitude_actor`
+  against log(1 - `ppo/forced_frac`) across iterations 2-100, predicted positive in S and near zero in
+  C; `ppo/advantage_mean_choice`; `ppo/advantage_std_choice_pre_norm` against
+  `ppo/advantage_std_pre_norm`; `ppo/clip_fraction`; and for health `policy/cards_per_match`, the
+  no-op rate on choice rows (`policy/noop_rate` - `policy/forced_noop_frac`) / (1 -
+  `policy/forced_noop_frac`), and every alarm.
+
+#### What the tests pin
+
+Forced rows are planted by rewriting chosen cells' `action_mask` to the no-op alone before packing, so
+the rollout samples under that mask, the stored log-probability comes out of it, and the update reads
+the same mask back.
+
+- **The gradient is `all`'s.** With the recording optimizer, in float32, every actor and critic
+  gradient under `critic_only` equals `all`'s within a small fraction of its own scale, over two
+  minibatch sizes and a partition whose choice rows cross a minibatch boundary.
+- **The actor's rows are counted.** A counting wrapper on the actor's forward sees the choice rows
+  once per epoch under both skipping values and every row under `all`; the critic sees every row under
+  all three. `ppo/actor_rows` equals the count.
+- **Forced padding does not move the choice-mean gradient.** Slots whose every cell is forced leave the
+  choice cells' recursions untouched, so under `critic_only_choice_mean` the actor's gradient is
+  unchanged by them, while under the other two it scales by the ratio of row counts.
+- **The parameter delta after one real Adam step**, which is item 8's own test, with
+  `advantage_standardization` off to isolate the denominator. With `adam_eps` far above the largest
+  gradient coordinate -- the laptop's regime -- the actor's delta under `critic_only_choice_mean` is
+  n_batch/n_choice times `critic_only`'s. With `adam_eps` at 1e-12 the two are equal to rounding,
+  because Adam's first step is lr x sign(g); that is what shows the difference comes from eps. The
+  critic's delta is identical across all three values in both cases.
+- **Minibatch invariance**, the accumulated-gradient test, under all three values.
+- **The forced-row invariant fires**, on a planted log-probability and on a planted action, naming the
+  cell that was planted and not a sibling.
+- **Standardisation.** Under `critic_only_choice_mean` the standardised advantages have mean 0 and
+  standard deviation 1 over the choice cells; under the other two, over the trainable cells. The
+  advantages and returns before standardisation are identical across all three values.
+- **A batch with no choice row.** No actor forward runs, the actor's gradient is zeros rather than
+  None, no NaN appears, both optimizers step, and the actor's parameters land where `all` puts them.
+- **The critic is untouched.** Its gradients agree across the three values, and so do `ppo/value_loss`
+  and `ppo/explained_variance`.
+- **Config and identity.** An unknown value is refused by name; both skipping values are refused with
+  `net.separate_trunks` false and the message says why; changing the value changes `algo_digest`; the
+  default is `all` until phase 1's commit changes it and that test with it.
+- **The column.** It equals the unpacked mask count on every trainable cell, it is cleared by
+  `begin_iteration`, and the debug assertion fires on a planted mismatch.
+- **Names.** Every new key is in `schema.py` and in `tests/test_metric_names.py`.
+
+#### Designed, not built: `smdp`
+
+A fourth value, on the second axis: what the critic and GAE do with forced rows.
+
+- Forced cells stay in the rectangle as frame history, the bootstrap row and statistics. The actor
+  never sees them, as under `critic_only_choice_mean`. The value side folds them into the transitions
+  between a slot's consecutive choice cells.
+- A transition runs from a choice cell t_i to the slot's next choice cell, or to its episode's end, or
+  to row T, k ticks later. It carries R = sum over j < k of gamma^j r(t_i + j), a discount gamma^k and
+  a trace lambda^k.
+- A termination inside a transition bootstraps from 0, a truncation from gamma^k V(final observation),
+  and the edge from gamma^(T - t_i) V(row T).
+- One backward loop over T with five carries -- discounted reward sum, discount, next value, next
+  advantage, trace -- computes A = R + gamma^k V_next - V + gamma^k lambda^k A_next at the choice
+  cells.
+- Both gamma^k and lambda^k are required. A per-decision gamma changes the objective, and since a
+  stretch's length is set by the policy's own spending it would reward dumping elixir to slow the
+  clock; a per-decision lambda stretches the horizon from 77 ticks to about 238 **[A]**.
+- The critic trains on the choice cells plus a uniform sample of forced cells of equal count,
+  p = min(1, n_choice/n_forced), from a named stream addressed by iteration. A sampled forced cell's
+  target is its own SMDP lambda-return, which never uses its own value. The critic pass covers those
+  cells, row T and the truncation finals. The sample is part of the design and not an option: V(row T)
+  and V at the truncation finals are read at forced states 82-94% of the time, and V(row T) carries
+  about 0.6 of a cell's advantage weight at 88 cycles **[A]**.
+- The reward scaler, `cumulative_timesteps` and `TrainableRowsShort` stay on every learner tick.
+- Probe-checked **[M]**: with every cell a choice it is bit-identical to `gae_recursion`; at lambda 1
+  it equals per-tick GAE at the choice cells with the forced values scrambled (3e-15); at lambda 0.99
+  the choice-cell advantages do not depend on forced values at all; on random data it sits about 5%
+  from per-tick GAE.
+- Saving: the critic's half shrinks too, to roughly a third of `critic_only`'s update. That is a model
+  **[A]** with an assumed gathering share, which phase 1's split replaces with a measurement. The
+  update's cost would then follow choice points per game second, which the elixir economy sets, rather
+  than `decision_ms`.
+- Why it waits: it depends on the transition-alignment fix; it changes the side of the update named as
+  the risk, so it is tested against a settled control one change at a time; it touches `gae.py`, the
+  critic pass, a new random stream and the population of four published keys; and its saving is
+  unmeasured. It also needs the forced flag before the critic pass, from a mask-only pass or a
+  collection-side flag.
+- Trigger, all three: phase 2 has decided; the alignment fix has landed; and on the adopted value
+  `time/update` is still more than half of `time/iteration` on the laptop profile. Then it gets its own
+  item and runs phase 2's protocol against the adopted value, with three more guardrails: explained
+  variance on choice cells within 0.05, explained variance on a held-out forced sample above 0, and
+  `time/update` at most 0.5x.
+
+#### Considered and not adopted
+
+- **Dropping forced rows at collection.** Never storing them saves host memory, not time, since
+  workers pack while the parent waits. It breaks fixed-stride frame stacking, the lockstep rectangle
+  the farm test certifies, the bootstrap row and the per-tick chain, and it removes most of the
+  critic's states. Its only gain over `critic_only` is the critic's half, which `smdp` gets without
+  those breaks.
+- **Fast-forwarding forced stretches inside the worker.** A battle steps both seats together and the
+  other seat is often choosing, so the rectangle's time axis and `run_exact` would both break.
+- **Raising `decision_ms`.** It changes the agent. It stays the second run's ablation, item 7.
+- **The denominator alone, with the actor still forwarding every row.** It pays the whole compute for
+  `critic_only_choice_mean`'s gradient.
+- **A denominator per minibatch.** It makes the gradient depend on the partition.
+- **A weight fixed for the iteration, 1/(c x `batch_size`).** Same mean effect; the per-batch count
+  mirrors the critic's per-batch mean and needs no extra pass.
+- **Skipping forced rows in the rollout's forward.** A collection-side knob, not bit-identical under
+  bfloat16 because the batch shape changes, and worth 0.5-1.5 s an iteration **[A]**.
+- **A separate actor batch that decouples actor steps from critic steps.** A second hyperparameter
+  change inside one A/B.
+- **Tuning `adam_eps` here.** Its own item; phase 2 runs at whatever that item sets.
+- **A separate field for the standardisation population.** Only if phase 2 rejects C and
+  `ppo/advantage_mean_choice` under S is far from zero.
+
+#### Found on the way: the transition alignment [M]
+
+Reproduced in this tree on MockEngine at `max_steps` 7, `decision_ticks` 10, one worker, two battles:
+the row an episode ends on holds tick 0 -- the next episode's first observation -- with the truncation
+flag and the episode end set, and the row before it holds tick 60. The episode record's undiscounted
+return, -0.0093000003, is the sum of rows start+1 to end (-0.0093000010) and not of rows start to
+end-1 (-0.0094000008).
+
+The rollout writes each round's reward, done flags and episode end on the row of the observation the
+step arrived at, which its module docstring says and its tests hold. The update reads row t's reward
+and flags as the transition out of row t, with the recursion cut where the row is flagged ended. So
+every reward is credited one row late; each episode's first cell, usually a choice at starting elixir,
+is scored as the previous battle's ending with its own future cut off; an episode's last cell
+bootstraps from the next episode's first state; the transition arriving at row T is never recorded, so
+one row in T of the rewards is lost; and frame stacking's liveness test reads the end flag one row
+early, which is latent at `frame_stack` 1 and live at 2.
+
+Each side's tests pass against its own convention, which is why neither saw it. It changes no value of
+this field and does not confound phase 1, whose arms see identical GAE inputs. Phase 2 waits for it: a
+learning comparison run on a credit assignment the harness is about to drop measures a harness that
+will not exist. It is its own item -- record the trailing round, write each transition's scalars and
+its final observation on the row of the action that caused it, and read liveness at the next row.

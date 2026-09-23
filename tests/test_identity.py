@@ -91,6 +91,11 @@ INCLUDED: dict[str, Change] = {
     "obs.frame_stack": _frame_stack,
     "ppo.n_epochs": _config_change(ppo=msgspec.structs.replace(C.PPOConfig(), n_epochs=4)),
     "ppo.lr_actor": _config_change(ppo=msgspec.structs.replace(C.PPOConfig(), lr_actor=1e-4)),
+    # Two runs on different forced-row arms optimise different objectives on the same rows, so
+    # they are not the same run and a resume across the change is refused by name.
+    "ppo.forced_rows": _config_change(
+        ppo=msgspec.structs.replace(C.PPOConfig(), forced_rows="critic_only_choice_mean")
+    ),
     "advantage.gae_lambda": _config_change(
         advantage=msgspec.structs.replace(C.AdvantageConfig(), gae_lambda=0.95)
     ),

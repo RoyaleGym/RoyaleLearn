@@ -110,6 +110,7 @@
       "lr_min": 0.00002
     },
     "advantage_standardization": true,
+    "forced_rows": "all",
     "critic_chunk": 1024,
     "discard_opponent_rows": true,
     "keep_previous_iterations": 0,

@@ -198,6 +198,59 @@ def test_validate_names_everything_that_is_wrong() -> None:
         assert problem in str(excinfo.value)
 
 
+def test_every_collected_row_reaches_the_actor_unless_a_run_asks_otherwise() -> None:
+    """``ppo.forced_rows`` lands at ``all``, which is the update every run so far has taken.
+
+    The two other values change what the actor is trained on, so neither is arrived at by
+    upgrading: a run that wants one names it, and the run identity then says which it had.
+    """
+    assert C.PPOConfig().forced_rows == "all"
+    for name in sorted(C.PROFILES):
+        assert C.profile(name).ppo.forced_rows == "all"
+
+
+@pytest.mark.parametrize("value", ["critic", "none", "", "ALL"])
+def test_a_forced_row_arm_that_does_not_exist_is_refused_by_name(value: str) -> None:
+    """The three arms are three different updates, and a fourth spelling is not a fourth arm.
+
+    It is a string rather than an enum because every other choice in this file is -- see
+    ``rollout.source`` and ``determinism.tier`` -- and the check is what makes the string safe.
+    """
+    config = msgspec.structs.replace(
+        C.laptop(), ppo=msgspec.structs.replace(C.PPOConfig(), forced_rows=value)
+    )
+
+    problems = C.check_consistency(config)
+
+    assert len(problems) == 1
+    assert repr(value) in problems[0]
+    assert all(arm in problems[0] for arm in C.FORCED_ROW_ARMS)
+
+
+@pytest.mark.parametrize("value", ["critic_only", "critic_only_choice_mean"])
+def test_letting_the_actor_skip_rows_needs_a_trunk_it_does_not_share(value: str) -> None:
+    """A skipped row is only skipped if the forward it skips was the actor's alone.
+
+    With one trunk under both heads the critic's forward IS the actor's, so there is nothing to
+    save and the value loss of a skipped row still reaches the parameters the policy gradient
+    uses. Only the policy head could be left out, and under the choice-mean arm the two terms
+    would then be weighted against each other inside the trunk by the forced fraction, which is
+    a quantity the elixir economy moves from iteration to iteration.
+    """
+    config = msgspec.structs.replace(
+        C.laptop(),
+        ppo=msgspec.structs.replace(C.PPOConfig(), forced_rows=value),
+        net=msgspec.structs.replace(C.NetConfig(), separate_trunks=False),
+    )
+
+    problems = C.check_consistency(config)
+
+    assert len(problems) == 1
+    assert "net.separate_trunks" in problems[0] and value in problems[0]
+    allowed = msgspec.structs.replace(config, net=C.NetConfig())
+    assert C.check_consistency(allowed) == [], "the same arm is fine with a trunk each"
+
+
 def test_validate_returns_a_good_config() -> None:
     config = C.laptop()
     assert C.validate(config) is config

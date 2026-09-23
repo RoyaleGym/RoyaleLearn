@@ -71,6 +71,10 @@ __all__ = [
 RUST_ENGINE = "royalegym.rust_engine.RustEngine"
 MOCK_ENGINE = "royalegym.mock_engine.MockEngine"
 
+#: What ``ppo.forced_rows`` may say, in the order the two-phase A/B compares them. Section 18.1
+#: of ``docs/harness-spec.md`` has what each one does and the rule for moving between them.
+FORCED_ROW_ARMS = ("all", "critic_only", "critic_only_choice_mean")
+
 
 # --------------------------------------------------------------------------
 # Schedules, as data
@@ -255,6 +259,26 @@ class PPOConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     lr_backoff: LrBackoffConfig = LrBackoffConfig()
     #: Once per ITERATION, over all trainable cells, before any split.
     advantage_standardization: bool = True
+    #: Which rows the ACTOR's forward and backward run on. The critic and the advantage
+    #: recursion read every row under all three values; this is about the policy alone.
+    #:
+    #: On this environment most collected decisions leave exactly one legal action, because the
+    #: elixir bar can afford nothing, and such a row contributes exactly zero to each of the
+    #: actor's three numerators while occupying a full row of every epoch.
+    #:
+    #: ``all``          -- the actor runs on every trainable row. The update every run so far
+    #:                     has taken, and the default until the A/B of section 18.1 decides.
+    #: ``critic_only``  -- the actor runs on the rows that had a choice, with the batch still
+    #:                     its denominator. The gradient is ``all``'s to rounding; what changes
+    #:                     is how long it takes to compute.
+    #: ``critic_only_choice_mean``
+    #:                  -- the same rows, with the actor's population changed to them for every
+    #:                     statistic its loss uses. That is a change to the effective learning
+    #:                     rate rather than to the speed, and it is what stops the actor's step
+    #:                     following a fraction the elixir economy sets.
+    #:
+    #: The two skipping values need ``net.separate_trunks``; ``check_consistency`` says why.
+    forced_rows: str = "all"
     #: Rows per chunk of the whole-iteration critic pass; unchunked it is a multi-gigabyte spike.
     critic_chunk: int = 1024
     #: The frozen seat's log-probs came from other weights; V-trace is the wrong tool against a
@@ -814,6 +838,19 @@ def check_consistency(config: RunConfig) -> list[str]:
         )
     if ppo.n_epochs < 1:
         problems.append("ppo.n_epochs must be at least 1")
+    if ppo.forced_rows not in FORCED_ROW_ARMS:
+        problems.append(
+            f"ppo.forced_rows {ppo.forced_rows!r} is not one of {', '.join(FORCED_ROW_ARMS)}"
+        )
+    elif ppo.forced_rows != "all" and not net.separate_trunks:
+        problems.append(
+            f"ppo.forced_rows {ppo.forced_rows!r} needs net.separate_trunks: with one trunk "
+            "under both heads the critic's forward IS the actor's, so a row the actor skips is "
+            "a row nothing is saved on, and that row's value loss still reaches the parameters "
+            "the policy gradient uses. Only the policy head could be left out, and a choice-row "
+            "mean would then weigh the value term against the policy term inside the trunk by "
+            "a fraction the elixir economy moves every iteration"
+        )
     if net.autocast_dtype not in ppo.ratio_atol:
         problems.append(
             f"ppo.ratio_atol has no entry for net.autocast_dtype {net.autocast_dtype!r}; "
