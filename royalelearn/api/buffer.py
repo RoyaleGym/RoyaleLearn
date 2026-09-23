@@ -130,6 +130,15 @@ class ExperienceBuffer(ABC, Checkpointable):
         """``(T+1, R)`` float32, from the whole-iteration critic pass."""
 
     @abstractmethod
+    def set_n_legal(self, counts: Tensor) -> None:
+        """``(T+1, R)`` integer: how many actions each cell's mask left, from the critic's pass.
+
+        Implementers keep the collected cycles and may drop the bootstrap row, in which no
+        action was taken. The count is what tells the update which rows had a choice at all
+        without unpacking an observation to find out.
+        """
+
+    @abstractmethod
     def set_final_values(self, cells: np.ndarray, values: Tensor) -> None:
         """V(final_obs) for truncated cells; ``cells`` is int64[(k, 2)] of (cycle, slot)."""
 

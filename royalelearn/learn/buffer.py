@@ -76,6 +76,10 @@ class Minibatch(NamedTuple):
     advantages: Tensor
     returns: Tensor
     values: Tensor
+    #: How many actions each row's mask left, from the column the critic's pass filled. Carried
+    #: beside the row rather than recomputed from ``obs.mask`` because the update reads it
+    #: before it has decided which rows to unpack at all.
+    n_legal: Tensor
     cells: Tensor
     n: int
     weight: float
@@ -265,6 +269,10 @@ class RectBuffer(ExperienceBuffer):
         self.ret = np.zeros(shape, dtype=np.float32)
         self.final_value = np.zeros(shape, dtype=np.float32)
         self.value = np.zeros((self.capacity + 1, self.n_slots), dtype=np.float32)
+        # How many actions the cell's mask left, written once per iteration by the critic's
+        # pass over the rectangle. int16 because the count is bounded by the action space and
+        # the column is one per cell of a rectangle that is a hundred thousand cells wide.
+        self.n_legal = np.zeros(shape, dtype=np.int16)
         self.terminated = np.zeros(shape, dtype=bool)
         self.truncated = np.zeros(shape, dtype=bool)
         self.valid = np.zeros(shape, dtype=bool)
@@ -349,6 +357,7 @@ class RectBuffer(ExperienceBuffer):
             self.ret,
             self.final_value,
             self.value,
+            self.n_legal,
             self.terminated,
             self.truncated,
             self.valid,
@@ -447,6 +456,19 @@ class RectBuffer(ExperienceBuffer):
 
     def set_values(self, values: Tensor) -> None:
         self.value[: self.cycles + 1] = _to_numpy(values, (self.cycles + 1, self.n_slots))
+
+    def set_n_legal(self, counts: Tensor) -> None:
+        """How many actions each cell's mask left, from the pass that produced the values.
+
+        Takes the whole ``(T+1, R)`` the critic's pass covers and keeps the collected cycles.
+        The bootstrap row is dropped rather than stored: no action was taken in it, so a count
+        of what was legal there names nothing the update can ask about.
+        """
+        shape = (self.cycles + 1, self.n_slots)
+        array = counts.detach().to(device="cpu", dtype=torch.int16).numpy()
+        if array.shape != shape:
+            raise ValueError(f"expected {shape} and was given {array.shape}")
+        self.n_legal[: self.cycles] = array[: self.cycles]
 
     def set_final_values(self, cells: np.ndarray, values: Tensor) -> None:
         """``V(final_obs)`` for the cells that truncated; ``cells`` is ``(k, 2)`` of
@@ -570,6 +592,7 @@ class RectBuffer(ExperienceBuffer):
             advantages=self._gather_column(self.advantage, cells, torch.float32),
             returns=self._gather_column(self.ret, cells, torch.float32),
             values=self._gather_column(self.value[: self.cycles], cells, torch.float32),
+            n_legal=self._gather_column(self.n_legal, cells, torch.int64),
             cells=torch.from_numpy(cells.astype(np.int64)).to(self.device),
             n=count,
             weight=weight,

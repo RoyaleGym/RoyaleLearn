@@ -473,6 +473,46 @@ def test_what_decides_a_trainable_cell_is_the_group_and_the_validity(rect: Fixtu
     assert torch.equal(buffer.trainable_mask(), torch.from_numpy(trainable))
 
 
+def test_the_count_of_legal_actions_is_stored_beside_the_cell_it_describes(
+    rect: Fixture,
+) -> None:
+    """Whether a decision had a choice at all is a property of one row, and it is asked per row.
+
+    The count comes off the same mask the whole-iteration critic pass already unpacks, so it is
+    stored rather than recomputed: anything downstream that wanted it would otherwise unpack the
+    observation a second time to find out how many actions the cell's mask left. It is cleared
+    when an iteration opens, with every other scalar -- a count carried over from the previous
+    rectangle would describe rows that are no longer in it.
+    """
+    from royalelearn.learn.inference import RectGather
+
+    buffer = fill_iteration(rect)
+    slots = np.arange(SLOTS, dtype=np.int64)
+    gather = RectGather(buffer, rows=SLOTS)
+    counts = np.stack(
+        [
+            gather.observations(np.full(SLOTS, cycle, dtype=np.int64), slots)
+            .mask.sum(-1)
+            .numpy()
+            for cycle in range(CYCLES + 1)
+        ]
+    )
+
+    buffer.set_n_legal(torch.from_numpy(counts))
+
+    assert buffer.n_legal.shape == (CYCLES, SLOTS)
+    assert buffer.n_legal.dtype == np.int16
+    assert (buffer.n_legal == counts[:CYCLES]).all()
+    assert int(buffer.n_legal.min()) > 1, (
+        "every cell of this rectangle had a choice, so a column of ones would agree with a "
+        "column that was never written"
+    )
+
+    buffer.begin_iteration(plan_for(SLOTS, iteration=1), CYCLES)
+
+    assert not buffer.n_legal.any()
+
+
 def test_an_opponent_s_rows_are_stored_and_simply_not_trained_on(rect: Fixture) -> None:
     """Every row of the rectangle is stored, including the seats a frozen policy played."""
     buffer = fill_iteration(rect, opponent_slots=(2,))

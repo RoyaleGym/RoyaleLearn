@@ -52,6 +52,8 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.utils import clip_grad_norm_, parameters_to_vector
 
+from royalegym.action import NOOP
+
 from ..api.update import Update, UpdateResult
 from ..config import PPOConfig
 from ..errors import CheckpointFormatError
@@ -202,18 +204,25 @@ def standardise(advantages: Tensor, mask: Tensor) -> Tensor:
 
 def chunked_critic_pass(
     buffer: RectBuffer, model: ActorCritic, gather: RectGather, *, chunk: int
-) -> Tensor:
-    """``V`` over every cell of the rectangle, including the bootstrap cycle.
+) -> tuple[Tensor, Tensor]:
+    """``V`` over every cell of the rectangle, and how many actions each cell's mask left.
 
     In chunks because the rectangle is a hundred thousand rows wide at the shipped geometry and
     one forward over all of them is a multi-gigabyte activation spike on a device that has four.
     The value of a cell no worker ever wrote is zero rather than whatever the network makes of a
     row of zero bytes: a dead worker's rows are flagged ended and carry no reward, and a zero
     there is what lets the GAE recursion run over them inertly instead of needing a case.
+
+    The legal count rides along because this is the only place the mask of every cell is
+    unpacked. Asking for it anywhere else is a second pass over the whole rectangle to read a
+    number this one already has in its hands. It is a raw count and is not multiplied by the
+    validity: a cell no worker wrote reads zero because its staged row is zero-filled, and the
+    cells that reach the update are the trainable ones.
     """
     cycles, slots = buffer.cycles, buffer.n_slots
     values = torch.zeros((cycles + 1, slots), dtype=torch.float32, device=buffer.device)
-    flat = values.view(-1)
+    n_legal = torch.zeros((cycles + 1, slots), dtype=torch.int64, device=buffer.device)
+    flat, flat_legal = values.view(-1), n_legal.view(-1)
     total = (cycles + 1) * slots
     step = max(1, int(chunk))
     for start in range(0, total, step):
@@ -221,7 +230,8 @@ def chunked_critic_pass(
         obs = gather.observations(cells // slots, cells % slots)
         with torch.no_grad():
             flat[start : start + cells.size] = model.value(obs).float()
-    return values * _row_validity(buffer)
+            flat_legal[start : start + cells.size] = obs.mask.sum(-1)
+    return values * _row_validity(buffer), n_legal
 
 
 def _row_validity(buffer: RectBuffer) -> Tensor:
@@ -346,14 +356,18 @@ class PPOUpdate(Update):
         gather = self._gather_for(buffer)
 
         critic_started = time.perf_counter()
-        values = chunked_critic_pass(buffer, self.model, gather, chunk=config.critic_chunk)
+        values, n_legal = chunked_critic_pass(
+            buffer, self.model, gather, chunk=config.critic_chunk
+        )
         buffer.set_values(values)
+        buffer.set_n_legal(n_legal)
         cells, rows = self._take_final_observations()
         if cells.size:
             buffer.set_final_values(
                 cells, self.critic_on_final_obs(buffer, gather, cells, rows)
             )
         critic_pass_seconds = time.perf_counter() - critic_started
+        self._one_action_rows_took_their_one_action(buffer)
 
         gae_started = time.perf_counter()
         inputs = buffer.advantage_inputs()
@@ -472,6 +486,13 @@ class PPOUpdate(Update):
             assert bool(
                 minibatch.obs.mask.gather(-1, minibatch.actions.unsqueeze(-1)).all()
             ), _mask_message(minibatch, self._n_slots)
+            # And the legal count stored for a cell describes the mask that arrived beside it.
+            # The column is written from the critic's pass over the rectangle and read back
+            # through the minibatch gather, which sorts its cells; a mapping that drifted
+            # between the two would put one row's count next to another row's observation.
+            assert bool(
+                (minibatch.obs.mask.sum(-1) == minibatch.n_legal).all()
+            ), _legal_count_message(minibatch, self._n_slots)
         result: BackpropResult = self.model.backprop(minibatch.obs, minibatch.actions)
         log_probs = result.log_probs
         if check:
@@ -517,6 +538,36 @@ class PPOUpdate(Update):
                 clip_range=config.clip_range,
                 dual_clip_c=config.dual_clip_c,
             )
+
+    def _one_action_rows_took_their_one_action(self, buffer: RectBuffer) -> None:
+        """Every trainable cell whose mask left one action took it, at log-probability zero.
+
+        Where a mask leaves a single action, ``log_softmax`` over it is exactly 0.0 in float32 --
+        the other entries are filled with ``finfo.min`` and drop out of the normalisation
+        entirely -- so the stored log-probability of such a cell is the literal zero and its
+        importance ratio is the literal one. Every statement this harness makes about these rows
+        rests on that: the conditioned KL, clip and entropy read them as carrying nothing because
+        they structurally cannot move, and the actor's skip under ``ppo.forced_rows`` leaves them
+        out on the same grounds. A stored log-probability of anything else means the mask the
+        update reads is not the mask the policy acted under, and then the skip is dropping rows
+        that did carry a gradient.
+
+        It runs on every iteration rather than for the first few, because it is two numpy
+        comparisons over the scalar columns and because the fraction of rows it covers is the
+        fraction of the rectangle the rest of the update is now allowed to treat as inert. The
+        ratio invariant checks the same family of failures on one minibatch; this one checks
+        every row of every cycle, and only the part of it that can be checked without a forward.
+        """
+        cycles = buffer.cycles
+        forced = buffer.trainable() & (buffer.n_legal[:cycles] == 1)
+        if not forced.any():
+            return
+        wrong = forced & (
+            (buffer.log_prob[:cycles] != 0.0) | (buffer.action[:cycles] != NOOP)
+        )
+        if not wrong.any():
+            return
+        raise ValueError(_one_action_message(buffer, wrong))
 
     def _ratio_invariant(
         self,
@@ -920,6 +971,41 @@ def _mask_message(minibatch: Minibatch, n_slots: int) -> str:
         f"{int((~legal).sum())} of {legal.numel()} samples took an action their stored mask "
         "forbids. The mask the update applies is the one the transition carried, so this is a "
         "rollout that sampled outside its own mask:\n" + "\n".join(lines)
+    )
+
+
+def _legal_count_message(minibatch: Minibatch, n_slots: int) -> str:
+    """Where the stored count and the mask that arrived with the row disagree."""
+    counted = minibatch.obs.mask.sum(-1)
+    offending = torch.nonzero(counted != minibatch.n_legal).reshape(-1)[:10].tolist()
+    lines = [
+        f"  {_cell(minibatch, row, n_slots)}: the column stored "
+        f"{int(minibatch.n_legal[row])} legal actions and the mask this minibatch unpacked "
+        f"has {int(counted[row])}"
+        for row in offending
+    ]
+    return (
+        "the stored count of legal actions is not the count of the mask beside it. The column "
+        "is written from the critic's pass over the rectangle and read back through the "
+        "minibatch gather, so a disagreement is in the mapping between the two rather than in "
+        "either number:\n" + "\n".join(lines)
+    )
+
+
+def _one_action_message(buffer: RectBuffer, wrong: np.ndarray) -> str:
+    """The trainable cells whose mask left one action and whose stored pair says otherwise."""
+    cycles, slots = np.nonzero(wrong)
+    lines = [
+        f"  cycle {int(cycle)} slot {int(slot)}: action {int(buffer.action[cycle, slot])}, "
+        f"log-probability {float(buffer.log_prob[cycle, slot]):.6g}"
+        for cycle, slot in zip(cycles[:10], slots[:10], strict=True)
+    ]
+    return (
+        f"{int(wrong.sum())} trainable cells have exactly one legal action and did not store "
+        f"action {NOOP} at log-probability 0.0. Over a single legal action a log_softmax is "
+        "exactly zero, so those two values are what a cell with no choice must hold; anything "
+        "else means the mask the update reads is not the mask the policy acted under:\n"
+        + "\n".join(lines)
     )
 
 

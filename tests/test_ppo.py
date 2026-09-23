@@ -21,6 +21,7 @@ MockEngine's catalogue and would run on the full one.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -29,6 +30,7 @@ import msgspec
 import numpy as np
 import pytest
 
+from royalegym.action import NOOP
 from royalelearn.api.schedule import ScheduleState
 
 torch = pytest.importorskip("torch")
@@ -139,6 +141,31 @@ def collect(built: Fixture, model: Any, *, iteration: int = 0) -> Any:
         answer = engine.act(played)
         buffer.record_round(played, answer.actions, answer.log_probs)
     return buffer
+
+
+def plant_forced(built: Fixture, cells: Sequence[tuple[int, int]]) -> None:
+    """Repack the named cells with a mask that leaves the no-op and nothing else.
+
+    In the stored bytes rather than in a column, because that is what makes the row forced
+    everywhere at once: the rollout forward samples under this mask, the log-probability stored
+    beside the action comes out of it, and the update reads the same mask back. A column set
+    afterwards would describe rows the policy had not actually been forced on.
+
+    Call it before the iteration is collected. ``Fixture.fill`` packs the same observation into
+    several cells, so the cell is repacked from its own copy of the one it already held.
+    """
+    layout = built.buffer.layout
+    view = memoryview(built.buffer.shm.buf)[layout.obs_offset :]
+    try:
+        for cycle, slot in cells:
+            index = (cycle * layout.n_slots + slot) % len(built.observations)
+            observation = dict(built.observations[index])
+            mask = np.zeros_like(np.asarray(observation["action_mask"]))
+            mask[NOOP] = 1
+            observation["action_mask"] = mask
+            built.codec.pack(observation, view, layout.row_index(cycle, slot))
+    finally:
+        view.release()
 
 
 def update_for(model: Any, config: PPOConfig = CONFIG, **kwargs: Any) -> PPOUpdate:
@@ -451,6 +478,81 @@ def test_the_mask_assert_fires_when_an_action_is_not_legal_under_its_own_mask(
         update_for(model).step(buffer, SCHEDULE)
 
 
+def test_a_cell_with_one_legal_action_that_did_not_take_it_stops_the_update(
+    rect: Fixture,
+) -> None:
+    """The whole arithmetic of a one-action cell rests on two stored numbers, so they are checked.
+
+    Where a mask leaves a single action, ``log_softmax`` over it is exactly zero in float32, so
+    the stored log-probability of such a cell is the literal 0.0 and its importance ratio is the
+    literal 1.0. Everything that treats these rows as carrying no policy gradient -- the
+    conditioned diagnostics today, the actor's skip under ``ppo.forced_rows`` -- is true because
+    of that and false without it. A stored log-probability of anything else means the mask the
+    update reads is not the mask the policy acted under, which is the failure the ratio invariant
+    catches at the first minibatch of an iteration and this one catches on every row of every
+    iteration.
+
+    Two cells are planted so that the message has to name the right one: the check runs on the
+    whole rectangle and a message that named the first cell it found would look the same.
+    """
+    model = build_model(rect.spec)
+    plant_forced(rect, [(1, 2), (3, 5)])
+    buffer = collect(rect, model)
+    assert float(buffer.log_prob[3, 5]) == 0.0, "a one-action cell's log-probability is zero"
+    buffer.log_prob[3, 5] = -1.0
+
+    with pytest.raises(ValueError, match=r"cycle 3 slot 5") as raised:
+        update_for(model).step(buffer, SCHEDULE)
+
+    assert "cycle 1 slot 2" not in str(raised.value), "the untouched cell is not an offender"
+
+
+def test_a_cell_with_one_legal_action_that_took_another_stops_the_update(
+    rect: Fixture,
+) -> None:
+    """The other half of the same invariant: the action stored beside the zero was that action.
+
+    A log-probability of zero against an action the mask forbids is a rollout that sampled
+    outside its own mask, and it would leave the ratio at one while the policy was scored on a
+    transition it never made.
+    """
+    model = build_model(rect.spec)
+    plant_forced(rect, [(2, 4)])
+    buffer = collect(rect, model)
+    assert int(buffer.action[2, 4]) == NOOP
+    buffer.action[2, 4] = NOOP + 1
+
+    with pytest.raises(ValueError, match=r"cycle 2 slot 4"):
+        update_for(model).step(buffer, SCHEDULE)
+
+
+def test_the_stored_legal_count_is_checked_against_the_mask_a_minibatch_carries(
+    rect: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The column is written once per iteration and read per row, so the two are held together.
+
+    It is filled from the critic's pass over the rectangle and read back through the minibatch
+    gather, which sorts its cells; a mapping that drifted between the two would hand the update
+    one row's legal count beside another row's observation, and nothing downstream would look
+    wrong. The plant is on the column itself, one cell of it, so the assertion that fires can
+    only be this one.
+    """
+    from royalelearn.learn.buffer import RectBuffer
+
+    model = build_model(rect.spec)
+    buffer = collect(rect, model)
+    stored = RectBuffer.set_n_legal
+
+    def one_cell_too_many(self: RectBuffer, counts: Any) -> None:
+        stored(self, counts)
+        self.n_legal[0, 0] += 1
+
+    monkeypatch.setattr(RectBuffer, "set_n_legal", one_cell_too_many)
+
+    with pytest.raises(AssertionError, match="legal actions"):
+        update_for(model).step(buffer, SCHEDULE)
+
+
 def test_the_asserts_stop_after_the_iterations_they_were_asked_for(rect: Fixture) -> None:
     """They are a start-up gate on a run's wiring, not a per-sample cost for its whole life."""
     from royalelearn.learn.inference import RectGather
@@ -542,11 +644,14 @@ def test_the_critic_pass_covers_the_bootstrap_cycle(rect: Fixture) -> None:
     buffer = collect(rect, model)
     gather = RectGather(buffer, rows=SLOTS * 2)
 
-    values = chunked_critic_pass(buffer, model, gather, chunk=SLOTS * 2)
+    values, n_legal = chunked_critic_pass(buffer, model, gather, chunk=SLOTS * 2)
 
     assert values.shape == (CYCLES + 1, SLOTS)
     assert bool(torch.isfinite(values).all())
     assert float(values.abs().sum()) > 0.0
+    # The legal count covers the same cells: it comes off the mask of the same unpacked row.
+    assert n_legal.shape == (CYCLES + 1, SLOTS)
+    assert int(n_legal.min()) >= 1
 
 
 def test_a_cell_no_worker_wrote_has_no_value(rect: Fixture) -> None:
@@ -559,7 +664,7 @@ def test_a_cell_no_worker_wrote_has_no_value(rect: Fixture) -> None:
     buffer.valid[1, 3] = False
     gather = RectGather(buffer, rows=SLOTS * 2)
 
-    values = chunked_critic_pass(buffer, model, gather, chunk=SLOTS * 2)
+    values, _n_legal = chunked_critic_pass(buffer, model, gather, chunk=SLOTS * 2)
 
     assert float(values[1, 3]) == 0.0
 
