@@ -348,6 +348,27 @@ METRICS: dict[str, MetricSpec] = {
         "denominator of the three rollout keys below, and the elixir curve read directly: on "
         "this environment it is about one decision in ten.",
     ),
+    "policy/rollout_hold_gap": _m(
+        "nats",
+        "Mean of the no-op's logit minus the log-sum-exp of everything else legal, over choice "
+        "rows. What net.noop_bias moves by a constant, so it is the quantity a prior and a "
+        "learnt policy can be told apart on.",
+    ),
+    "policy/rollout_hold_gap_std": _m(
+        "nats",
+        "Spread of that gap WITHIN an iteration. Confounded on its own: the legal-set size "
+        "varies across rows and moves the gap even for an untrained policy. Read the residual.",
+    ),
+    "policy/rollout_hold_gap_residual_std": _m(
+        "nats",
+        "The gap's spread after its least-squares dependence on log(n_legal) is removed -- how "
+        "differently the policy holds in different states, with the elixir bar taken out. THE "
+        "QUESTION IT ANSWERS: a constant noop_bias holds the same way everywhere, and so does a "
+        "head that learnt one number; measured across iterations the two are indistinguishable "
+        "from a state-dependent policy, and within an iteration they are not. Near zero is a "
+        "constant. Only near, because 'one number' gives c - logsumexp(others), which is close "
+        "to linear in log(n_legal) rather than linear.",
+    ),
     "policy/rollout_hold_rate": _m(
         "fraction",
         "Mean p(no-op) at DECISION time over the rows that had a choice. Not comparable across "
@@ -781,6 +802,13 @@ CONDITIONAL: dict[str, str] = {
     "time/overlap_saved": "rollout.overlap is honoured, which it is not yet (spec 14.1)",
     "ppo/adam_eps_floor_frac_actor": "the actor's optimizer has taken a step",
     "ppo/adam_eps_floor_frac_critic": "the critic's optimizer has taken a step",
+    "policy/rollout_hold_gap": "a rollout decision this iteration had more than one legal action",
+    "policy/rollout_hold_gap_std": (
+        "a rollout decision this iteration had more than one legal action"
+    ),
+    "policy/rollout_hold_gap_residual_std": (
+        "a rollout decision this iteration had more than one legal action"
+    ),
     "policy/rollout_hold_rate": "a rollout decision this iteration had more than one legal action",
     "policy/rollout_hold_lift": "a rollout decision this iteration had more than one legal action",
     "policy/rollout_legal_actions": (

@@ -298,6 +298,11 @@ def _rollout_stats() -> RoundStats:
         hold=0.612,
         hold_lift=153.0,
         choice_n_legal=2500.0,
+        gap=21.0,
+        gap_sq=45.0,
+        legal_log=55.3,
+        legal_log_sq=306.0,
+        gap_legal_log=116.2,
     )
 
 

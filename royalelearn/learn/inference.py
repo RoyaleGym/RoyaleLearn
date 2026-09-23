@@ -159,6 +159,16 @@ class RoundStats(NamedTuple):
     hold: float
     hold_lift: float
     choice_n_legal: float
+    #: Sums for the WITHIN-iteration spread of the hold gap, and for the part of it that the
+    #: legal-set size explains. A constant bias moves the gap by a constant, so a spread that
+    #: survives removing log(n_legal) is the policy holding differently in different states --
+    #: the only question left about the 2026-09-23 result. Five sums rather than one, because
+    #: the spread of p(no-op) alone is confounded by the legal set and would read as learning.
+    gap: float
+    gap_sq: float
+    legal_log: float
+    legal_log_sq: float
+    gap_legal_log: float
 
 
 class InferenceResult(NamedTuple):
@@ -342,8 +352,13 @@ class _StatAccumulator:
         "choice_rows",
         "entropy",
         "forwards",
+        "gap",
+        "gap_legal_log",
+        "gap_sq",
         "hold",
         "hold_lift",
+        "legal_log",
+        "legal_log_sq",
         "n_legal",
         "p_noop",
         "rounds",
@@ -366,6 +381,11 @@ class _StatAccumulator:
         self.hold = 0.0
         self.hold_lift = 0.0
         self.choice_n_legal = 0.0
+        self.gap = 0.0
+        self.gap_sq = 0.0
+        self.legal_log = 0.0
+        self.legal_log_sq = 0.0
+        self.gap_legal_log = 0.0
 
     def round(self, *, forwards: int, seconds: float) -> None:
         self.forwards += forwards
@@ -392,6 +412,13 @@ class _StatAccumulator:
         self.hold += float(held.sum().item())
         self.hold_lift += float((held * widths).sum().item())
         self.choice_n_legal += float(widths.sum().item())
+        gap = distribution.hold_gap()[choice].to(torch.float64)
+        legal_log = widths.to(torch.float64).log()
+        self.gap += float(gap.sum().item())
+        self.gap_sq += float((gap * gap).sum().item())
+        self.legal_log += float(legal_log.sum().item())
+        self.legal_log_sq += float((legal_log * legal_log).sum().item())
+        self.gap_legal_log += float((gap * legal_log).sum().item())
 
     def drain(self) -> RoundStats:
         stats = RoundStats(
@@ -406,6 +433,11 @@ class _StatAccumulator:
             hold=self.hold,
             hold_lift=self.hold_lift,
             choice_n_legal=self.choice_n_legal,
+            gap=self.gap,
+            gap_sq=self.gap_sq,
+            legal_log=self.legal_log,
+            legal_log_sq=self.legal_log_sq,
+            gap_legal_log=self.gap_legal_log,
         )
         self._reset()
         return stats

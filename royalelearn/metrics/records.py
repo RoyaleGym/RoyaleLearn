@@ -13,6 +13,7 @@ fixed record per finished episode, and what this module does with those is arith
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -332,6 +333,49 @@ def rollout_policy_fields(stats: RoundStats) -> dict[str, MetricValue]:
     fields["policy/rollout_hold_rate"] = stats.hold / stats.choice_rows
     fields["policy/rollout_hold_lift"] = stats.hold_lift / stats.choice_rows
     fields["policy/rollout_legal_actions"] = stats.choice_n_legal / stats.choice_rows
+    fields.update(_hold_gap_fields(stats))
+    return fields
+
+
+def _hold_gap_fields(stats: RoundStats) -> dict[str, MetricValue]:
+    """How differently the policy holds in different states, with the elixir bar taken out.
+
+    THE QUESTION THIS ANSWERS, and it is the only one left about the 2026-09-23 result. A
+    constant ``net.noop_bias`` moves the hold gap by a constant, so a policy that has learnt
+    nothing holds the SAME way everywhere. One that has learnt when to wait does not. Measured
+    across iterations the two are indistinguishable -- a uniform learnt shift on the no-op logit
+    produces exactly the departure that run showed -- and within an iteration they are not.
+
+    WHY NOT THE SPREAD OF p(no-op). Because p varies across rows through the LEGAL-SET SIZE even
+    for an untrained policy: the sum it is divided by has more terms when more cards are
+    affordable. A spread in p would then read as learning when it is the elixir bar. The gap is
+    the logit of p, which a constant bias shifts by a constant, and the residual below removes
+    what remains of the legal set.
+
+    ``residual`` is the standard deviation of the gap after its least-squares dependence on
+    ``log(n_legal)`` is removed. Under "the head learnt one number" the gap is
+    ``c - logsumexp(others)``, which is close to linear in ``log(n_legal)``, so the residual is
+    near zero; under a state-dependent policy it is not. Close to linear rather than linear, so
+    a small residual is not proof of a constant -- it is the direction that carries the evidence.
+    """
+    n = float(stats.choice_rows)
+    mean_gap = stats.gap / n
+    var_gap = max(0.0, stats.gap_sq / n - mean_gap * mean_gap)
+    fields: dict[str, MetricValue] = {
+        "policy/rollout_hold_gap": mean_gap,
+        "policy/rollout_hold_gap_std": math.sqrt(var_gap),
+    }
+    mean_log = stats.legal_log / n
+    var_log = max(0.0, stats.legal_log_sq / n - mean_log * mean_log)
+    if var_log <= 1e-12 or var_gap <= 0.0:
+        # Every choice row offered the same number of actions, so there is nothing to remove and
+        # the residual IS the spread. Absent rather than equal to it would lose the reading.
+        fields["policy/rollout_hold_gap_residual_std"] = math.sqrt(var_gap)
+        return fields
+    covariance = stats.gap_legal_log / n - mean_gap * mean_log
+    slope = covariance / var_log
+    residual = max(0.0, var_gap - slope * covariance)
+    fields["policy/rollout_hold_gap_residual_std"] = math.sqrt(residual)
     return fields
 
 

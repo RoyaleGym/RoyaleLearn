@@ -176,6 +176,23 @@ class MaskedCategorical(ActionDistribution):
         var = (((centred - mean) ** 2) * mask).sum(-1) / n.squeeze(-1)
         return var.clamp_min(0.0).sqrt()
 
+    def hold_gap(self) -> Tensor:
+        """``(B,)`` float32: the no-op's logit MINUS the log-sum-exp of everything else legal.
+
+        The quantity a constant ``net.noop_bias`` moves by a constant, which is what makes it the
+        one to ask about state dependence. p(no-op) is not: it varies across rows through the
+        LEGAL-SET SIZE even for a policy that has learnt nothing, because the sum it is divided by
+        has more terms in it when more cards are affordable. A spread in p would then be read as
+        the policy having learnt when to wait, when it is the elixir bar moving.
+
+        This is the logit of p(no-op), computed from the normalised log-probability so it is over
+        the masked set: ``log p - log(1 - p)``, via ``log(-expm1(log p))`` rather than
+        ``log(1 - p.exp())``, which loses everything when p is near one -- and at
+        ``noop_bias 8.0`` p is about 0.9.
+        """
+        logp = self._logp[:, NOOP].clamp(max=-1e-7)
+        return logp - torch.log(-torch.expm1(logp))
+
     def n_legal(self) -> Tensor:
         """``(B,)`` int64. Entropy falling is ambiguous without it: a policy that has learnt to
         wait sees fewer legal actions, and its entropy falls for that reason alone."""

@@ -161,3 +161,92 @@ def test_the_lift_is_the_hold_rate_over_its_own_uniform_baseline(tmp_path) -> No
     assert pooled == pytest.approx(1.30, abs=0.01), "the two aggregates must disagree here"
     assert fields["policy/rollout_legal_actions"] == pytest.approx(127.0)
     assert math.isclose(fields["policy/rollout_hold_rate"], (0.25 + 0.08) / 2, rel_tol=1e-4)
+
+
+# -- a prior that holds everywhere against a policy that chooses ---------------
+
+
+def gap_fields(rows: list[tuple[float, int]]) -> dict[str, float]:
+    """Feed rows of ``(extra no-op logit, legal-set size)`` and read the gap keys back.
+
+    The bias is 8.0 throughout, so ``extra`` is what the HEAD has learnt on top of the prior: a
+    single value in every row is "the head learnt one number", a varying one is a policy that
+    holds differently in different states.
+    """
+    stats = _StatAccumulator()
+    for extra, n_legal in rows:
+        probs = torch.full((1, n_legal), 1.0, dtype=torch.float32)
+        logits = probs.log()
+        logits[0, 0] = 8.0 + extra
+        stats.policy(
+            MaskedCategorical(logits, torch.ones((1, n_legal), dtype=torch.bool)), rows=1
+        )
+    return dict(rollout_policy_fields(stats.drain()))  # type: ignore[arg-type]
+
+
+def test_a_constant_prior_holds_the_same_way_everywhere() -> None:
+    """The null this key exists to reject. Nothing learnt: the residual is zero.
+
+    The legal set VARIES across these rows, which is the point -- p(no-op) varies with it even
+    though nothing about the policy does, so a spread in p would read as learning. The gap's
+    residual, with log(n_legal) removed, does not.
+    """
+    fields = gap_fields([(0.0, n) for n in (120, 240, 360, 480)])
+
+    assert fields["policy/rollout_hold_gap_std"] > 0.5, (
+        "the raw spread should be large here, which is exactly why it cannot be the test"
+    )
+    # Not exactly zero, and the docstring in `records.py` says why: the true relationship is
+    # `bias - log(n_legal - 1)` and the regressor is `log(n_legal)`, so removing the second
+    # leaves a little of the first. 0.0004 nats against a 0.52 spread -- under a thousandth.
+    # Asserted as a RATIO because that is the reading anybody would take, and it is scale-free.
+    ratio = (
+        fields["policy/rollout_hold_gap_residual_std"] / fields["policy/rollout_hold_gap_std"]
+    )
+    assert ratio < 0.01, f"a policy that holds identically everywhere left {ratio:.3f} unexplained"
+
+
+def test_a_policy_that_holds_differently_says_so() -> None:
+    """The same legal sets, and a head that wants to wait in some states and not others."""
+    fields = gap_fields([(-3.0, 120), (3.0, 240), (-3.0, 360), (3.0, 480)])
+
+    ratio = (
+        fields["policy/rollout_hold_gap_residual_std"] / fields["policy/rollout_hold_gap_std"]
+    )
+    assert fields["policy/rollout_hold_gap_residual_std"] > 1.0
+    assert ratio > 0.5, (
+        "most of this spread is the policy and log(n_legal) should not have absorbed it"
+    )
+
+
+def test_one_number_learnt_on_top_of_the_prior_is_still_a_constant() -> None:
+    """A uniform learnt shift is the case the ACROSS-iteration reading cannot separate.
+
+    The 2026-09-23 run showed the hold rate departing from its constant-bias prediction by a
+    factor reaching 0.35. That rules out "nothing was learnt about holding" and does NOT rule
+    out this: one number, learnt, applied everywhere. Here it reads as a constant, which is the
+    whole reason the key is within-iteration.
+    """
+    fields = gap_fields([(-2.5, n) for n in (120, 240, 360, 480)])
+
+    ratio = (
+        fields["policy/rollout_hold_gap_residual_std"] / fields["policy/rollout_hold_gap_std"]
+    )
+    assert ratio < 0.01, f"one number learnt everywhere left {ratio:.3f} unexplained"
+    assert fields["policy/rollout_hold_gap"] < gap_fields([(0.0, 240)])[
+        "policy/rollout_hold_gap"
+    ], "the learnt shift should still move the gap's LEVEL, which is what makes it learnt"
+
+
+def test_one_width_leaves_the_residual_equal_to_the_spread() -> None:
+    """Nothing to remove when every row offered the same number of actions.
+
+    Absent would lose the reading, and zero would claim a constant policy on rows that may not
+    have one.
+    """
+    fields = gap_fields([(-3.0, 240), (3.0, 240), (-1.0, 240), (1.0, 240)])
+
+    assert fields["policy/rollout_hold_gap_residual_std"] == pytest.approx(
+        fields["policy/rollout_hold_gap_std"]
+    )
+    assert fields["policy/rollout_hold_gap_residual_std"] > 1.0
