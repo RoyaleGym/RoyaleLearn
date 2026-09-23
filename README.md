@@ -13,12 +13,20 @@ piece of Python that scores what just happened in a battle. The bot plays itself
 keeps what wins. A ladder of its own older versions decides whether the new bot is actually better
 than the last one.
 
-**You can start a run.** The training loop has worked since 2026-09-22 (commit 5685cad). One
-command trains:
+**You can start a run.** The training loop has worked since 2026-09-22 (commit 5685cad). Every
+command block on this page is written for Windows PowerShell, the shell that opens by default on
+Windows 10 and 11. One command trains:
 
 ```
 python -m royalelearn train --config examples\configs\smoke.json
 ```
+
+Run that from inside the `RoyaleLearn` folder, because the config path is relative to the folder
+you are in. A line that spells out `.venv\Scripts\python` always runs the right Python. A line
+that says plain `python`, like the one above, runs whichever Python you get when you type
+`python`, and for a `royalelearn` command that has to be the virtual environment you make in
+Install below. On macOS and Linux everything here is the same, except that `.venv\Scripts\python`
+becomes `.venv/bin/python`.
 
 Two things to know before you try it.
 
@@ -169,7 +177,12 @@ run identity and the rollout worker need only numpy and msgspec, so you can writ
 config, and run the identity commands, on a machine that has no torch at all:
 
 ```
-$ python -c "import royalelearn, sys; print(royalelearn.RunConfig, 'torch' in sys.modules)"
+python -c "import royalelearn, sys; print(royalelearn.RunConfig, 'torch' in sys.modules)"
+```
+
+That prints:
+
+```text
 <class 'royalelearn.config.RunConfig'> False
 ```
 
@@ -183,10 +196,14 @@ All four of these work. `train` needs the torch extra; so do `doctor` and `bench
 
 ```
 python -m royalelearn train --config examples/configs/laptop.json
-python -m royalelearn config --profile laptop -o run.json      # writes a config to edit
-python -m royalelearn doctor --config run.json                 # first-run checks
-python -m royalelearn bench                                    # this machine's throughput
+python -m royalelearn config --profile laptop -o run.json
+python -m royalelearn doctor --config run.json
+python -m royalelearn bench
 ```
+
+In that order: `train` trains a bot. `config` writes a config file for you to edit. `doctor` runs
+the first-run checks. `bench` measures this machine's throughput. Run all four from inside the
+`RoyaleLearn` folder, because those file names are relative to the folder you are in.
 
 Start with the last two, not the first. `doctor` builds one environment, prints the engine build
 digest and the observation shapes, checks the placement mask against the engine exhaustively,
@@ -251,25 +268,80 @@ one frame per env step for a viewer if one is listening.
 
 ### Install
 
+At the end of this you have the four public repos side by side, one virtual environment they all
+share, and a built engine. It takes six stages. Do stages 1 to 5 in order, because each one needs
+the one before it. Stage 6 is torch, and you only need it if you are going to train.
+
+These are Windows PowerShell commands. Paste one stage at a time rather than the whole section.
+If something goes wrong you will know which stage it was, which is most of the work of fixing it.
+
+Before you start you need three things already installed: Git, Python 3.12 or newer, and Rust
+1.80 or newer with cargo. The Rust one surprises people. Stage 4 compiles the battle engine, and
+without cargo it stops there.
+
+Stage 1 makes a folder and clones the four repos into it.
+
 ```
-mkdir Royale && cd Royale
+mkdir Royale
+cd Royale
 git clone https://github.com/RoyaleGym/RoyaleSim.git
 git clone https://github.com/RoyaleGym/RoyaleGym.git
 git clone https://github.com/RoyaleGym/RoyaleViser.git
 git clone https://github.com/RoyaleGym/RoyaleLearn.git
-python -m venv .venv                                                    # Python 3.12
+```
+
+You now have four folders inside `Royale`. Every stage below starts from `Royale` itself, so stay
+there.
+
+Stage 2 makes the virtual environment the four repos share and puts the build tools in it. The
+first line says plain `python`, and that is the Python already on your machine, because the venv
+does not exist yet. Every command after it names the venv's Python instead. pip prints a wall of
+text as it downloads. That is normal.
+
+```
+python -m venv .venv
 .venv\Scripts\python -m pip install maturin pytest hypothesis ruff
-cd RoyaleSim && ..\.venv\Scripts\python tools\extract_arena.py && ..\.venv\Scripts\python tools\extract_cards.py --vintage 2018 && ..\.venv\Scripts\python tools\extract_cards.py --vintage 2018 --out data\derived\cards.json && ..\.venv\Scripts\python tools\extract_globals.py && cd ..   # generates RoyaleSim/data/derived/
-cd RoyaleSim && ..\.venv\Scripts\maturin develop --release && cd ..     # builds the engine into the venv. Give it a few minutes and some free memory.
+```
+
+Stage 3 generates RoyaleSim's data tables into `RoyaleSim/data/derived/`. Those tables are
+generated rather than stored, so a fresh clone does not have them. This stage takes seconds.
+
+```
+cd RoyaleSim
+..\.venv\Scripts\python tools\extract_arena.py
+..\.venv\Scripts\python tools\extract_cards.py --vintage 2018
+..\.venv\Scripts\python tools\extract_cards.py --vintage 2018 --out data\derived\cards.json
+..\.venv\Scripts\python tools\extract_globals.py
+cd ..
+```
+
+Stage 4 builds the engine into the venv. This is the long one. Give it a few minutes and some
+free memory. It compiles Rust and says almost nothing while it does, so a quiet terminal here is
+work in progress rather than a hang.
+
+```
+cd RoyaleSim
+..\.venv\Scripts\maturin develop --release
+cd ..
+```
+
+Stage 5 installs the three Python packages into the venv, in this order. `royalelearn` lists
+`royalegym` as a dependency, and pip takes it from your venv, never from PyPI.
+
+```
 .venv\Scripts\python -m pip install -e RoyaleGym
 .venv\Scripts\python -m pip install -e RoyaleViser
 .venv\Scripts\python -m pip install -e RoyaleLearn
-.venv\Scripts\python -m pip install -e "RoyaleLearn[torch]"   # only if you want to train; it is a big download
 ```
 
-Run the whole block, in that order. This repo needs it. `royalelearn` lists `royalegym` as a
-dependency and pip takes it from your venv, never from PyPI. If you want torch as well, use
-`pip install -e "RoyaleLearn[torch]"`. Only the learner itself needs it.
+Stage 6 is torch, and it is the one stage you can skip. Do it only if you want to train. It is a
+big download, gigabytes of it, and only the learner itself needs it. Without torch everything
+else on this page still works, and `train`, `doctor` and `bench` stop with
+`ModuleNotFoundError: No module named 'torch'`.
+
+```
+.venv\Scripts\python -m pip install -e "RoyaleLearn[torch]"
+```
 
 ## Status (2026-09-22)
 
@@ -310,12 +382,16 @@ What is open:
   layers below are finished to a high standard, and a partial harness is not a milestone.
   [`docs/design.md`](docs/design.md) has the reasoning and the rules the harness is held to.
 
-Tests:
+Tests, from the `Royale` folder:
 
 ```
-cd RoyaleLearn && ..\.venv\Scripts\python -m pytest -q     # 693 passed, 25 deselected, with torch, on 2026-09-22 at bd6db80
-..\.venv\Scripts\ruff check .                              # All checks passed!
+cd RoyaleLearn
+..\.venv\Scripts\python -m pytest -q
+..\.venv\Scripts\ruff check .
 ```
+
+With torch installed, on 2026-09-22 at bd6db80, pytest printed `693 passed, 25 deselected` and
+ruff printed `All checks passed!`.
 
 That run took 67 seconds on a laptop. The count is pinned to a commit because it moves whenever
 tests land, and a bare number here would age badly. The 25 deselected tests are left out by
@@ -332,8 +408,32 @@ One of them is worth singling out. The environment description is read off a run
 `ClashSelfPlayVecEnv` on two card catalogues of different widths. The two catalogues are the
 point. If a width had been copied into the code from one of them, the other would fail.
 
-Read next: [`docs/design.md`](docs/design.md) for the pieces, the metric and the rules. Then the
-[RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) README for the environments and the
+## Read next
+
+The pages in `docs/` go further than this README does. If you are about to start a run, read the
+first one.
+
+- [`docs/running.md`](docs/running.md). Running a job: starting one, reading what scrolls past,
+  the 23 alarms and what to do about each, and the one memory setting worth understanding.
+- [`docs/throughput.md`](docs/throughput.md). How long a training step takes, how to measure your
+  own machine instead of trusting a number from someone else's, and which part of your computer
+  is holding you up.
+- [`docs/metrics.md`](docs/metrics.md). The numbers a run prints, which handful tell you whether
+  the bot is learning, and which ones are empty today so you do not chase them.
+- [`docs/ladder.md`](docs/ladder.md). How the bot is measured against past versions of itself,
+  and how much of that answer to believe.
+- [`docs/checkpoints.md`](docs/checkpoints.md). Stopping a run and starting it again without
+  losing the work.
+- [`docs/determinism.md`](docs/determinism.md). When you get the same run twice, and when you do
+  not.
+- [`docs/design.md`](docs/design.md). Why the harness is shaped this way: the pieces, the metric
+  and the rules it is held to.
+- [`docs/harness-spec.md`](docs/harness-spec.md). The harness field by field, for anyone writing
+  or reading the code.
+- [`docs/royalegym-asks.md`](docs/royalegym-asks.md). Everything the trainer reaches across the
+  seam to RoyaleGym for, and why.
+
+Then the [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) README for the environments and the
 [RoyaleSim](https://github.com/RoyaleGym/RoyaleSim) README for the engine.
 
 ## Community
