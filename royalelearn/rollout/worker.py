@@ -142,6 +142,7 @@ def worker_main(
                 buffer=buffer.buf,
                 control=control.buf,
                 viser="env" if (config.viser and shard == 0) else None,
+                recorder=config.recorder if shard == 0 else None,
             )
             runner.start()
             shards.append(runner)
@@ -214,9 +215,7 @@ def worker_main(
             try:
                 message: PlanMessage | None = None
                 if command == COMMAND_PLAN:
-                    message = msgspec.msgpack.decode(
-                        _take(inbox, shard, pending), type=PlanMessage
-                    )
+                    message = msgspec.msgpack.decode(_take(inbox, shard, pending), type=PlanMessage)
                 elif command == COMMAND_SET_STATE:
                     runner.pending_snapshots = msgspec.msgpack.decode(
                         _take(inbox, shard, pending), type=tuple[bytes | None, ...]

@@ -104,9 +104,7 @@ class ProcessRolloutSource(RolloutSourceBase):
         geometry: Geometry | None = None,
         viser: bool = False,
     ) -> None:
-        super().__init__(
-            config, spec, codec_table, run_id=run_id, codec=codec, geometry=geometry
-        )
+        super().__init__(config, spec, codec_table, run_id=run_id, codec=codec, geometry=geometry)
         import atexit
         import multiprocessing
 
@@ -199,6 +197,7 @@ class ProcessRolloutSource(RolloutSourceBase):
             spin_us=rollout.spin_us,
             stagger_first_reset=rollout.stagger_first_reset,
             viser=self.viser and worker.index == 0,
+            recorder=rollout.recorder if worker.index == 0 else None,
             ordinals=self.ordinals,
         )
 
@@ -206,9 +205,7 @@ class ProcessRolloutSource(RolloutSourceBase):
         kind, _, payload = self._take(worker, STARTUP_TIMEOUT_S)
         if kind == "start":
             return msgspec.msgpack.decode(payload, type=StartupReport)
-        raise PreflightError(
-            f"rollout worker {worker.index} did not come up:\n{payload}"
-        )
+        raise PreflightError(f"rollout worker {worker.index} did not come up:\n{payload}")
 
     def _take(self, worker: _Worker, timeout_s: float) -> tuple[str, int, Any]:
         """The next thing a worker says, or an error naming what became of it.
@@ -328,9 +325,7 @@ class ProcessRolloutSource(RolloutSourceBase):
         while len(pending) < count:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise WorkerTimeout(
-                    worker, shard, self._cycle, self.config.rollout.round_timeout_s
-                )
+                raise WorkerTimeout(worker, shard, self._cycle, self.config.rollout.round_timeout_s)
             try:
                 kind, where, payload = child.outbox.get(timeout=min(remaining, POLL_S * 10))
             except queue.Empty:
@@ -338,24 +333,18 @@ class ProcessRolloutSource(RolloutSourceBase):
             if kind != "episode":  # pragma: no cover - the child sends nothing else here
                 raise ValueError(f"worker {worker} sent {kind!r} in the middle of a round")
             child.pending[int(where)].append(payload)
-        records = [
-            msgspec.msgpack.decode(blob, type=EpisodeRecord) for blob in pending[:count]
-        ]
+        records = [msgspec.msgpack.decode(blob, type=EpisodeRecord) for blob in pending[:count]]
         del pending[:count]
         return records
 
     def _read_finals(self, worker: int, shard: int, count: int) -> np.ndarray:
         child = self.workers[worker]
-        view = child.layout.view(
-            child.segment.buf, shard, self._parity(worker, shard), "finals"
-        )
+        view = child.layout.view(child.segment.buf, shard, self._parity(worker, shard), "finals")
         return np.frombuffer(view, dtype=np.uint8, count=count * self.row_bytes).reshape(
             count, self.row_bytes
         )
 
-    def _send(
-        self, shard: int, command: int, gamma: float, message: PlanMessage | None
-    ) -> None:
+    def _send(self, shard: int, command: int, gamma: float, message: PlanMessage | None) -> None:
         for child in self.workers:
             if not self._alive(child.index):
                 continue
@@ -388,8 +377,7 @@ class ProcessRolloutSource(RolloutSourceBase):
                     shard,
                     msgspec.msgpack.encode(
                         tuple(
-                            snapshots[int(b)] if int(b) < len(snapshots) else None
-                            for b in battles
+                            snapshots[int(b)] if int(b) < len(snapshots) else None for b in battles
                         )
                     ),
                 )
@@ -398,9 +386,7 @@ class ProcessRolloutSource(RolloutSourceBase):
     def _fail_worker(self, worker: int, shard: int, word: dict[str, Any]) -> None:
         child = self.workers[worker]
         self.live[worker] = False
-        view = child.layout.view(
-            child.segment.buf, shard, self._parity(worker, shard), "error"
-        )
+        view = child.layout.view(child.segment.buf, shard, self._parity(worker, shard), "error")
         self.failures.append(
             WorkerFailure(
                 worker=worker,

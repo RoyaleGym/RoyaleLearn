@@ -71,7 +71,7 @@ from ..api.rollout import (
 from ..config import Geometry
 from ..errors import PreflightError
 from ..seeding import ENV_EPISODE, ENV_STAGGER, derive_generator, derive_int, stream_path
-from .envspec import EnvFactorySpec, resolve_component
+from .envspec import ComponentSpec, EnvFactorySpec, resolve_component
 from .layout import (
     ASSIGN,
     CONTROL,
@@ -231,6 +231,10 @@ class WorkerConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: env in a run may: the publisher binds one UDP port, and a second one raises at
     #: construction.
     viser: bool = False
+    #: The replay recorder for this worker's first shard, or None. Worker 0 only, and attached
+    #: by ``build_vec`` to ONE env of that shard: a recorder that wants per-tick frames takes its
+    #: env off the multi-tick step path, so one per run is a bounded cost and one per game is not.
+    recorder: ComponentSpec | None = None
     #: Where each battle's episode counter stood when a checkpoint was written, empty on a
     #: fresh run. The counter names the next episode, which is what makes a resumed run play
     #: the battles the original was about to play rather than the ones it began with.
@@ -321,6 +325,7 @@ class ShardRunner:
         buffer: Any,
         control: Any,
         viser: str | None = None,
+        recorder: ComponentSpec | None = None,
     ) -> None:
         self.config = config
         self.worker = config.worker
@@ -341,6 +346,7 @@ class ShardRunner:
             self.games,
             tuple(config.extra_component_modules),
             viser=viser,
+            recorder=recorder,
             autoreset_seed_fn=self._episode_seed,
         )
         self.scripted = ScriptedSeats(planner, config.worker, self.slots, config.generation)
@@ -709,14 +715,11 @@ class ShardRunner:
         flags it was handed, so the correspondence needs no index of its own.
         """
         finals = infos["final_obs"]
-        view = self.control_layout.view(
-            self.control, self.shard, self.publish_parity(), "finals"
-        )
+        view = self.control_layout.view(self.control, self.shard, self.publish_parity(), "finals")
         capacity = self.control_layout.finals_per_round
         if len(rows) > capacity:  # pragma: no cover - the region covers every slot of a shard
             raise IndexError(
-                f"{len(rows)} truncated rows on one round, and the finals region holds "
-                f"{capacity}"
+                f"{len(rows)} truncated rows on one round, and the finals region holds {capacity}"
             )
         for index, row in enumerate(rows):
             self.codec.pack(finals[row], view, index)
@@ -758,9 +761,7 @@ class ShardRunner:
         scalars["elixir_leak"] = np.minimum(self.round_leak, np.iinfo(np.int16).max)
         scalars["group"] = self.group
         scalars["flags"] = (
-            FLAG_VALID
-            + FLAG_TERMINATED * self.terminated
-            + FLAG_TRUNCATED * self.truncated
+            FLAG_VALID + FLAG_TERMINATED * self.terminated + FLAG_TRUNCATED * self.truncated
         ).astype(np.uint8)
         scalars["deploy_status"] = self.deploy_status
         scalars["episode_end"] = self.episode_end
@@ -988,9 +989,7 @@ class RolloutSourceBase(RolloutSource):
         out, self.failures = self.failures, []
         return out
 
-    def begin_iteration(
-        self, plan: SlotPlan, buffer: ExperienceBuffer, iteration: int
-    ) -> None:
+    def begin_iteration(self, plan: SlotPlan, buffer: ExperienceBuffer, iteration: int) -> None:
         handle = buffer.shared_handle()
         self._attach_buffer(handle)
         for worker in range(self.geometry.workers):
@@ -1264,18 +1263,14 @@ class RolloutSourceBase(RolloutSource):
     def _read_finals(self, worker: int, shard: int, count: int) -> np.ndarray:
         raise NotImplementedError
 
-    def _send(
-        self, shard: int, command: int, gamma: float, message: PlanMessage | None
-    ) -> None:
+    def _send(self, shard: int, command: int, gamma: float, message: PlanMessage | None) -> None:
         raise NotImplementedError
 
     def _fail_worker(self, worker: int, shard: int, word: dict[str, Any]) -> None:
         raise NotImplementedError
 
     def _actions_view(self, worker: int, shard: int, parity: int) -> np.ndarray:
-        return self._control_layout(worker).actions(
-            self._control_memory(worker), shard, parity
-        )
+        return self._control_layout(worker).actions(self._control_memory(worker), shard, parity)
 
     def _assign_view(self, worker: int, shard: int, parity: int) -> np.ndarray:
         view = self._control_layout(worker).view(
@@ -1337,9 +1332,7 @@ def check_actions_legal(actions: np.ndarray, mask: np.ndarray, slots: np.ndarray
         )
 
 
-def assignments_constant_within_episodes(
-    group: np.ndarray, episode_end: np.ndarray
-) -> None:
+def assignments_constant_within_episodes(group: np.ndarray, episode_end: np.ndarray) -> None:
     """Refuse a rectangle in which a seat changed hands in the middle of an episode.
 
     Both arrays are the rectangle's, in the rectangle's convention: ``episode_end[t]`` is the
@@ -1413,9 +1406,7 @@ class InlineRolloutSource(RolloutSourceBase):
         geometry: Geometry | None = None,
         viser: bool = False,
     ) -> None:
-        super().__init__(
-            config, spec, codec_table, run_id=run_id, codec=codec, geometry=geometry
-        )
+        super().__init__(config, spec, codec_table, run_id=run_id, codec=codec, geometry=geometry)
         self.viser = viser
         self._control: dict[int, bytearray] = {}
         self._layouts: dict[int, ControlLayout] = {}
@@ -1444,6 +1435,9 @@ class InlineRolloutSource(RolloutSourceBase):
                     buffer=self._buffer.buf,
                     control=self._control[worker],
                     viser="env" if (self.viser and worker == 0 and shard == 0) else None,
+                    recorder=(
+                        self.config.rollout.recorder if (worker == 0 and shard == 0) else None
+                    ),
                 )
                 runner.start()
                 runner.publish(CYCLE_UNBOUND)
@@ -1475,6 +1469,7 @@ class InlineRolloutSource(RolloutSourceBase):
             spin_us=rollout.spin_us,
             stagger_first_reset=rollout.stagger_first_reset,
             viser=self.viser and worker == 0,
+            recorder=rollout.recorder if worker == 0 else None,
             ordinals=self.ordinals,
         )
 
@@ -1513,9 +1508,7 @@ class InlineRolloutSource(RolloutSourceBase):
             count, self.row_bytes
         )
 
-    def _send(
-        self, shard: int, command: int, gamma: float, message: PlanMessage | None
-    ) -> None:
+    def _send(self, shard: int, command: int, gamma: float, message: PlanMessage | None) -> None:
         for worker in range(self.geometry.workers):
             runner = self._runners[(worker, shard)]
             parity = runner.open_parity()

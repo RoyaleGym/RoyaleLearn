@@ -126,14 +126,31 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         return digest_of(self)
 
     def factory(
-        self, extra_modules: tuple[str, ...] = (), *, viser: str | None = None
+        self,
+        extra_modules: tuple[str, ...] = (),
+        *,
+        viser: str | None = None,
+        recorder: Any = None,
     ) -> Any:
         """The ``royalegym.env.EnvFactory`` this spec describes.
 
         ``viser`` is not part of the recipe: the publisher is bound by the vec env, once per run
         (section 7.7), so it is passed to ``build_vec`` instead.
+
+        ``recorder`` is not part of the recipe either, and for a sharper reason. ``EnvFactory``
+        WOULD take it -- ``recorder`` is one of its component names -- but a component is built
+        once per env, and the vec env builds one env per game. A recorder in the recipe is
+        therefore 24 recorders on a 24-game shard rather than one, which is wrong three ways and
+        only the first is about disk: ``ClashParallelEnv`` leaves the single multi-tick
+        ``engine.step`` path whenever its recorder wants per-tick frames, so every battle in the
+        shard would step one tick at a time for the whole run; ``keep`` bounds each instance
+        separately, so retention is ``keep`` times the game count; and the saved name is
+        ``{pid}-{completed}-tick{tick}``, whose pid exists to separate PROCESSES and cannot
+        separate instances inside one. Two of them collide exactly when two battles end on the
+        same tick, which is the step cap. So it is attached by ``build_vec``, to one env, the way
+        the viewer is.
         """
-        del viser
+        del viser, recorder
         from royalegym.env import EnvFactory
 
         recipe: dict[str, Any] = {
@@ -164,6 +181,7 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         *,
         viser: Any = None,
         autoreset_seed_fn: Any = None,
+        recorder: ComponentSpec | None = None,
     ) -> ClashSelfPlayVecEnv:
         """``ClashSelfPlayVecEnv(num_games)`` built from this spec.
 
@@ -183,7 +201,15 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             # episode is addressed by its battle and its ordinal, which is what lets a resumed
             # run start the episode the original was about to start.
             kwargs["autoreset_seed_fn"] = autoreset_seed_fn
-        return ClashSelfPlayVecEnv(num_games, self.factory(extra_modules), **kwargs)
+        vec = ClashSelfPlayVecEnv(num_games, self.factory(extra_modules), **kwargs)
+        if recorder is not None:
+            # ONE env, the same env the viewer gets, for the reasons in ``factory``. The vec env
+            # does this for its own publisher a line after building its envs; a recorder needs
+            # the same treatment and nothing in royalegym does it on our behalf.
+            # ``ClashParallelEnv`` reads ``self.recorder`` at reset and at every step, so
+            # attaching after construction and before the first reset is the whole job.
+            vec.envs[0].recorder = recorder.build(extra_modules)
+        return vec
 
     @staticmethod
     def _condition(specs: list[ComponentSpec], extra_modules: tuple[str, ...]) -> Any:

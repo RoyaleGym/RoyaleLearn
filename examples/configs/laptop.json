@@ -60,7 +60,8 @@
     "stagger_first_reset": true,
     "overlap": false,
     "eval_workers": 2,
-    "eval_games_per_worker": 24
+    "eval_games_per_worker": 24,
+    "recorder": null
   },
   "net": {
     "channels": 64,

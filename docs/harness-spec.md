@@ -1585,6 +1585,19 @@ Their results go into the run identity and the checkpoint.
    instead and preflight prints that the state stream is off, because a per-process publisher binds
    the same UDP port once per env and raises `OSError` at construction. The learning-status stream of
    section 13.1 is a separate socket and is always available.
+
+   **The replay recorder follows the same rule for a different reason.** `rollout.recorder` is an
+   optional `ComponentSpec` -- `royalegym.replay.SavingReplayRecorder` and its JSON kwargs -- and
+   it reaches worker 0's first shard only, where `build_vec` attaches ONE built recorder to the
+   index-0 battle. It is deliberately NOT a field of `EnvFactorySpec`: a recorder does not change
+   the game, and hashing it would make a policy trained with one incomparable with every policy
+   trained without. It is also not passed through the `EnvFactory` recipe, although `EnvFactory`
+   would accept it, because a component is built once per env and the vec env builds one env per
+   game: that route gives `games_per_worker` recorders in one process, and the cost is throughput
+   before it is disk, since `ClashParallelEnv` leaves the single multi-tick `engine.step` path
+   whenever its recorder wants per-tick frames. `keep` also bounds each instance separately, and
+   the saved name `{pid}-{completed:06d}-tick{tick}` cannot separate instances inside one process
+   -- two collide when two battles end on the same tick, which is the step cap.
 12. **Measure one minibatch on the device.** The coordinator does this once it has built the network;
    `doctor` does not. On CUDA, and unless `doctor.vram_headroom_mb` is 0, it runs one forward and
    backward at `ppo.minibatch_size`, reads the peak the allocator

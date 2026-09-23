@@ -173,6 +173,14 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     overlap: bool = False
     eval_workers: int = 2
     eval_games_per_worker: int = 24
+    #: Saves completed battles to disk so they can be watched afterwards, which is the only form
+    #: that works: ``time/collection`` is about 5% of an iteration and those seconds hold tens of
+    #: thousands of engine ticks, so a live view is a firehose between silences. NOT part of
+    #: ``EnvFactorySpec``, deliberately: a recorder does not change the game, and putting it in
+    #: the hashed spec would make a policy trained with one incomparable with every policy
+    #: trained without. It reaches exactly one env of one shard of worker 0 -- see
+    #: ``EnvFactorySpec.factory`` for why one rather than all of them.
+    recorder: ComponentSpec | None = None
 
 
 class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -767,8 +775,9 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
         for opponent in ladder.probe_opponents
         if opponent not in known
     ]
-    repeated = sorted({name for name in ladder.probe_opponents
-                       if ladder.probe_opponents.count(name) > 1})
+    repeated = sorted(
+        {name for name in ladder.probe_opponents if ladder.probe_opponents.count(name) > 1}
+    )
     if repeated:
         # The rungs are keyed by name in the row, so a repeat plays every battle twice and
         # publishes one key: the run pays double and the reader cannot see that it did.
