@@ -127,13 +127,13 @@ jobs:
       # is a correct refusal and happens routinely on a development box where seven sessions
       # share five repositories. A clean runner has nothing else moving.
       #
-      # `continue-on-error` because they spawn processes and build environments and have never
-      # run here: a red in this step should not take a green suite down with it on the first
-      # night. Remove it once the step has been green for a while -- an allowed failure that
-      # stays allowed is a step nobody reads.
+      # It was `continue-on-error` for exactly one run. That run passed all 26 on both platforms
+      # with no skips, which also settles the worry they were added for: the sibling-drift
+      # refusal does not happen on a runner, because nothing else is moving there. An
+      # allowed-to-fail step gives visibility and not enforcement, and the reason for adding
+      # these was that a load-bearing guarantee had no enforcement anywhere. So it enforces.
       - name: slow suite
         working-directory: RoyaleLearn
-        continue-on-error: true
         env:
           ROYALESIM_DATA_DIR: ${{ github.workspace }}/RoyaleSim/data
         run: pytest -q -p no:randomly -m "slow and not engine"
