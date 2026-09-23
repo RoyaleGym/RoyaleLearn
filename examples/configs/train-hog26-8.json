@@ -192,7 +192,7 @@
     "policy_head": "pointer",
     "logit_scale": "rsqrt_c",
     "init": "orthogonal",
-    "noop_bias": 5.53,
+    "noop_bias": 8.0,
     "autocast_dtype": "bfloat16",
     "device": "cuda"
   },
