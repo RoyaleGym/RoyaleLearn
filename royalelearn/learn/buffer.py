@@ -80,6 +80,13 @@ class Minibatch(NamedTuple):
     #: beside the row rather than recomputed from ``obs.mask`` because the update reads it
     #: before it has decided which rows to unpack at all.
     n_legal: Tensor
+    #: Which rows of this minibatch had more than one legal action, as an index into it. Built
+    #: on the host from the same column, because reading it off the device -- a ``nonzero`` or
+    #: an ``any`` over a mask -- is a synchronisation inside the minibatch loop, and the loop is
+    #: where an update's whole wall clock is.
+    choice_index: Tensor
+    #: How many rows that index holds, as a plain integer for the same reason.
+    n_choice: int
     cells: Tensor
     n: int
     weight: float
@@ -98,10 +105,16 @@ class Batch:
         cells: np.ndarray,
         minibatch_size: int,
         gather: Callable[[np.ndarray, float], Minibatch],
+        *,
+        n_choice: int,
     ) -> None:
         self.cells = cells
         self.minibatch_size = max(1, int(minibatch_size))
         self._gather = gather
+        #: How many of this batch's cells had more than one legal action. A count of the batch
+        #: and not of a minibatch, because it is a denominator and a denominator taken per
+        #: minibatch would make the gradient a function of the partition.
+        self.n_choice = int(n_choice)
 
     @property
     def n_samples(self) -> int:
@@ -529,12 +542,20 @@ class RectBuffer(ExperienceBuffer):
         minibatch_size: int,
         epochs: int,
         rng_for_epoch: Callable[[int], np.random.Generator],
+        *,
+        choice_first: bool = False,
     ) -> Iterator[Batch]:
         """Every trainable cell, once per epoch, in batches that never straddle an epoch.
 
         The permutation of each epoch comes from that epoch's own named stream, so it is a
         function of the run's identity and the epoch number rather than of how many random draws
         happened to have been made before it.
+
+        ``choice_first`` reorders the cells WITHIN each batch so that the ones whose mask offered
+        more than the no-op come first, keeping the permutation's order inside each class. It
+        moves no cell between batches: every batch holds the cells it held, so every batch-level
+        denominator is the one it was, and a caller that skips the forced rows then skips whole
+        minibatches of them rather than nine rows in every ten of every minibatch.
         """
         cells = np.flatnonzero(self.trainable().reshape(-1))
         if cells.size == 0:
@@ -543,10 +564,16 @@ class RectBuffer(ExperienceBuffer):
             # contract rather than about a run: a caller that counts batches should count none.
             return
         self._ensure_ring(minibatch_size)
+        has_choice = self.n_legal.reshape(-1) > 1
         for epoch in range(epochs):
             order = cells[rng_for_epoch(epoch).permutation(cells.size)]
             for part in np.array_split(order, batch_count(order.size, batch_size)):
-                yield Batch(part, minibatch_size, self._gather)
+                chose = has_choice[part]
+                if choice_first:
+                    part = np.concatenate([part[chose], part[~chose]])
+                yield Batch(
+                    part, minibatch_size, self._gather, n_choice=int(np.count_nonzero(chose))
+                )
 
     def _ensure_ring(self, minibatch_size: int) -> None:
         rows = max(1, int(minibatch_size))
@@ -585,6 +612,9 @@ class RectBuffer(ExperienceBuffer):
         obs = self._empty_obs(count)
         statics = self._statics()
         self.codec.unpack_to_device(raw, statics, obs)
+        # After the sort, so the index names rows of this minibatch as it is handed over.
+        legal = np.take(self.n_legal.reshape(-1), cells)
+        choice = np.flatnonzero(legal > 1).astype(np.int64)
         return Minibatch(
             obs=obs,
             actions=self._gather_column(self.action, cells, torch.int64),
@@ -592,7 +622,9 @@ class RectBuffer(ExperienceBuffer):
             advantages=self._gather_column(self.advantage, cells, torch.float32),
             returns=self._gather_column(self.ret, cells, torch.float32),
             values=self._gather_column(self.value[: self.cycles], cells, torch.float32),
-            n_legal=self._gather_column(self.n_legal, cells, torch.int64),
+            n_legal=torch.from_numpy(legal.astype(np.int64)).to(self.device),
+            choice_index=torch.from_numpy(choice).to(self.device),
+            n_choice=int(choice.size),
             cells=torch.from_numpy(cells.astype(np.int64)).to(self.device),
             n=count,
             weight=weight,

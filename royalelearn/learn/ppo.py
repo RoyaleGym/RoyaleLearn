@@ -312,6 +312,19 @@ class PPOUpdate(Update):
         self._n_slots = 1
         self._final_cells: list[np.ndarray] = []
         self._final_rows: list[np.ndarray] = []
+        #: Whether the actor's forward and backward leave out the rows that could not move, and
+        #: whether its loss then divides by those rows rather than by the batch. Read once here
+        #: rather than per minibatch, so the loop asks a bool and not a string.
+        self._skip_forced = config.forced_rows != "all"
+        self._choice_mean = config.forced_rows == "critic_only_choice_mean"
+        if self._skip_forced and not hasattr(model, "distribution_on_rows"):
+            raise TypeError(
+                f"ppo.forced_rows {config.forced_rows!r} runs the actor over part of a "
+                "minibatch, which needs a pairing whose actor forward is not also its critic's: "
+                f"{type(model).__name__} has no distribution_on_rows(obs, rows). The config "
+                "refuses both skipping values with net.separate_trunks false, so what this "
+                "names is a component the run supplied rather than a shipped pairing"
+            )
 
     # -- what the collection hands over -------------------------------------
 
@@ -412,6 +425,7 @@ class PPOUpdate(Update):
             config.minibatch_size,
             config.n_epochs,
             self._rng_for_epoch(sched.iteration),
+            choice_first=self._skip_forced,
         )
         started_at = time.perf_counter()
         said_epoch = -1
@@ -430,11 +444,26 @@ class PPOUpdate(Update):
                 )
             for optimizer in self.optimizers:
                 optimizer.zero_grad(set_to_none=True)
+            # The actor's denominator is a property of the BATCH under every value of the
+            # field: its rows, or the ones of them that had a choice. Taken per minibatch it
+            # would make the gradient a function of the partition, which is the one thing
+            # minibatch_size is not allowed to be.
+            actor_scale = 1.0 / max(
+                1, batch.n_choice if self._choice_mean else batch.n_samples
+            )
             for position, minibatch in enumerate(batch):
                 first = index == 0 and position == 0
                 self._minibatch(
-                    minibatch, sched, diagnostics, epoch, check=checking, first=first
+                    minibatch,
+                    sched,
+                    diagnostics,
+                    epoch,
+                    check=checking,
+                    first=first,
+                    actor_scale=actor_scale,
                 )
+            if self._skip_forced:
+                self._zero_the_actors_missing_gradients()
             diagnostics.gradients(
                 clip_grad_norm_(self.actor_params, config.max_grad_norm),
                 clip_grad_norm_(self.critic_params, config.max_grad_norm),
@@ -475,6 +504,7 @@ class PPOUpdate(Update):
         *,
         check: bool,
         first: bool,
+        actor_scale: float,
     ) -> None:
         """One forward, one backward, and the diagnostics that come off them."""
         config = self.config
@@ -493,6 +523,17 @@ class PPOUpdate(Update):
             assert bool(
                 (minibatch.obs.mask.sum(-1) == minibatch.n_legal).all()
             ), _legal_count_message(minibatch, self._n_slots)
+        if self._skip_forced:
+            self._critic_then_the_rows_that_can_move(
+                minibatch,
+                sched,
+                diagnostics,
+                epoch,
+                check=check,
+                first=first,
+                actor_scale=actor_scale,
+            )
+            return
         result: BackpropResult = self.model.backprop(minibatch.obs, minibatch.actions)
         log_probs = result.log_probs
         if check:
@@ -502,7 +543,9 @@ class PPOUpdate(Update):
             )
         ratio = torch.exp(log_probs - minibatch.log_probs)
         if first:
-            self._ratio_invariant(ratio, minibatch, diagnostics, sched.iteration)
+            self._ratio_invariant(
+                ratio, minibatch.cells, minibatch.actions, diagnostics, sched.iteration
+            )
         surr, dual = surrogate(
             ratio,
             minibatch.advantages,
@@ -533,11 +576,131 @@ class PPOUpdate(Update):
                 advantages=minibatch.advantages,
                 surr=surr,
                 dual=dual,
-                result=result,
+                entropy=result.entropy,
+                noop_entropy=result.noop_entropy,
+                n_legal=result.n_legal,
                 value_loss=mean_squared_error.detach(),
                 clip_range=config.clip_range,
                 dual_clip_c=config.dual_clip_c,
             )
+
+    def _critic_then_the_rows_that_can_move(
+        self,
+        minibatch: Minibatch,
+        sched: ScheduleState,
+        diagnostics: _Diagnostics,
+        epoch: int,
+        *,
+        check: bool,
+        first: bool,
+        actor_scale: float,
+    ) -> None:
+        """Two backward passes over one minibatch: the critic's over every row, the actor's over
+        the rows whose mask offered more than the no-op.
+
+        The two graphs are disjoint -- that is what ``net.separate_trunks`` buys and what
+        ``check_consistency`` holds this path to -- so calling ``backward`` on each is the same
+        arithmetic as calling it once on their sum, and neither reaches the other's parameters.
+
+        The actor's three terms are SUMS over the rows it ran on, scaled by one number decided
+        per batch. Under ``critic_only`` that number is 1/n_batch, so each term is exactly the
+        term ``all`` computes: the rows left out have a ratio of exactly one, an entropy of zero
+        and a play/wait entropy that is a clamped constant, so each of them adds a constant and
+        no gradient. Under ``critic_only_choice_mean`` it is 1/n_choice, which is the actual
+        change of objective.
+        """
+        config = self.config
+        rows = minibatch.choice_index
+        values = self.model.value(minibatch.obs)
+        mean_squared_error = value_error(
+            values,
+            minibatch.values,
+            minibatch.returns,
+            clip_range=config.clip_range if config.value_clipping else None,
+        )
+        (config.vf_coef * mean_squared_error * minibatch.weight).backward()
+
+        if minibatch.n_choice:
+            distribution = self.model.distribution_on_rows(minibatch.obs, rows)
+            actions = minibatch.actions.index_select(0, rows)
+            log_probs = distribution.log_prob(actions)
+            if check:
+                assert bool(torch.isfinite(log_probs).all()), (
+                    "a log-probability in this minibatch is not finite, which means an action "
+                    "was scored under a mask that forbade it"
+                )
+            ratio = torch.exp(log_probs - minibatch.log_probs.index_select(0, rows))
+            if first:
+                # On the rows that can move, which is the whole point of the check: under `all`
+                # its first minibatch is mostly rows whose ratio is one whatever happened.
+                self._ratio_invariant(
+                    ratio,
+                    minibatch.cells.index_select(0, rows),
+                    actions,
+                    diagnostics,
+                    sched.iteration,
+                )
+            advantages = minibatch.advantages.index_select(0, rows)
+            surr, dual = surrogate(
+                ratio,
+                advantages,
+                clip_range=config.clip_range,
+                dual_clip_c=config.dual_clip_c,
+            )
+            entropy, noop_entropy = distribution.entropy(), distribution.noop_entropy()
+            n_legal = distribution.n_legal()
+            policy_loss = -dual.sum() * actor_scale
+            entropy_loss = (
+                -(
+                    sched.ent_coef * entropy.sum()
+                    + sched.ent_coef_noop * noop_entropy.sum()
+                )
+                * actor_scale
+            )
+            (policy_loss + entropy_loss).backward()
+        else:
+            # Every row of this minibatch was forced, so there is no actor forward to run and
+            # nothing to differentiate. The diagnostics are still told about the rows, because
+            # the value loss and the sample count are theirs.
+            empty = minibatch.advantages[:0]
+            ratio = advantages = surr = dual = entropy = noop_entropy = empty
+            n_legal = minibatch.n_legal[:0]
+        with torch.no_grad():
+            # What the skipped rows would have contributed to the surrogate, exactly: their
+            # ratio is one, so their clipped surrogate is their own advantage, and the dual
+            # clip cannot bind on them because max(A, cA) is A for a negative A and c above
+            # one. Adding it back is what keeps ppo/policy_loss the whole batch's mean, which
+            # is what it is under `all` and therefore comparable with it.
+            forced_dual = minibatch.advantages.sum() - advantages.sum()
+            diagnostics.minibatch(
+                epoch=epoch,
+                n=minibatch.n,
+                ratio=ratio,
+                advantages=advantages,
+                surr=surr,
+                dual=dual,
+                entropy=entropy,
+                noop_entropy=noop_entropy,
+                n_legal=n_legal,
+                value_loss=mean_squared_error.detach(),
+                clip_range=config.clip_range,
+                dual_clip_c=config.dual_clip_c,
+                forced_dual=forced_dual,
+            )
+
+    def _zero_the_actors_missing_gradients(self) -> None:
+        """A batch that held nothing the actor could train on still steps the actor's optimizer.
+
+        Under ``all`` such a batch produces an actor gradient that is numerically zero rather
+        than absent, and Adam's step on a zero gradient is not nothing: the first moment decays
+        towards zero and the parameters move by what is left of the steps before it. A gradient
+        left at None is a parameter torch skips, so the two arms' optimizer trajectories would
+        part on the first batch with no choice row -- about one remainder batch in five at the
+        shipped geometry and a choice fraction of a tenth.
+        """
+        for parameter in self.actor_params:
+            if parameter.grad is None:
+                parameter.grad = torch.zeros_like(parameter)
 
     def _one_action_rows_took_their_one_action(self, buffer: RectBuffer) -> None:
         """Every trainable cell whose mask left one action took it, at log-probability zero.
@@ -572,7 +735,8 @@ class PPOUpdate(Update):
     def _ratio_invariant(
         self,
         ratio: Tensor,
-        minibatch: Minibatch,
+        cells: Tensor,
+        actions: Tensor,
         diagnostics: _Diagnostics,
         iteration: int,
     ) -> None:
@@ -591,7 +755,9 @@ class PPOUpdate(Update):
                 return
             atol = self._ratio_atol()
             value = float(diagnostics.ratio_deviation.item())
-            assert value <= atol, _ratio_message(value, ratio, minibatch, atol, self._n_slots)
+            assert value <= atol, _ratio_message(
+                value, ratio, cells, actions, atol, self._n_slots
+            )
 
     # -- the knobs -----------------------------------------------------------
 
@@ -751,6 +917,7 @@ class _Diagnostics:
                 "entropy",
                 "noop_entropy",
                 "forced_rows",
+                "policy_loss_choice",
                 "entropy_normalised",
                 "kl",
                 "clip_fraction",
@@ -794,11 +961,22 @@ class _Diagnostics:
         advantages: Tensor,
         surr: Tensor,
         dual: Tensor,
-        result: BackpropResult,
+        entropy: Tensor,
+        noop_entropy: Tensor,
+        n_legal: Tensor,
         value_loss: Tensor,
         clip_range: float,
         dual_clip_c: float,
+        forced_dual: Tensor | None = None,
     ) -> None:
+        """One minibatch's numbers. Every tensor covers the rows the ACTOR ran on.
+
+        Under ``ppo.forced_rows`` ``all`` that is the whole minibatch; under the two skipping
+        values it is the rows that had a choice, and ``n`` is still the whole minibatch because
+        the critic and the sample count are the whole minibatch's. ``forced_dual`` then carries
+        what the rows left out would have added to the surrogate, which is exactly the sum of
+        their advantages, so that ``ppo/policy_loss`` means one thing across the three values.
+        """
         # Every quantity derived from the ratio is conditioned on the rows that had a choice,
         # for one structural reason: where the mask leaves a single action the distribution is
         # a point mass at it before and after the update, so the ratio is exactly one and the
@@ -810,7 +988,7 @@ class _Diagnostics:
         # wrong in a way that re-tuning cannot fix, because the baseline is not stationary.
         # This matters past the dashboard: `lr_backoff` reads this KL, so a diluted one makes
         # the brake that stops a blow-up unreachable by the same factor.
-        chose = (result.n_legal > 1).to(ratio.dtype)
+        chose = (n_legal > 1).to(ratio.dtype)
         chose_n = chose.sum()
         denominator = chose_n.clamp_min(1.0)
         kl = (approx_kl(ratio) * chose).sum() / denominator
@@ -818,7 +996,7 @@ class _Diagnostics:
         # The normaliser is the entropy of a uniform policy over this row's legal set, so a
         # policy that has learnt to wait -- and therefore sees fewer legal actions -- is not
         # read as one that has collapsed.
-        legal = result.n_legal.clamp_min(2).to(ratio.dtype).log()
+        legal = n_legal.clamp_min(2).to(ratio.dtype).log()
         # The play/wait entropy is conditioned on the rows that HAD a choice. On the shipped
         # environment about nine decisions in ten leave exactly one legal action -- the elixir
         # bar can afford nothing -- and on those the binary entropy is zero by construction,
@@ -828,7 +1006,11 @@ class _Diagnostics:
         self.samples += n
         self.minibatches += 1
         self._chose += chose_n
-        self._sums["policy_loss"] += -dual.mean() * n
+        if forced_dual is None:
+            self._sums["policy_loss"] += -dual.mean() * n
+        else:
+            self._sums["policy_loss"] += -(dual.sum() + forced_dual)
+        self._sums["policy_loss_choice"] += -(dual * chose).sum()
         self._sums["value_loss"] += value_loss * n
         # Both entropies are conditioned on the rows that HAD a choice, for the same reason the
         # KL is. A forced row's entropy is exactly zero -- one legal action is a point mass --
@@ -839,10 +1021,10 @@ class _Diagnostics:
         # contributes entropy/log(n_legal), which is 1 for a policy still uniform on its legal
         # set. The key was an algebraic restatement of a different key, and its documented
         # healthy band of 0.3-0.8 could not be reached by any policy at this forced fraction.
-        self._sums["entropy"] += (result.entropy * chose).sum()
-        self._sums["noop_entropy"] += (result.noop_entropy * chose).sum()
+        self._sums["entropy"] += (entropy * chose).sum()
+        self._sums["noop_entropy"] += (noop_entropy * chose).sum()
         self._sums["forced_rows"] += (n - chose_n)
-        self._sums["entropy_normalised"] += ((result.entropy / legal) * chose).sum()
+        self._sums["entropy_normalised"] += ((entropy / legal) * chose).sum()
         self._sums["kl"] += kl * chose_n
         self._sums["clip_fraction"] += clip * chose_n
         self._sums["dual_clip_fraction"] += (
@@ -886,6 +1068,7 @@ class _Diagnostics:
             "kl",
             "clip_fraction",
             "dual_clip_fraction",
+            "policy_loss_choice",
         ):
             means[name] = float((self._sums[name] / divisor).item()) if chose else 0.0
         means["forced_rows"] = float(self._sums["forced_rows"].item())
@@ -952,9 +1135,9 @@ def _model_device(model: ActorCritic) -> torch.device:
     return torch.device("cpu")  # pragma: no cover - a model with no parameters
 
 
-def _cell(minibatch: Minibatch, row: int, n_slots: int) -> str:
+def _cell(cells: Tensor, row: int, n_slots: int) -> str:
     """One sample, named the way the rest of the harness names a cell."""
-    cell = int(minibatch.cells[row])
+    cell = int(cells[row])
     return f"cycle {cell // n_slots} slot {cell % n_slots}"
 
 
@@ -963,7 +1146,7 @@ def _mask_message(minibatch: Minibatch, n_slots: int) -> str:
     legal = minibatch.obs.mask.gather(-1, minibatch.actions.unsqueeze(-1)).squeeze(-1)
     offending = torch.nonzero(~legal).reshape(-1)[:10].tolist()
     lines = [
-        f"  {_cell(minibatch, row, n_slots)} took action {int(minibatch.actions[row])}, "
+        f"  {_cell(minibatch.cells, row, n_slots)} took action {int(minibatch.actions[row])}, "
         "which its stored mask forbids"
         for row in offending
     ]
@@ -979,7 +1162,7 @@ def _legal_count_message(minibatch: Minibatch, n_slots: int) -> str:
     counted = minibatch.obs.mask.sum(-1)
     offending = torch.nonzero(counted != minibatch.n_legal).reshape(-1)[:10].tolist()
     lines = [
-        f"  {_cell(minibatch, row, n_slots)}: the column stored "
+        f"  {_cell(minibatch.cells, row, n_slots)}: the column stored "
         f"{int(minibatch.n_legal[row])} legal actions and the mask this minibatch unpacked "
         f"has {int(counted[row])}"
         for row in offending
@@ -1010,13 +1193,13 @@ def _one_action_message(buffer: RectBuffer, wrong: np.ndarray) -> str:
 
 
 def _ratio_message(
-    deviation: float, ratio: Tensor, minibatch: Minibatch, atol: float, n_slots: int
+    deviation: float, ratio: Tensor, cells: Tensor, actions: Tensor, atol: float, n_slots: int
 ) -> str:
     """The worst ten samples, and the three causes in the order they are worth checking."""
     ratio = ratio.detach()
     worst = (ratio - 1.0).abs().argsort(descending=True)[:10].tolist()
     lines = [
-        f"  {_cell(minibatch, row, n_slots)}, action {int(minibatch.actions[row])}: "
+        f"  {_cell(cells, row, n_slots)}, action {int(actions[row])}: "
         f"ratio {float(ratio[row]):.6g}"
         for row in worst
     ]

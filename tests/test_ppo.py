@@ -23,7 +23,6 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import msgspec
@@ -166,6 +165,35 @@ def plant_forced(built: Fixture, cells: Sequence[tuple[int, int]]) -> None:
             built.codec.pack(observation, view, layout.row_index(cycle, slot))
     finally:
         view.release()
+
+
+#: Five cells in every eight, so that the rectangle holds 30 forced rows and 18 choice rows.
+#: The count matters: 18 is not a multiple of ``SAMPLES // 4``, so under the choice-first
+#: partition the choice rows run across a minibatch boundary rather than filling minibatches.
+FORCED_CELLS = [
+    (cycle, slot)
+    for cycle in range(CYCLES)
+    for slot in range(SLOTS)
+    if (cycle * SLOTS + slot) % 8 < 5
+]
+
+
+def count_rows(module: Any) -> list[int]:
+    """Record how many rows each forward of this module is handed, in order.
+
+    The row count is the whole of what a skipping arm changes about the actor, and it is not
+    visible in a gradient: a forward over every row and a forward over the rows that can move
+    produce the same gradient, which is the point. So it is counted at the module.
+    """
+    seen: list[int] = []
+    inner = module.forward
+
+    def forward(obs: Any) -> Any:
+        seen.append(int(obs.mask.shape[0]))
+        return inner(obs)
+
+    module.forward = forward
+    return seen
 
 
 def update_for(model: Any, config: PPOConfig = CONFIG, **kwargs: Any) -> PPOUpdate:
@@ -374,19 +402,29 @@ def test_turning_value_clipping_on_reaches_the_critic(rect: Fixture) -> None:
     assert drift > 0.0, "the flag did not reach the critic's loss"
 
 
-def test_accumulated_minibatch_gradients_are_the_one_batch_gradient(rect: Fixture) -> None:
+@pytest.mark.parametrize("arm", ["all", "critic_only"])
+def test_accumulated_minibatch_gradients_are_the_one_batch_gradient(
+    rect: Fixture, arm: str
+) -> None:
     """``minibatch_size`` is a pure memory knob, and this is the whole of what that means.
 
     One batch of every trainable cell against four minibatches accumulating into the same
     step, from the same weights over the same rectangle. On a four-gigabyte device this is not
     a nicety: it is the mechanism that makes the run fit.
+
+    It holds under every value of ``ppo.forced_rows`` because every denominator any of them uses
+    is a property of the BATCH: the batch's row count, or the count of its rows that had a
+    choice. A denominator taken per minibatch would make the gradient a function of the
+    partition, which is the property this test exists to deny.
     """
     model = build_model(rect.spec)
+    plant_forced(rect, FORCED_CELLS)
     collect(rect, model)
-    whole = update_for(build_model(rect.spec), optimizer_factory=_Recording)
+    config = msgspec.structs.replace(CONFIG, forced_rows=arm)
+    whole = update_for(build_model(rect.spec), config, optimizer_factory=_Recording)
     split = update_for(
         build_model(rect.spec),
-        msgspec.structs.replace(CONFIG, minibatch_size=SAMPLES // 4),
+        msgspec.structs.replace(config, minibatch_size=SAMPLES // 4),
         optimizer_factory=_Recording,
     )
 
@@ -406,6 +444,125 @@ def test_accumulated_minibatch_gradients_are_the_one_batch_gradient(rect: Fixtur
         # and it would move with the thread count, which changes the order of the reduction.
         drift = float((one.recorded[0] - many.recorded[0]).abs().max())
         assert drift <= 1e-5 * scale, f"gradients differ by {drift:.3g} on a scale of {scale:.3g}"
+
+
+@pytest.mark.parametrize("minibatch_size", [SAMPLES, SAMPLES // 4])
+def test_letting_the_actor_skip_forced_rows_lands_on_the_gradient_all_produces(
+    rect: Fixture, minibatch_size: int
+) -> None:
+    """``critic_only`` is a speed change and nothing else, which is a claim about a gradient.
+
+    A row whose mask leaves one action has a log-probability of exactly zero under any
+    parameters, so its ratio is exactly one, its surrogate is its own advantage, its entropy is
+    zero and its play/wait entropy is a clamped constant. It therefore adds a constant to each of
+    the actor's three numerators and a full row to its denominator. ``critic_only`` leaves the
+    row out of the numerator sums and keeps the same denominator, so the gradient is the same
+    one in exact arithmetic and the same one to rounding in float32.
+
+    Two arms over one rectangle, from identical weights. The equality is asserted against the
+    gradient's own scale rather than an absolute tolerance, because the two are summed in a
+    different order and the order moves with the thread count.
+
+    The row counts are asserted too, and they are why this test cannot pass by doing nothing:
+    the gradients of two arms that both trained on every row would also agree. The critic's
+    forward sees the whole rectangle under both.
+    """
+    model = build_model(rect.spec)
+    plant_forced(rect, FORCED_CELLS)
+    collect(rect, model)
+    config = msgspec.structs.replace(CONFIG, minibatch_size=minibatch_size)
+    every_model, skipping_model = build_model(rect.spec), build_model(rect.spec)
+    every_actor, every_critic = count_rows(every_model.actor), count_rows(every_model.critic)
+    skip_actor, skip_critic = count_rows(skipping_model.actor), count_rows(skipping_model.critic)
+    every = update_for(every_model, config, optimizer_factory=_Recording)
+    skipping = update_for(
+        skipping_model,
+        msgspec.structs.replace(config, forced_rows="critic_only"),
+        optimizer_factory=_Recording,
+    )
+
+    plain = every.step(rect.buffer, SCHEDULE)
+    skipped = skipping.step(rect.buffer, SCHEDULE)
+
+    rows = int(rect.buffer.trainable().sum())
+    choice = int(((rect.buffer.n_legal > 1) & rect.buffer.trainable()).sum())
+    assert 0 < choice < rows, "this rectangle needs both kinds of row for the test to mean any"
+    if minibatch_size < rows:
+        assert choice % minibatch_size, (
+            "this partition needs choice rows that cross a minibatch boundary, or the skip is "
+            "only ever tested on whole minibatches"
+        )
+    # The critic pass runs the critic over the rectangle and the bootstrap cycle as well, so
+    # what is compared is the epochs' share: every row of every epoch, under both arms.
+    assert sum(skip_critic[-len(skip_critic) :]) == sum(every_critic[-len(every_critic) :])
+    assert sum(every_actor) == rows * config.n_epochs
+    assert sum(skip_actor) == choice * config.n_epochs
+
+    for one, other in (
+        (every.actor_optimizer, skipping.actor_optimizer),
+        (every.critic_optimizer, skipping.critic_optimizer),
+    ):
+        assert len(one.recorded) == len(other.recorded) >= 1
+        for mine, theirs in zip(one.recorded, other.recorded, strict=True):
+            scale = float(mine.abs().max())
+            assert scale > 0.0
+            drift = float((mine - theirs).abs().max())
+            assert drift <= 1e-5 * scale, (
+                f"gradients differ by {drift:.3g} on a scale of {scale:.3g}"
+            )
+
+    # And the numbers the update reports about itself, which a reader compares across the arms.
+    assert skipped.value_loss == pytest.approx(plain.value_loss, rel=1e-6)
+    assert skipped.explained_variance == pytest.approx(plain.explained_variance, rel=1e-6)
+    # An absolute tolerance, and it is not a weaker statement. `ppo/policy_loss` is a mean over
+    # the batch of terms of unit scale after standardisation, and those terms nearly cancel, so
+    # the key reads about 1e-7 here and a relative tolerance on it is a statement about float32's
+    # last bit. What it would catch is the failure worth catching: leaving the skipped rows out
+    # of this key entirely puts it at the mean of the choice rows' advantages alone, about 0.1 on
+    # this fixture, five orders above this bound.
+    assert skipped.policy_loss == pytest.approx(plain.policy_loss, abs=1e-6)
+    for key in ("kl", "clip_fraction", "entropy", "noop_entropy", "entropy_normalised"):
+        assert getattr(skipped, key) == pytest.approx(getattr(plain, key), rel=1e-5), key
+
+
+def test_a_batch_with_no_choice_row_still_steps_both_optimizers(rect: Fixture) -> None:
+    """Under ``all`` such a batch hands the actor a gradient of zeros, and Adam does not ignore
+    one.
+
+    The step Adam takes on a zero gradient is the remains of the ones before it: the first moment
+    decays towards zero and the parameters move. If the skipping arm left the gradients at None
+    instead, torch would skip those parameters entirely and the two arms' optimizer trajectories
+    would part on the first batch that held no choice -- which on the shipped geometry is about
+    one remainder batch in five.
+
+    The whole rectangle is forced here, so every batch is that batch and the actor never runs.
+    """
+    model = build_model(rect.spec)
+    plant_forced(rect, [(cycle, slot) for cycle in range(CYCLES) for slot in range(SLOTS)])
+    collect(rect, model)
+    config = msgspec.structs.replace(CONFIG, n_epochs=2, batch_size=SAMPLES // 2)
+    every_model, skipping_model = build_model(rect.spec), build_model(rect.spec)
+    seen = count_rows(skipping_model.actor)
+    every = update_for(every_model, config)
+    skipping = update_for(
+        skipping_model, msgspec.structs.replace(config, forced_rows="critic_only")
+    )
+
+    plain = every.step(rect.buffer, SCHEDULE)
+    skipped = skipping.step(rect.buffer, SCHEDULE)
+
+    assert int(((rect.buffer.n_legal > 1) & rect.buffer.trainable()).sum()) == 0
+    assert seen == [], "the actor was run on a batch with nothing that could move"
+    assert skipped.n_optimizer_steps == plain.n_optimizer_steps == 4
+    assert skipping.model_updates == every.model_updates == 4
+    for parameter in skipping.actor_params:
+        assert parameter.grad is not None, "a missing gradient is a parameter Adam steps over"
+        assert bool((parameter.grad == 0).all())
+    for mine, theirs in zip(every.actor_params, skipping.actor_params, strict=True):
+        assert bool(torch.isfinite(theirs).all())
+        assert torch.allclose(mine.detach(), theirs.detach(), atol=1e-9), (
+            "the actor's parameters did not land where all puts them for these batches"
+        )
 
 
 def test_one_optimizer_step_per_batch_whatever_the_minibatch_size(rect: Fixture) -> None:
@@ -909,13 +1066,6 @@ def test_the_play_wait_entropy_ignores_rows_that_had_no_choice(rect: Fixture) ->
 
     def record(diagnostics: _Diagnostics, noop: list[float], legal: list[int]) -> None:
         count = len(noop)
-        result = SimpleNamespace(
-            log_probs=torch.zeros(count),
-            entropy=torch.zeros(count),
-            noop_entropy=torch.tensor(noop),
-            values=torch.zeros(count),
-            n_legal=torch.tensor(legal),
-        )
         diagnostics.minibatch(
             epoch=0,
             n=count,
@@ -923,7 +1073,9 @@ def test_the_play_wait_entropy_ignores_rows_that_had_no_choice(rect: Fixture) ->
             advantages=torch.zeros(count),
             surr=torch.zeros(count),
             dual=torch.zeros(count),
-            result=result,
+            entropy=torch.zeros(count),
+            noop_entropy=torch.tensor(noop),
+            n_legal=torch.tensor(legal),
             value_loss=torch.zeros(()),
             clip_range=0.2,
             dual_clip_c=3.0,
@@ -960,13 +1112,6 @@ def test_every_ratio_diagnostic_ignores_rows_that_could_not_move(rect: Fixture) 
     # Four rows had a choice and moved; sixteen could only wait, and their ratio is one.
     chose = [True] * 4 + [False] * 16
     ratio = torch.tensor([1.5] * 4 + [1.0] * 16)
-    result = SimpleNamespace(
-        log_probs=torch.zeros(count),
-        entropy=torch.zeros(count),
-        noop_entropy=torch.zeros(count),
-        values=torch.zeros(count),
-        n_legal=torch.tensor([40 if c else 1 for c in chose]),
-    )
     diagnostics.minibatch(
         epoch=0,
         n=count,
@@ -974,7 +1119,9 @@ def test_every_ratio_diagnostic_ignores_rows_that_could_not_move(rect: Fixture) 
         advantages=torch.zeros(count),
         surr=torch.zeros(count),
         dual=torch.zeros(count),
-        result=result,
+        entropy=torch.zeros(count),
+        noop_entropy=torch.zeros(count),
+        n_legal=torch.tensor([40 if c else 1 for c in chose]),
         value_loss=torch.zeros(()),
         clip_range=0.2,
         dual_clip_c=3.0,

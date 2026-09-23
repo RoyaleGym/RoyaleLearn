@@ -27,13 +27,12 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch import Tensor, nn
 
-from ..api.policy import Actor, ActorCritic, ActResult, BackpropResult, Critic
+from ..api.policy import Actor, ActorCritic, ActResult, BackpropResult, Critic, ObsBatch
 from .distribution import MaskedCategorical
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from torch.nn import Parameter
 
-    from ..api.policy import ObsBatch
     from ..config import ArchSpec
     from .nets import ClashTrunk, PointerPolicyHead, ValueHead
 
@@ -230,6 +229,21 @@ class SeparateActorCritic(_BaseActorCritic):
             values=self.critic.value(obs),
             n_legal=distribution.n_legal(),
         )
+
+    def distribution_on_rows(self, obs: ObsBatch, rows: Tensor) -> MaskedCategorical:
+        """The action distribution over SOME of a batch's rows, and none of the others.
+
+        What makes this cheap rather than a second full forward is the trunk: every
+        normalisation in it is per sample, so the rows in the subset get exactly the numbers a
+        forward over the whole batch would have given them, and the rows left out cost nothing
+        at all rather than costing less.
+
+        It exists here and not on the shared-trunk pairing because there it would buy nothing:
+        the critic's forward IS the actor's, so there is no subset of it to take. ``ppo.py``
+        asks for this method by name when ``ppo.forced_rows`` skips rows, and
+        ``check_consistency`` is what makes the shipped pairings reach it.
+        """
+        return self.actor.distribution(ObsBatch(*(t.index_select(0, rows) for t in obs)))
 
     def critic_parameters(self) -> Iterator[Parameter]:
         return self.critic.parameters()
