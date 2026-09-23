@@ -53,6 +53,7 @@ from .config import RunConfig, config_hash, dump_config, geometry, validate
 from .errors import PreflightError, RoyaleLearnError
 from .identity import RunIdentity, compute_identity, describe_device
 from .identity import run_id as run_id_of
+from .ladder.actors import EvalActors
 from .ladder.evaluate import EvalRunner, SeedSet, eval_seed_set
 from .ladder.eviction import HallOfFameEviction
 from .ladder.gate import WilsonGate, floor_decision
@@ -765,18 +766,6 @@ class EnvBattlePlayer:
         return 0.5 + 0.5 * float(np.sign(outcome))
 
 
-def _scripted_policy(name: str) -> Callable[[dict[str, Any], float, Any], int]:
-    """A scripted opponent behind the player's uniform signature."""
-    from .rollout.scripted import build_opponent
-
-    opponent = build_opponent(name)
-
-    def act(obs: dict[str, Any], _uniform: float, rng: Any) -> int:
-        return int(opponent.act(obs, obs["action_mask"], rng))
-
-    return act
-
-
 # ---------------------------------------------------------------------------
 # Interactive control
 # ---------------------------------------------------------------------------
@@ -1179,10 +1168,21 @@ class LearningCoordinator:
             config.env, truncation=[]
         )
         self.eval_env_spec = eval_env
+        # One object rather than three methods, so that a process which only wants to PLAY
+        # evaluation battles can build it without a coordinator behind it. `model` is the live
+        # learner itself and not a copy: the probe's question is what the policy does NOW.
+        self.eval_actors = EvalActors(
+            self.spec,
+            config.net,
+            self.snapshot_store,
+            device=self.device,
+            release_mode=config.ladder.release_mode,
+            model=self.model,
+        )
         self.player = EnvBattlePlayer(
             self.spec,
             eval_env,
-            self._eval_actor,
+            self.eval_actors,
             master_seed=config.master_seed,
             extra_modules=tuple(config.extra_component_modules),
             device=self.device,
@@ -1248,86 +1248,6 @@ class LearningCoordinator:
             return self.snapshot_store.obs_digest(member)
         except KeyError:
             return self.spec.obs_digest
-
-    def _eval_actor(self, member: str) -> Callable[[dict[str, Any], float, Any], int]:
-        """One evaluation seat's policy: a script, the live learner, or a frozen actor.
-
-        ``learner@{step}`` is the live model itself rather than a copy of it, which is the
-        whole point of the probe: the question it answers is what the policy does NOW, and the
-        most recent snapshot lags that by the candidate cadence -- four million env steps on
-        the shipped laptop profile. Nothing here mutates the model, and evaluation happens
-        between updates, so the seat reads the same weights the next update will change.
-        """
-        if member.startswith("scripted:"):
-            return _scripted_policy(member.split(":", 1)[1])
-        if is_learner(member):
-            return self._actor_policy(self.model)
-        actor = self.snapshot_store.get(member, self.device)
-        return self._actor_policy(actor)
-
-    def _actor_policy(self, actor: Any) -> Callable[[dict[str, Any], float, Any], int]:
-        """A frozen actor behind the battle player's signature.
-
-        One observation at a time and on the device the run uses. Evaluation is a few hundred
-        battles at a gate, against an update of tens of thousands of rows, so a batch of one is
-        the right trade for a path with no rectangle behind it.
-        """
-        import torch
-
-        from .learn.distribution import MaskedCategorical
-
-        def act(obs: dict[str, Any], uniform: float, _rng: Any) -> int:
-            batch = self._obs_batch(obs)
-            with torch.inference_mode():
-                distribution = MaskedCategorical(actor.logits(batch).float(), batch.mask)
-                if self.config.ladder.release_mode == "argmax":
-                    return int(distribution.mode()[0].item())
-                draw = torch.tensor([uniform], dtype=torch.float32, device=batch.mask.device)
-                return int(distribution.sample(draw)[0].item())
-
-        return act
-
-    def _obs_batch(self, obs: Mapping[str, Any]) -> Any:
-        """One environment observation as the batch of one the networks take.
-
-        Frames are stacked the way the rectangle stacks them -- the current frame first -- and
-        an evaluation battle carries no history, so the older frames are zero on the first
-        decision and the previous observations after it. It is built here rather than through
-        the codec because nothing is being stored: quantising an observation in order to
-        dequantise it again would be a round trip for its own sake.
-        """
-        import torch
-
-        spatial = np.asarray(obs["spatial"], dtype=np.float32)
-        mask = np.asarray(obs["action_mask"]).astype(bool)
-        planes = mask[1:].reshape(self.spec.hand_size, *self.spec.tiles).astype(np.float32)
-        frames = self.spec.frame_stack
-        history = getattr(self, "_eval_history", None)
-        if frames > 1:
-            if history is None or history[0].shape != spatial.shape:
-                history = [np.zeros_like(spatial) for _ in range(frames - 1)]
-                self._eval_history = history
-            spatial_stack = np.concatenate([spatial, *history], axis=0)
-            plane_stack = np.concatenate(
-                [planes, *[np.zeros_like(planes) for _ in history]], axis=0
-            )
-            history.insert(0, spatial)
-            del history[frames - 1 :]
-        else:
-            spatial_stack, plane_stack = spatial, planes
-        from .api.policy import ObsBatch
-
-        def tensor(array: np.ndarray, dtype: Any) -> Any:
-            return torch.from_numpy(np.ascontiguousarray(array)).to(
-                device=self.device, dtype=dtype
-            )[None]
-
-        return ObsBatch(
-            spatial=tensor(spatial_stack, torch.float32),
-            mask_planes=tensor(plane_stack, torch.float32),
-            vector=tensor(np.asarray(obs["vector"], dtype=np.float32), torch.float32),
-            mask=tensor(mask, torch.bool),
-        )
 
     def _next_legal_minibatch(self) -> int | None:
         """The largest legal ``minibatch_size`` below the configured one, or None.

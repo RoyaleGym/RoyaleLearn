@@ -456,7 +456,7 @@ def test_the_probe_plays_the_weights_the_learner_has_now(tmp_path: Path) -> None
 
     with coordinator(_probing_config(tmp_path)) as run:
         assert run.snapshot_store.list() == []
-        policy = run._eval_actor(learner_probe_id(run.cumulative_env_steps))
+        policy = run.eval_actors(learner_probe_id(run.cumulative_env_steps))
         with torch.no_grad():
             for parameter in run.model.parameters():
                 parameter.zero_()
