@@ -183,8 +183,8 @@
       "cls": "royalegym.replay.SavingReplayRecorder",
       "kwargs": {
         "out_dir": "runs/train-hog26-10-replays",
-        "every": 25,
-        "keep": 4,
+        "every": 1,
+        "keep": 6,
         "frame_every_tick": true
       }
     }
