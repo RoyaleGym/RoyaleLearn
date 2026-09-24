@@ -285,7 +285,12 @@ def set_gamma(reward: RewardFunction, gamma: float) -> None:
         setter(gamma)
 
 
-def default_potential_reward() -> CombinedReward:
+def default_potential_reward(
+    *,
+    crown: float = 0.2,
+    tower_hp: float = 0.1,
+    elixir: float = 0.05,
+) -> CombinedReward:
     """The shipped composition: the objective, and three potentials under it.
 
     The weights are an order of magnitude apart on purpose. The terminal term is the objective
@@ -294,12 +299,18 @@ def default_potential_reward() -> CombinedReward:
     smallest, because its job is to make the first hour of a run legible rather than to be
     optimised. The ``shaping_dominates`` alarm watches the sum of the shaping terms against the
     terminal one for exactly this reason.
+
+    The three weights are keyword arguments so a config can raise them. Every term is a potential,
+    so a larger weight changes how fast the signal arrives, not which policy is optimal. The
+    defaults are the shipped weights. train-hog26-10 ran with them, and after 610 iterations the
+    shaping was about 1% of the terminal reward: Cannon, Fireball and Log dropped to zero plays and
+    stayed there.
     """
     return PotentialCombinedReward(
         [
             (WinLossReward(draw=0.0), 1.0),
-            (PotentialCrownReward(), 0.2),
-            (PotentialTowerHPReward(), 0.1),
-            (CommittedElixirPotential(scale=10.0), 0.05),
+            (PotentialCrownReward(), crown),
+            (PotentialTowerHPReward(), tower_hp),
+            (CommittedElixirPotential(scale=10.0), elixir),
         ]
     )
