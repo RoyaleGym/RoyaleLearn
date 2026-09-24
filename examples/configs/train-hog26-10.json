@@ -178,7 +178,16 @@
     "stagger_first_reset": true,
     "overlap": false,
     "eval_workers": 2,
-    "eval_games_per_worker": 24
+    "eval_games_per_worker": 24,
+    "recorder": {
+      "cls": "royalegym.replay.SavingReplayRecorder",
+      "kwargs": {
+        "out_dir": "runs/train-hog26-10-replays",
+        "every": 25,
+        "keep": 4,
+        "frame_every_tick": true
+      }
+    }
   },
   "net": {
     "channels": 64,
