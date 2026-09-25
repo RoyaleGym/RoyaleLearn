@@ -157,10 +157,10 @@ def test_inputs_are_fitted_at_the_precision_a_run_reads_them(tmp_path: Path) -> 
     assert not np.array_equal(nudged["own_elixir"], rows["own_elixir"])
     np.savez(tmp_path / "nudged.npz", **nudged)
     config = FitConfig(hidden=[4], epochs=2, seed=5)
-    first, _ = fit_field_reference(
+    fit_field_reference(
         tmp_path / "rows.npz", ["own_elixir"], tmp_path / "a", config=config, printer=None
     )
-    second, _ = fit_field_reference(
+    fit_field_reference(
         tmp_path / "nudged.npz", ["own_elixir"], tmp_path / "b", config=config, printer=None
     )
     spec_a, state_a = read_field_model(tmp_path / "a")
