@@ -43,6 +43,7 @@ from .rollout.envspec import (
     canonical_json,
     digest_of,
     engine_binary,
+    env_value_digest,
 )
 from .version import UNKNOWN, __version__, git_describe
 
@@ -61,6 +62,7 @@ __all__ = [
     "describe_device",
     "dirty_sources",
     "engine_build",
+    "env_spec_digest_of",
     "identity_differences",
     "royalegym_provenance",
     "run_id",
@@ -155,6 +157,11 @@ class RunIdentity(msgspec.Struct, frozen=True):
     #: royaleviser, which their commits already name. None -- only a decode reaches it -- for an
     #: identity written before this field existed. See ``user_code``.
     user_code: dict[str, str] | None = None
+
+
+def env_spec_digest_of(config: RunConfig) -> str:
+    """The environment's identity: what it will be built as, not how its config was spelled."""
+    return env_value_digest(config.env, tuple(config.extra_component_modules))
 
 
 def run_id(identity: RunIdentity) -> str:
@@ -551,7 +558,7 @@ def compute_identity(
         royalegym_version=gym_version,
         royalegym_git=gym_git,
         engine_build=build,
-        env_spec_digest=config.env.digest(),
+        env_spec_digest=env_spec_digest_of(config),
         obs_digest=env_spec.obs_digest,
         action_digest=digest_of(
             {

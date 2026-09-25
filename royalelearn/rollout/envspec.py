@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import inspect
 from typing import TYPE_CHECKING, Any
 
 import msgspec
@@ -38,6 +39,7 @@ __all__ = [
     "JsonValue",
     "canonical_json",
     "digest_of",
+    "env_value_digest",
     "read_env_spec",
     "resolve_component",
 ]
@@ -88,6 +90,81 @@ def engine_binary(env_config: Any) -> str:
 def digest_of(value: Any) -> str:
     """sha256 of ``canonical_json(value)``, as hex."""
     return hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def _normal(value: Any) -> Any:
+    """A value as the identity should see it: numbers as floats, containers recursively.
+
+    ``1`` and ``1.0`` are one weight. A bool stays a bool, because ``True`` is not a weight of
+    one. A default that is some object is taken through ``msgspec.to_builtins``; one that will not
+    go is recorded by its type's name, which is deterministic across processes where a repr with
+    a memory address in it would not be -- at the cost that two such defaults of one type hash
+    alike.
+    """
+    if value is None or isinstance(value, bool | str):
+        return value
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, list | tuple):
+        return [_normal(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _normal(item) for key, item in value.items()}
+    try:
+        return _normal(msgspec.to_builtins(value))
+    except (TypeError, ValueError):
+        kind = type(value)
+        return {"__default__": f"{kind.__module__}.{kind.__qualname__}"}
+
+
+def bound_kwargs(spec: ComponentSpec, extra_modules: tuple[str, ...] = ()) -> dict[str, Any]:
+    """A component's kwargs bound to its real signature, defaults applied, numbers normalised.
+
+    What the component will actually be built with, rather than what the config happened to
+    write down. A component that cannot be resolved or inspected, or whose kwargs do not bind,
+    falls back to its spelling: it will fail when it is built, and this is not the place to
+    report that.
+    """
+    try:
+        target = spec.resolve(extra_modules)
+        signature = inspect.signature(target)
+        bound = signature.bind_partial(**spec.kwargs)
+    except (PreflightError, TypeError, ValueError):
+        return _normal(dict(spec.kwargs))
+    bound.apply_defaults()
+    out: dict[str, Any] = {}
+    for name, value in bound.arguments.items():
+        kind = signature.parameters[name].kind
+        if kind is inspect.Parameter.VAR_KEYWORD:
+            out.update(value)
+        elif kind is not inspect.Parameter.VAR_POSITIONAL:
+            out[name] = value
+    return _normal(out)
+
+
+def env_value_digest(spec: EnvFactorySpec, extra_modules: tuple[str, ...] = ()) -> str:
+    """sha256 of the environment as it will be BUILT: every component's kwargs bound first.
+
+    ``EnvFactorySpec.digest`` hashes the spelling, so ``{}`` and the same defaults written out
+    were two identities, ``1`` and ``1.0`` were two, and a default changed in the code moved the
+    objective of every config relying on it without moving any digest. The run identity and the
+    ladder's result context read this instead. Found by the train session's review, 2026-09-24.
+    """
+
+    def component(item: ComponentSpec) -> dict[str, Any]:
+        return {"cls": item.cls, "kwargs": bound_kwargs(item, extra_modules)}
+
+    return digest_of(
+        {
+            "engine": component(spec.engine),
+            "obs_builder": component(spec.obs_builder),
+            "action_parser": component(spec.action_parser),
+            "reward_fn": component(spec.reward_fn),
+            "state_mutator": component(spec.state_mutator),
+            "termination": [component(item) for item in spec.termination],
+            "truncation": [component(item) for item in spec.truncation],
+            "decision_ms": spec.decision_ms,
+        }
+    )
 
 
 def resolve_component(path: str, extra_modules: tuple[str, ...] = ()) -> Any:

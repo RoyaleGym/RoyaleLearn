@@ -1172,8 +1172,12 @@ class LearningCoordinator:
         assert self.report is not None
         ladder_dir = self.run_dir / "ladder"
         ladder_dir.mkdir(parents=True, exist_ok=True)
+        from .identity import env_spec_digest_of
+
         self.context = context_digest(
-            config.env.digest(),
+            # By value, like the identity: a config that spells the same environment differently
+            # must file its games under the same context, or a resumed run loses its own ladder.
+            env_spec_digest_of(config),
             self.spec.obs_digest,
             config.ladder.release_mode,
             self.report.build.build_digest or self.report.build.calibration_digest,

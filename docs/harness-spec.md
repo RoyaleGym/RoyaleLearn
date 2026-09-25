@@ -961,7 +961,8 @@ class RunIdentity(msgspec.Struct, frozen=True):
     royalelearn_version: str; royalelearn_git: str
     royalegym_version: str;  royalegym_git: str
     engine_build: EngineBuild
-    env_spec_digest: str              # sha256 of the canonical EnvFactorySpec JSON
+    env_spec_digest: str              # envspec.env_value_digest: each component's kwargs bound
+                                      # to its signature, defaults applied, numbers as floats
     obs_digest: str; action_digest: str
     frame_stack: int                  # obs.frame_stack; it changes the trunk's input width
     arch_digest: str
@@ -992,6 +993,16 @@ data file of its own: a digest computed here from `royalegym.protocol.data_dir()
 opinion about what the engine is running on, and a second opinion is exactly what a stale build looks
 like. When they differ, `stale_build_differences` carries the engine's own list verbatim and the run
 refuses to start (section 7.7).
+
+**The environment is identified by value, not by spelling.** `env_spec_digest`, and the ladder's
+result context, hash `envspec.env_value_digest`: each component's kwargs bound to its real signature
+with the defaults applied and numbers taken as floats. Hashing the spec as written made `"kwargs": {}`
+and the same defaults written out two identities, made `1` and `1.0` two, and -- the silent direction
+-- let a default changed in the code move the objective of every config relying on it without moving
+any digest. A bool stays a bool; a default that is an object goes through `msgspec.to_builtins`, or is
+recorded by its type's name if it will not, which is deterministic but hashes two such defaults of one
+type alike. `EnvFactorySpec.digest()` still hashes the spelling and is used for display only. Found
+by the train session's review of the 2026-09-24 placeholder commits.
 
 **The binary is the third field, and the two digests cannot stand in for it.** `build_digest` hashes
 the DATA compiled into the extension, not the Rust it was compiled from. Across a rebuild from an

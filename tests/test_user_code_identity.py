@@ -151,7 +151,8 @@ def test_a_cache_file_or_a_note_does_not_move_it(package: Any, facts: Any) -> No
     """Python source only, as stated: bytecode and prose cannot change what runs."""
     name, root = package
     before = _identity(_config(name), facts).user_code
-    (root / "__pycache__").mkdir()
+    # Computing the identity imports the package, so Python may already have made this.
+    (root / "__pycache__").mkdir(exist_ok=True)
     (root / "__pycache__" / "rewards.cpython-312.pyc").write_bytes(b"\x00\x01")
     (root / "NOTES.md").write_text("tried 0.3\n", encoding="utf-8")
     assert _identity(_config(name), facts).user_code == before
