@@ -65,10 +65,17 @@ def seeded_artifact(
         return write_from_run(run, folder, state, rows, edit=edit, probe=probe)
 
 
-def with_imitation(config: cfg.RunConfig, **block: Any) -> cfg.RunConfig:
-    """``config`` with an ``imitation`` block built from keyword arguments."""
-    import msgspec
+#: The keys of the pre-extension ``imitation`` block that moved to the ``warm_start`` section.
+WARM_START_KEYS = ("init", "actor_lr_scale")
 
-    return msgspec.structs.replace(
-        config, imitation=msgspec.convert(block, type=cfg.ImitationConfig)
-    )
+
+def with_imitation(config: cfg.RunConfig, **block: Any) -> cfg.RunConfig:
+    """``config`` with the IL sections built from keyword arguments.
+
+    ``init`` and ``actor_lr_scale`` go to ``warm_start`` and everything else to ``imitation``;
+    a section with no key given is left out, as a run without it has none.
+    """
+    from royalelearn.extensions import with_sections
+
+    warm = {key: block.pop(key) for key in WARM_START_KEYS if key in block}
+    return with_sections(config, warm_start=warm or None, imitation=block or None)

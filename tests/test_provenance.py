@@ -65,6 +65,19 @@ def test_an_uncommitted_file_in_the_package_marks_it_dirty(tmp_path: Path) -> No
     assert package_provenance(module) == f"{sha}-dirty"
 
 
+def test_an_edit_after_a_first_reading_is_seen(tmp_path: Path) -> None:
+    """Not cached: a run computes its identity after the edit, whenever the last reading was.
+
+    Plant: an ``lru_cache`` on ``package_provenance`` (where one landed by accident, taken from
+    the function below it) makes the second reading the first one's."""
+    root = _repo(tmp_path / "repo")
+    module = _package(root)
+    sha = _commit(root)
+    assert package_provenance(module) == sha
+    (root / "addon" / "later.py").write_text("y = 3\n", encoding="utf-8")
+    assert package_provenance(module) == f"{sha}-dirty"
+
+
 def test_a_package_inside_someone_elses_repository_is_unknown(tmp_path: Path) -> None:
     """The review's case: an installed copy in a checkout's virtual environment.
 

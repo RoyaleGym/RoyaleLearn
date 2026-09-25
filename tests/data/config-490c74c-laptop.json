@@ -3,7 +3,7 @@
   "run_name": "royalelearn",
   "runs_dir": "runs",
   "master_seed": 20260921,
-  "profile": "workstation",
+  "profile": "laptop",
   "timestep_limit": 100000000,
   "env": {
     "engine": {
@@ -49,8 +49,8 @@
   },
   "rollout": {
     "source": "process",
-    "workers": 12,
-    "games_per_worker": 64,
+    "workers": 3,
+    "games_per_worker": 32,
     "shards_per_worker": 2,
     "spin_us": 100,
     "round_timeout_s": 30.0,
@@ -64,12 +64,12 @@
     "recorder": null
   },
   "net": {
-    "channels": 96,
-    "blocks": 8,
+    "channels": 64,
+    "blocks": 4,
     "norm_groups": 8,
     "vector_embed": 32,
     "value_hidden": 256,
-    "card_embed": 96,
+    "card_embed": 64,
     "coord_conv": true,
     "separate_trunks": true,
     "policy_head": "pointer",
@@ -81,9 +81,9 @@
   },
   "ppo": {
     "n_epochs": 3,
-    "timesteps_per_iteration": 131072,
-    "batch_size": 16384,
-    "minibatch_size": 2048,
+    "timesteps_per_iteration": 32768,
+    "batch_size": 4096,
+    "minibatch_size": 256,
     "clip_range": 0.2,
     "dual_clip_c": 3.0,
     "vf_coef": 1.0,
@@ -144,7 +144,7 @@
     "pfsp_power": 2.0,
     "pfsp_uniform_floor": 0.2,
     "weight_floor_scale": 0.01,
-    "candidate_every_env_steps": 2000000,
+    "candidate_every_env_steps": 4000000,
     "floor_admit_every_env_steps": 50000000,
     "pool_working_size": 48,
     "eval_seed_count": 500,
@@ -221,6 +221,12 @@
     "transitivity_residual": 0.1,
     "capacity_ratio": 1.5,
     "gate_failures": 5,
+    "imitation_ref_kl_warn": 1.0,
+    "imitation_lambda_saturated_patience": 10,
+    "imitation_handoff_window": 20,
+    "imitation_handoff_kl": 0.05,
+    "imitation_handoff_clip": 0.3,
+    "imitation_ev_at_unfreeze": 0.3,
     "disabled": [],
     "patience_overrides": {},
     "severity_overrides": {}
@@ -233,5 +239,6 @@
     "ram_budget_mb": 6500,
     "run_mask_disagreement_gate": true,
     "vram_headroom_mb": 256
-  }
+  },
+  "imitation": null
 }

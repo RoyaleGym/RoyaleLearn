@@ -14,8 +14,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import msgspec
+
 from . import config as cfg
 from .determinism import apply_cublas_workspace_config
+from .extensions import ExtensionBase, Provider, with_sections
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     import numpy as np
@@ -26,6 +29,8 @@ __all__ = [
     "ARCH",
     "PREFLIGHT",
     "SEED",
+    "StubExtension",
+    "StubSection",
     "StubTerm",
     "actor_state",
     "build_model",
@@ -33,6 +38,8 @@ __all__ = [
     "identity_facts",
     "learner_rows",
     "tiny_config",
+    "use_extensions",
+    "with_sections",
 ]
 
 #: What preflight is told for a test: every gate still runs, on a sample a test can afford.
@@ -184,14 +191,19 @@ class StubTerm:
     ``keep_state`` makes it keep its call count in the checkpoint, for tests of the state layout.
     """
 
-    extension = "stub"
     format_version = 1
     scaling = "rows"
     measure_grad_ratio = True
 
     def __init__(
-        self, coefficient: float = 0.0, *, name: str = "inert", keep_state: bool = False
+        self,
+        coefficient: float = 0.0,
+        *,
+        name: str = "inert",
+        keep_state: bool = False,
+        extension: str = "stub",
     ) -> None:
+        self.extension = extension
         self.name = name
         self.coefficient = float(coefficient)
         self.keep_state = keep_state
@@ -215,9 +227,9 @@ class StubTerm:
         explained_variance: float,
         grad_ratio: float | None,
     ) -> dict[str, float]:
-        fields = {f"stub/{self.name}/calls": float(self.calls)}
+        fields = {f"{self.extension}/{self.name}/calls": float(self.calls)}
         if grad_ratio is not None:
-            fields[f"stub/{self.name}/grad_ratio"] = grad_ratio
+            fields[f"{self.extension}/{self.name}/grad_ratio"] = grad_ratio
         return fields
 
     def state(self) -> dict[str, Any]:
@@ -225,3 +237,65 @@ class StubTerm:
 
     def load_state(self, state: Any) -> None:
         self.calls = int(state["calls"])
+
+
+class StubSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
+    """The section of ``StubExtension``: one ``StubTerm`` at this coefficient, or none."""
+
+    coefficient: float | None = None
+    keep_state: bool = False
+    #: A threshold that belongs in no identity, as every section's alarms.
+    alarms: dict[str, float] = {}
+
+
+class StubExtension(ExtensionBase):
+    """An extension for tests: its section adds one ``StubTerm`` and its metric keys.
+
+    ``package`` is the package it claims to be provided by, for the tests of what the identity
+    records and what is watched for edits; by default RoyaleLearn itself.
+    """
+
+    section_type = StubSection
+
+    def __init__(self, name: str = "stub", *, package: Any = None) -> None:
+        import royalelearn
+
+        self.name = name
+        self.package = package if package is not None else royalelearn
+
+    def actor_terms(self, section: StubSection, ctx: Any) -> tuple[StubTerm, ...]:
+        if section.coefficient is None:
+            return ()
+        return (
+            StubTerm(section.coefficient, keep_state=section.keep_state, extension=self.name),
+        )
+
+    def metric_schema(self, section: StubSection) -> Any:
+        from .metrics.schema import MetricSpec, SchemaContribution, pattern
+
+        spec = MetricSpec(unit="count", description="A stub term's calls or gradient ratio.")
+        return SchemaContribution(
+            patterns=(
+                pattern(f"{self.name}/{{term}}/calls", spec),
+                pattern(f"{self.name}/{{term}}/grad_ratio", spec),
+            )
+        )
+
+
+def use_extensions(monkeypatch: Any, extensions: dict[str, Any]) -> None:
+    """Make ``extensions`` the providers of their names for one test, through ``monkeypatch``.
+
+    Discovery of every other key is unchanged. What a test gets is what an installed package's
+    entry point would give it, recorded as distribution ``"test"``, and nothing is written to
+    the environment's install metadata.
+    """
+    from . import extensions as registry
+
+    real = registry._discover
+
+    def discover(names: set[str]) -> tuple[dict[str, Provider], list[str]]:
+        mine = {name: Provider(extensions[name], "test", False) for name in names & set(extensions)}
+        found, problems = real(names - set(extensions))
+        return {**found, **mine}, problems
+
+    monkeypatch.setattr(registry, "_discover", discover)

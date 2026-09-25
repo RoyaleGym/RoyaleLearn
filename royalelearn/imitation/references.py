@@ -30,9 +30,9 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
     from ..api.policy import ObsBatch
     from ..api.rollout import EnvSpec
-    from ..config import ImitationConfig
     from ..ladder.snapshots import SnapshotSpec
     from ..learn.rows import RowCodec
+    from .config import ImitationSection
 
 __all__ = ["FieldMLPReference", "SnapshotReference", "build_references"]
 
@@ -142,7 +142,7 @@ def _field_mlp(name: str, folder: Any, spec: EnvSpec, device: Any) -> FieldMLPRe
 
 
 def build_references(
-    imitation: ImitationConfig | None,
+    imitation: ImitationSection | None,
     *,
     spec: EnvSpec,
     current: SnapshotSpec,
@@ -158,7 +158,7 @@ def build_references(
     does not compute the function it was saved as would anchor the run to something nobody
     trained.
     """
-    from ..config import FieldMLPReferenceSpec, SnapshotReferenceSpec
+    from .config import FieldMLPReferenceSpec, SnapshotReferenceSpec
 
     if imitation is None:
         return {}

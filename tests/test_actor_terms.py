@@ -65,6 +65,31 @@ def test_the_inert_comparison_can_see_a_millionth(tmp_path: Path) -> None:
     assert plain[1] != leaking[1]
 
 
+class _OwnForward(StubTerm):
+    """Shaped like demonstration cloning, the term the protocol has to be able to express: it
+    runs the LIVE actor forward itself, with the graph attached, on rows it chose, and its raw
+    value is a mean of its own, so the update scales it by the minibatch weight."""
+
+    scaling = "minibatch"
+
+    def loss(self, inputs: Any, *, epoch: int, measure: bool) -> tuple[float, Any]:
+        self.calls += 1
+        distribution = inputs.actor.distribution(inputs.obs)
+        return self.coefficient, -distribution.log_probs[:, 0].mean()
+
+
+def test_a_term_can_train_the_live_actor_through_a_forward_of_its_own(tmp_path: Path) -> None:
+    """At zero it is the run without it, bit for bit, though it ran a whole forward per
+    minibatch; above zero its gradient reaches the actor, so the weights move."""
+    plain = _three(tiny_config(tmp_path / "plain"))
+    silent = _three(tiny_config(tmp_path / "silent"), extra_actor_terms=(_OwnForward(0.0),))
+    pulling = _three(tiny_config(tmp_path / "pull"), extra_actor_terms=(_OwnForward(0.5),))
+    assert _same(plain[0], silent[0])
+    assert plain[1] == silent[1]
+    assert not _same(plain[0], pulling[0])
+    assert all(row["stub/inert/calls"] > 0 for row in silent[2])
+
+
 def _update_state(checkpoint: Path) -> dict[str, Any]:
     (path,) = list(checkpoint.rglob(PPOUpdate.STATE_FILE))
     return json.loads(path.read_text(encoding="utf-8"))

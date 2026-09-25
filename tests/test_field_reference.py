@@ -15,10 +15,10 @@ import msgspec
 import numpy as np
 import pytest
 
-from royalelearn import config as cfg
 from royalelearn.artifacts import artifact_digest
 from royalelearn.errors import PreflightError
 from royalelearn.imitation.artifacts import read_field_model
+from royalelearn.imitation.config import ImitationSection
 from royalelearn.imitation.split import is_validation
 
 torch = pytest.importorskip("torch")
@@ -139,7 +139,7 @@ def test_a_run_anchors_its_hold_rate_to_a_fitted_model(tmp_path: Path) -> None:
     assert row["imitation/timing/kl"] > 0.0
     assert row["imitation/timing/kl_noop"] == pytest.approx(row["imitation/timing/kl"])
     assert "imitation/timing/kl_card" not in row
-    assert msgspec.convert(block, cfg.ImitationConfig).regularisers[0].factor == "noop_marginal"
+    assert msgspec.convert(block, ImitationSection).regularisers[0].factor == "noop_marginal"
 
 
 def test_inputs_are_fitted_at_the_precision_a_run_reads_them(tmp_path: Path) -> None:

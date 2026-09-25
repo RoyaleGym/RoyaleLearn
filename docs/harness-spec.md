@@ -975,9 +975,9 @@ class RunIdentity(msgspec.Struct, frozen=True):
     torch_version: str
     device_kind: str                  # "cuda:NVIDIA GeForce RTX 3050 Laptop GPU:sm_86" | "cpu:x86_64"
     user_code: dict[str, str] | None = None  # {user package: sha256 of its .py source}
-    imitation_digest: str | None = None     # section 19.3: the imitation block, files by digest;
-                                      # the struct encodes with omit_defaults, so a run without
-                                      # the block keeps the run id it had before the field
+    extensions: dict[str, ExtensionRecord] | None = None  # section 19.3: each section by
+                                      # content; the struct encodes with omit_defaults, so a run
+                                      # without one keeps the run id it had before the field
 
 run_id = sha256(msgspec.json.encode(identity, order="deterministic")).hexdigest()[:16]
 ```
@@ -4042,26 +4042,31 @@ It lands as six packages, named here so that a config, a commit and a test can r
 
 | Package | What | Section |
 | --- | --- | --- |
-| L1 | the `imitation` config block, its identity, actor init and the freeze | 19.1-19.5 |
+| L1 | the `warm_start` and `imitation` config sections, their identity, actor init and the freeze | 19.1-19.5 |
 | L2 | reference policies, the reference-KL regulariser and its adaptive coefficient | 19.6-19.9 |
 | L3 | the replay driver: a timed log through the run's environment | 19.11 |
 | L4 | demonstration shards: the stored rows, keyed to the engine | 19.10 |
 | L5 | `royalelearn bc`, `royalelearn fit-field-reference` and the `demo_bc` regulariser | 19.12 |
 | L6 | checkpoint export and `royalelearn evaluate` | 19.13 |
 
-When the block is absent nothing in this section runs, and a run's identity and `run_id` are exactly
-what they were before the block existed. That is tested.
+When the sections are absent nothing in this section runs, and a run's config.json, identity and
+`run_id` are exactly what they were before they existed. That is tested.
 
-### 19.1 The `imitation` block
+### 19.1 The `warm_start` and `imitation` sections
 
-An optional top-level section of `RunConfig`. Top level rather than inside `ppo`, because most of it
-is not about the PPO update (an init, a set of reference files), and because `algo_digest` hashes
-the `ppo` block whole: nesting would move the `algo_digest` of every run that has no block.
+Two optional top-level config sections, each owned by an extension (`royalelearn.extensions`): a key
+RoyaleLearn does not own is looked up among the installed extensions, and one nothing provides is
+refused by name. Top level rather than inside `ppo`, because most of it is not about the PPO update
+(an init, a set of reference files), and because `algo_digest` hashes the `ppo` block whole. Each
+section carries its own alarm thresholds, which stay out of the identity as the core's do.
 
 ```json
-"imitation": {
+"warm_start": {
   "init": {"path": "artifacts/bc-v1", "sha256": "<artifact digest>", "self_test_atol": 1e-5},
   "actor_lr_scale": {"kind": "piecewise", "points": [[0, 0.0], [82080, 0.25], [98496, 1.0]]},
+  "alarms": {"handoff_window": 20, "handoff_kl": 0.05, "handoff_clip": 0.3, "ev_at_unfreeze": 0.3}
+},
+"imitation": {
   "references": {
     "bc":     {"kind": "snapshot",  "path": "artifacts/bc-v1",     "sha256": "<artifact digest>"},
     "timing": {"kind": "field_mlp", "path": "artifacts/timing-v1", "sha256": "<artifact digest>"}
@@ -4072,7 +4077,8 @@ the `ppo` block whole: nesting would move the `algo_digest` of every run that ha
      "budget": {"kind": "piecewise", "points": [[0, 0.1], [547200, 0.2], [1368000, 1.0]]},
      "coef": {"start": 0.3, "max": 10.0, "up": 1.5, "down": 1.5, "band": 1.5,
               "min": {"kind": "piecewise", "points": [[0, 0.3], [547200, 0.001]]}}}
-  ]
+  ],
+  "alarms": {"ref_kl_warn": 1.0, "lambda_saturated_patience": 10}
 }
 ```
 
@@ -4115,13 +4121,15 @@ part against the manifest when it opens it.
 
 ### 19.3 Identity
 
-`RunIdentity` gains `imitation_digest: str | None = None`, and the struct is encoded with
-`omit_defaults`, so a run without the block encodes exactly as before and keeps its `run_id`. Every
-other field is always set when an identity is computed, so `omit_defaults` removes nothing else.
+`RunIdentity` has `extensions: dict[str, ExtensionRecord] | None = None`, one record per section the
+run uses, and the struct is encoded with `omit_defaults`, so a run without a section encodes exactly
+as before and keeps its `run_id`. Every other field is always set when an identity is computed, so
+`omit_defaults` removes nothing else.
 
-`imitation_digest` is the digest of the block with every `path` removed. The block carries each
-file's digest, so the content of every referenced file is in the identity, and moving a folder is
-not a new experiment.
+A record's `digest` is of the section with every `path` and its `alarms` removed. The section carries
+each file's digest, so the content of every referenced file is in the identity, and moving a folder
+is not a new experiment. A section provided by an installed package also records the package's
+distribution, `__version__` and commit; a package whose commit cannot be named refuses the run.
 
 At every start, fresh or resumed, each referenced folder is hashed and compared with the digest the
 config states, and a difference is refused with the path, the stated digest and the digest found.
@@ -4170,7 +4178,7 @@ The critic trains normally on the frozen policy's rollouts. The freeze length is
 schedule, not triggered by the critic's explained variance, so a resume lands in the same place.
 `ppo/ev_at_unfreeze` is the explained variance of the first iteration after a frozen stretch,
 published on that row, and the `critic_unready` alarm warns when it is under
-`alarms.imitation_ev_at_unfreeze` (0.3).
+`warm_start.alarms.ev_at_unfreeze` (0.3).
 
 Between zero and one the scale is only a learning-rate multiplier.
 
@@ -4268,12 +4276,12 @@ Keys, each present only when its regulariser is configured:
 
 Alarms, all WARN, because a halted treatment run would be censored out of any comparison it is in:
 
-- `imitation_ref_kl_high`: a regulariser's `kl` above `alarms.imitation_ref_kl_warn` (1.0 nats).
-- `imitation_lambda_saturated`: `lambda_at_max` for `alarms.imitation_lambda_saturated_patience`
+- `imitation_ref_kl_high`: a regulariser's `kl` above `imitation.alarms.ref_kl_warn` (1.0 nats).
+- `imitation_lambda_saturated`: `lambda_at_max` for `imitation.alarms.lambda_saturated_patience`
   (10) iterations. The reward is pulling harder than the anchor can hold.
-- `actor_handoff`: in the first `alarms.imitation_handoff_window` (20) unfrozen iterations,
-  `ppo/kl` above `alarms.imitation_handoff_kl` (0.05) or `ppo/clip_fraction` above
-  `alarms.imitation_handoff_clip` (0.3). The existing backoff acts on its own; this says why.
+- `actor_handoff`: in the first `warm_start.alarms.handoff_window` (20) unfrozen iterations,
+  `ppo/kl` above `warm_start.alarms.handoff_kl` (0.05) or `ppo/clip_fraction` above
+  `warm_start.alarms.handoff_clip` (0.3). The existing backoff acts on its own; this says why.
 - `critic_unready` (19.5).
 - `kl_dead` does not fire on a frozen iteration: its key is absent there.
 

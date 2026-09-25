@@ -260,7 +260,7 @@ What goes into it, and roughly why:
 | ladder hash | who the learner plays |
 | both package versions and their git descriptions | the code |
 | the Python source of any package your own components come from, by hash | your code, such as a reward in `mybot` |
-| the `imitation` block, with every file it names by content (only when the block is present) | what the run learns from besides its own battles |
+| each extension section the run uses (`warm_start`, `imitation`), with every file it names by content, and the commit of the package that provides it | what the run learns from besides its own battles |
 
 Recorded but deliberately **not** in it: the run name, the output directory, the timestep
 limit, metric sinks, checkpoint settings, alarm thresholds, and the collection scheduling

@@ -262,6 +262,8 @@ class ScheduleSet:
 
     @classmethod
     def from_config(cls, config: RunConfig) -> ScheduleSet:
+        from ..extensions import actor_lr_scale_of
+
         return cls(
             gamma=build_schedule(config.advantage.gamma),
             ent_coef=build_schedule(config.ppo.ent_coef),
@@ -273,9 +275,7 @@ class ScheduleSet:
                 lr_critic=config.ppo.lr_critic,
             ),
             actor_lr_scale=(
-                build_schedule(config.imitation.actor_lr_scale)
-                if config.imitation is not None and config.imitation.actor_lr_scale is not None
-                else None
+                build_schedule(scale) if (scale := actor_lr_scale_of(config)) is not None else None
             ),
         )
 

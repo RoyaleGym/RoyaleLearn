@@ -338,16 +338,16 @@ is information, not a fault. See [ladder.md](ladder.md).
 
 ### 3.6 Learning from demonstrations (four alarms)
 
-These fire only on a run with an `imitation` block: a run that started from a cloned policy, or
-that is held near a reference policy while it learns. Section 19 of
-[harness-spec.md](harness-spec.md) describes the block. All four warn and none stops the run,
+These fire only on a run with a `warm_start` or `imitation` section: a run that started from a
+cloned policy, or that is held near a reference policy while it learns. Section 19 of
+[harness-spec.md](harness-spec.md) describes the sections. All four warn and none stops the run,
 because a run stopped early would drop out of any comparison it is part of.
 
 | Alarm | Reads | Fires when | Severity, patience |
 | --- | --- | --- | --- |
-| `imitation_ref_kl_high` | `imitation/<name>/kl` | a regulariser's KL above `alarms.imitation_ref_kl_warn` (1.0 nats) | warn, 1 |
-| `imitation_lambda_saturated` | `imitation/<name>/lambda_at_max` | the anchor's coefficient sat at its ceiling | warn, `alarms.imitation_lambda_saturated_patience` (10) |
-| `actor_handoff` | `ppo/kl`, `ppo/clip_fraction`, `ppo/iterations_since_unfreeze` | in the first `alarms.imitation_handoff_window` (20) iterations after a frozen actor starts to move, KL above 0.05 or clip fraction above 0.3 | warn, 1 |
+| `imitation_ref_kl_high` | `imitation/<name>/kl` | a regulariser's KL above `imitation.alarms.ref_kl_warn` (1.0 nats) | warn, 1 |
+| `imitation_lambda_saturated` | `imitation/<name>/lambda_at_max` | the anchor's coefficient sat at its ceiling | warn, `imitation.alarms.lambda_saturated_patience` (10) |
+| `actor_handoff` | `ppo/kl`, `ppo/clip_fraction`, `ppo/iterations_since_unfreeze` | in the first `warm_start.alarms.handoff_window` (20) iterations after a frozen actor starts to move, KL above 0.05 or clip fraction above 0.3 | warn, 1 |
 | `critic_unready` | `ppo/ev_at_unfreeze` | the critic's explained variance when the actor was unfrozen, below 0.3 | warn, 1 |
 
 **`imitation_ref_kl_high`.** The policy has moved far from the reference it is anchored to. That

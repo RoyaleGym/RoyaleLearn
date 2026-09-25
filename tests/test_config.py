@@ -155,8 +155,12 @@ def test_the_hash_moves_when_a_value_does() -> None:
     ],
 )
 def test_a_typo_is_refused_at_every_level(document: str) -> None:
-    with pytest.raises(msgspec.ValidationError):
+    """Inside a block, by the decoder. At the top level a key RoyaleLearn does not own is read as
+    an extension's section, and one no installed package provides is refused by name."""
+    with pytest.raises((msgspec.ValidationError, PreflightError)) as refused:
         C.load_config(document)
+    if isinstance(refused.value, PreflightError):
+        assert "is not a RoyaleLearn config key" in str(refused.value)
 
 
 def test_a_document_overlays_the_profile_it_names() -> None:

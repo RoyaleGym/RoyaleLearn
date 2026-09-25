@@ -28,6 +28,7 @@ import pytest
 
 from royalelearn import config as cfg
 from royalelearn.errors import PreflightError
+from royalelearn.imitation.config import CoefSpec, ReferenceKLSpec, RowCondition
 from royalelearn.imitation.regularisers import (
     AdaptiveCoefficient,
     ReferenceKL,
@@ -130,7 +131,7 @@ def test_log1mexp_holds_its_precision_at_both_ends() -> None:
 
 def _coef(**overrides: Any) -> AdaptiveCoefficient:
     spec = {"start": 1.0, "max": 10.0, "up": 2.0, "down": 4.0, "band": 1.5, **overrides}
-    return AdaptiveCoefficient(msgspec.convert(spec, type=cfg.CoefSpec))
+    return AdaptiveCoefficient(msgspec.convert(spec, type=CoefSpec))
 
 
 @pytest.mark.parametrize(
@@ -171,8 +172,8 @@ def test_a_row_is_left_out_only_when_every_condition_holds(env_spec: Any) -> Non
 
     clock = field_slice(env_spec, "clock")
     conditions = [
-        msgspec.convert({"field": "clock", "index": 1, "op": ">=", "value": 0.5}, cfg.RowCondition),
-        msgspec.convert({"field": "clock", "index": 2, "op": "<=", "value": 0.5}, cfg.RowCondition),
+        msgspec.convert({"field": "clock", "index": 1, "op": ">=", "value": 0.5}, RowCondition),
+        msgspec.convert({"field": "clock", "index": 2, "op": "<=", "value": 0.5}, RowCondition),
     ]
     rows = RowFilter(conditions, env_spec, what="test")
     vector = torch.zeros(4, env_spec.vector_size)
@@ -183,11 +184,11 @@ def test_a_row_is_left_out_only_when_every_condition_holds(env_spec: Any) -> Non
 
 def test_a_condition_outside_its_field_is_refused(env_spec: Any) -> None:
     beyond = msgspec.convert(
-        {"field": "clock", "index": 3, "op": "<", "value": 0}, cfg.RowCondition
+        {"field": "clock", "index": 3, "op": "<", "value": 0}, RowCondition
     )
     with pytest.raises(PreflightError, match="outside field 'clock'"):
         RowFilter([beyond], env_spec, what="test")
-    unknown = msgspec.convert({"field": "no_such", "op": "<", "value": 0}, cfg.RowCondition)
+    unknown = msgspec.convert({"field": "no_such", "op": "<", "value": 0}, RowCondition)
     with pytest.raises(PreflightError, match="no field named 'no_such'"):
         RowFilter([unknown], env_spec, what="test")
 
@@ -215,7 +216,7 @@ def _term(
             "budget": {"kind": "constant", "value": budget},
             "coef": {"start": start, **coef},
         },
-        type=cfg.ReferenceKLSpec,
+        type=ReferenceKLSpec,
     )
     return ReferenceKL(regulariser, reference, spec)
 

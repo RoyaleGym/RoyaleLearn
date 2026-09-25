@@ -1,9 +1,10 @@
-"""Section 19.1-19.4: the ``imitation`` block, its identity, its artifacts and the actor init.
+"""Section 19.1-19.4: the ``imitation`` and ``warm_start`` sections, their identity, their
+artifacts and the actor init.
 
 The properties, each held by a test that has been seen failing on a plant:
 
-- a run without the block encodes its identity exactly as before, so no ``run_id`` moves;
-- the block's digest follows the files' content and not where they sit;
+- a run without the sections encodes its identity exactly as before, so no ``run_id`` moves;
+- a section's digest follows the files' content and not where they sit;
 - a folder whose content is not the digest the config states is refused at every start, and
   every stale folder is named at once;
 - an init loads the artifact into the actor, leaves the critic as the seed built it, and refuses
@@ -27,7 +28,7 @@ from royalelearn import config as cfg
 from royalelearn import identity as I
 from royalelearn.artifacts import artifact_digest, read_actor_artifact
 from royalelearn.errors import IdentityMismatch, PreflightError
-from royalelearn.imitation.init import verify_imitation_files
+from royalelearn.extensions import active_extensions, with_sections
 from royalelearn.rollout.envspec import canonical_json
 from test_coordinator import coordinator, tiny_config
 from test_user_code_identity import facts  # noqa: F401 - a fixture
@@ -54,7 +55,10 @@ def _block(**overrides: Any) -> dict[str, Any]:
 
 
 def _config(**block: Any) -> cfg.RunConfig:
-    return cfg.load_config({"imitation": _block(**block)})
+    """The ``imitation`` section from ``_block``; ``init`` and ``actor_lr_scale`` go to
+    ``warm_start``, the section that owns them."""
+    warm = {key: block.pop(key) for key in ("init", "actor_lr_scale") if key in block}
+    return cfg.load_config({"imitation": _block(**block), **({"warm_start": warm} if warm else {})})
 
 
 # -- the block -----------------------------------------------------------------------------
@@ -137,15 +141,15 @@ def test_without_the_block_the_identity_encodes_exactly_as_before(facts: Any) ->
     """The encoding of every field that existed before, in their order, and nothing else.
 
     Plant: without ``omit_defaults`` on ``RunIdentity`` the encoding gains
-    ``"imitation_digest":null`` and every run id in every run directory would move.
+    ``"extensions":null`` and every run id in every run directory would move.
     """
     identity = _identity(cfg.RunConfig(env=cfg.default_env_spec(cfg.MOCK_ENGINE)), facts)
-    assert identity.imitation_digest is None
-    before = [name for name in I.RunIdentity.__struct_fields__ if name != "imitation_digest"]
+    assert identity.extensions is None
+    before = [name for name in I.RunIdentity.__struct_fields__ if name != "extensions"]
     Before = msgspec.defstruct("Before", [(name, Any) for name in before])
     old = Before(**{name: getattr(identity, name) for name in before})
     assert canonical_json(identity) == canonical_json(old)
-    assert b"imitation_digest" not in canonical_json(identity)
+    assert b"extensions" not in canonical_json(identity)
 
 
 def test_the_block_digest_follows_content_not_paths(facts: Any) -> None:  # noqa: F811
@@ -175,11 +179,14 @@ def test_the_block_digest_follows_content_not_paths(facts: Any) -> None:  # noqa
         ),
         env=env,
     )
-    digest = _identity(base, facts).imitation_digest
-    assert digest is not None
-    assert _identity(moved, facts).imitation_digest == digest
-    assert _identity(other_file, facts).imitation_digest != digest
-    assert _identity(other_budget, facts).imitation_digest != digest
+    def digest(config: cfg.RunConfig) -> str:
+        records = _identity(config, facts).extensions
+        assert records is not None
+        return records["imitation"].digest
+
+    assert digest(moved) == digest(base)
+    assert digest(other_file) != digest(base)
+    assert digest(other_budget) != digest(base)
 
 
 def test_a_resume_refuses_a_block_added_or_changed(facts: Any) -> None:  # noqa: F811
@@ -188,7 +195,7 @@ def test_a_resume_refuses_a_block_added_or_changed(facts: Any) -> None:  # noqa:
     env = cfg.default_env_spec(cfg.MOCK_ENGINE)
     without = _identity(cfg.RunConfig(env=env), facts)
     added = _identity(msgspec.structs.replace(_config(), env=env), facts)
-    assert set(I.identity_differences(without, added)) == {"imitation_digest"}
+    assert set(I.identity_differences(without, added)) == {"extensions"}
 
     class _Manifest:
         identity = without
@@ -196,7 +203,7 @@ def test_a_resume_refuses_a_block_added_or_changed(facts: Any) -> None:  # noqa:
 
     with pytest.raises(IdentityMismatch) as refused:
         check_resume(_Manifest(), added, {})  # type: ignore[arg-type]
-    assert "imitation_digest" in refused.value.differences
+    assert "extensions" in refused.value.differences
 
 
 # -- artifact digests ----------------------------------------------------------------------
@@ -230,17 +237,20 @@ def test_the_artifact_digest_covers_every_file_and_not_the_location(tmp_path: Pa
 def test_every_stale_digest_is_named_at_once(tmp_path: Path) -> None:
     one = _folder(tmp_path / "one", {"a": b"1"})
     two = _folder(tmp_path / "two", {"a": b"2"})
-    block = cfg.ImitationConfig(
-        init=cfg.InitSpec(path=str(one), sha256="0" * 64),
-        references={
-            "bc": cfg.SnapshotReferenceSpec(path=str(two), sha256="0" * 64),
-            "ok": cfg.SnapshotReferenceSpec(path=str(one), sha256=artifact_digest(one)),
+    config = with_sections(
+        cfg.RunConfig(),
+        warm_start={"init": {"path": str(one), "sha256": "0" * 64}},
+        imitation={
+            "references": {
+                "bc": {"kind": "snapshot", "path": str(two), "sha256": "0" * 64},
+                "ok": {"kind": "snapshot", "path": str(one), "sha256": artifact_digest(one)},
+            }
         },
     )
-    with pytest.raises(PreflightError) as refused:
-        verify_imitation_files(block)
-    message = str(refused.value)
-    assert "imitation.init" in message and "imitation.references.bc" in message
+    message = "\n".join(
+        problem for a in active_extensions(config) for problem in a.extension.verify(a.section)
+    )
+    assert "warm_start.init" in message and "imitation.references.bc" in message
     assert "imitation.references.ok" not in message
     assert artifact_digest(two) in message
 
@@ -294,7 +304,7 @@ def test_an_init_loads_the_actor_and_leaves_the_critic_as_seeded(tmp_path: Path)
         assert any(not torch.equal(loaded[n], actor_seeded[n]) for n in loaded)
         for name, tensor in run.model.critic.state_dict().items():
             assert torch.equal(tensor, critic_seeded[name]), name
-        assert run.init_self_test == 0.0
+        assert run.extension_facts["warm_start"]["self_test"] == 0.0
 
 
 def test_an_artifact_whose_weights_no_longer_match_its_probe_is_refused(tmp_path: Path) -> None:
@@ -369,9 +379,15 @@ def test_a_resume_keeps_the_checkpoint_weights_and_still_checks_the_digest(tmp_p
         run.iterate()
         saved = run.checkpoint()
         trained = actor_state(run)
-    with coordinator(config, resume=saved) as resumed:
+    said: list[str] = []
+    with coordinator(config, resume=saved, printer=said.append) as resumed:
         for name, tensor in actor_state(resumed).items():
             assert torch.equal(tensor, trained[name]), name
+        # Preflight deferred its predicted ratio guard to the section, and on a resume the
+        # section measures it on the checkpoint's actor rather than skipping it.
+        assert "ratio_precision" in resumed.extension_facts["warm_start"]
+        assert "self_test" not in resumed.extension_facts["warm_start"]
+    assert any("measured on" in line and "probe rows" in line for line in said)
     (folder / "spec.json").write_bytes((folder / "spec.json").read_bytes() + b" ")
     with pytest.raises(PreflightError, match="has digest"), coordinator(config, resume=saved):
         pass
@@ -418,9 +434,7 @@ def test_preflight_defers_the_ratio_guard_to_the_init(env_spec: Any) -> None:
     )
     with pytest.raises(PreflightError):
         _ratio_precision_gate(heavy, env_spec, lambda _line: None)
-    initialised = msgspec.structs.replace(
-        heavy, imitation=cfg.ImitationConfig(init=cfg.InitSpec(path="x", sha256="y"))
-    )
+    initialised = with_sections(heavy, warm_start={"init": {"path": "x", "sha256": "y"}})
     said: list[str] = []
     _ratio_precision_gate(initialised, env_spec, said.append)
-    assert said and "probe rows" in said[0]
+    assert said and "measured by warm_start on the loaded actor" in said[0]

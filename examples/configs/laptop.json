@@ -221,12 +221,6 @@
     "transitivity_residual": 0.1,
     "capacity_ratio": 1.5,
     "gate_failures": 5,
-    "imitation_ref_kl_warn": 1.0,
-    "imitation_lambda_saturated_patience": 10,
-    "imitation_handoff_window": 20,
-    "imitation_handoff_kl": 0.05,
-    "imitation_handoff_clip": 0.3,
-    "imitation_ev_at_unfreeze": 0.3,
     "disabled": [],
     "patience_overrides": {},
     "severity_overrides": {}
@@ -239,6 +233,5 @@
     "ram_budget_mb": 6500,
     "run_mask_disagreement_gate": true,
     "vram_headroom_mb": 256
-  },
-  "imitation": null
+  }
 }

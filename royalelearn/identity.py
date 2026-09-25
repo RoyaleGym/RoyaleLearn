@@ -15,8 +15,9 @@ What is in it, and why:
     algo_digest                                                 the PPO, GAE and schedule settings
     rollout_digest                                              workers, games, shards, T and R
     ladder_digest                                               who the learner plays
-    imitation_digest                                            the init and references it learns
-                                                                from, by content (section 19.3)
+    extensions                                                  each extension section the run
+                                                                uses, by content, and the code
+                                                                that provides it
 
 What is recorded and NOT in it, because none of it changes what the run is: ``run_name``,
 ``runs_dir``, ``timestep_limit``, the metrics sinks and their settings, ``checkpoint.keep``, the
@@ -58,6 +59,7 @@ __all__ = [
     "NOT_RECORDED",
     "NOT_STATED",
     "EngineBuild",
+    "ExtensionRecord",
     "RunIdentity",
     "action_digest_of",
     "catalogue_digest",
@@ -66,8 +68,8 @@ __all__ = [
     "dirty_sources",
     "engine_build",
     "env_spec_digest_of",
+    "extension_records",
     "identity_differences",
-    "imitation_digest_of",
     "package_provenance",
     "royalegym_provenance",
     "run_id",
@@ -106,7 +108,7 @@ EXCLUDED_FROM_IDENTITY: tuple[str, ...] = (
 )
 
 
-class EngineBuild(msgspec.Struct, frozen=True):
+class EngineBuild(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Which engine, built from which data and which code, with which cards.
 
     Every field comes from ``ClashParallelEnv.config()``: ``calibration_digest`` over the
@@ -135,13 +137,33 @@ class EngineBuild(msgspec.Struct, frozen=True):
     binary_sha256: str = NOT_RECORDED
 
 
-class RunIdentity(msgspec.Struct, frozen=True, omit_defaults=True):
+class ExtensionRecord(msgspec.Struct, frozen=True, omit_defaults=True, forbid_unknown_fields=True):
+    """One extension section in a run's identity: what it says, and whose code reads it.
+
+    ``digest`` is the section's identity value (``Extension.identity_value``: files by content,
+    alarms left out). The other three name the providing package -- distribution, ``__version__``
+    and commit -- and are None for a section RoyaleLearn provides itself, whose code
+    ``royalelearn_git`` already names.
+    """
+
+    digest: str
+    distribution: str | None = None
+    version: str | None = None
+    git: str | None = None
+
+
+class RunIdentity(msgspec.Struct, frozen=True, omit_defaults=True, forbid_unknown_fields=True):
     """The identity itself. ``run_id`` is the first sixteen hex characters of its sha256.
 
     Encoded with ``omit_defaults`` so that a field added with a default of None leaves every
     identity that does not use it byte-identical, and so every ``run_id`` where it was. Every
-    other field is always set when an identity is computed; the only one that can sit at its
-    default is ``user_code``, and only on an identity decoded from before it existed.
+    other field is always set when an identity is computed; the only ones that can sit at their
+    default are ``user_code``, on an identity decoded from before it existed, and ``extensions``,
+    on a run that uses none.
+
+    Decoding refuses a field this code does not know. An identity written by a build with a
+    field since removed would otherwise decode with that field silently gone, and two identities
+    that differ only in it would compare equal on a resume.
     """
 
     format_version: int
@@ -169,9 +191,9 @@ class RunIdentity(msgspec.Struct, frozen=True, omit_defaults=True):
     #: royaleviser, which their commits already name. None -- only a decode reaches it -- for an
     #: identity written before this field existed. See ``user_code``.
     user_code: dict[str, str] | None = None
-    #: The ``imitation`` block by value, with every file in it named by its digest rather than its
-    #: path (section 19.3). None -- and so absent from the encoding -- for a run without one.
-    imitation_digest: str | None = None
+    #: One record per extension section the run uses, by name. None -- and so absent from the
+    #: encoding -- for a run that uses none.
+    extensions: dict[str, ExtensionRecord] | None = None
 
 
 def env_spec_digest_of(config: RunConfig) -> str:
@@ -197,17 +219,47 @@ def action_digest_of(env: Any, env_spec: EnvSpec) -> str:
     )
 
 
-def imitation_digest_of(config: RunConfig) -> str | None:
-    """The ``imitation`` block's digest, or None for a run without one.
+def extension_records(config: RunConfig) -> dict[str, ExtensionRecord] | None:
+    """The identity's record of every extension section the run uses, or None for none.
 
-    Every ``path`` is left out. Each referenced folder is named by its artifact digest beside the
-    path, so the content of every file is in the identity already, and a folder moved to another
-    disk is not a new experiment. That the digest is TRUE of the folder is checked at every
-    start (``imitation.artifacts.verify_artifact``), fresh or resumed.
+    The digest is of the section's identity value, which names every file by its content digest
+    rather than its path; that the digest is TRUE of the file is the section's ``verify``, run at
+    every start. A section provided by an installed package also records the package: which
+    distribution declared it, its ``__version__``, and its commit (``package_provenance``). A
+    package whose commit cannot be named -- installed from a wheel, or not at the top of its own
+    repository -- refuses the run instead of recording ``unknown``, because two runs on two
+    different builds of it would then be one run.
     """
-    if config.imitation is None:
+    from .errors import PreflightError
+    from .extensions import active_extensions
+
+    active = active_extensions(config)
+    if not active:
         return None
-    return section_digest(msgspec.to_builtins(config.imitation))
+    records: dict[str, ExtensionRecord] = {}
+    unknown: list[str] = []
+    for entry in active:
+        digest = section_digest(entry.extension.identity_value(entry.section), drop=())
+        if entry.builtin:
+            records[entry.name] = ExtensionRecord(digest=digest)
+            continue
+        package = entry.extension.package
+        git = package_provenance(package)
+        if git == UNKNOWN:
+            unknown.append(f"{entry.name} ({getattr(package, '__name__', package)})")
+        records[entry.name] = ExtensionRecord(
+            digest=digest,
+            distribution=entry.distribution,
+            version=str(getattr(package, "__version__", UNKNOWN)),
+            git=git,
+        )
+    if unknown:
+        raise PreflightError(
+            "the commit of the package providing these sections cannot be named, so the run's "
+            f"identity could not say which code it ran: {', '.join(unknown)}. Install it "
+            "editable from a checkout whose top level is the package's parent folder"
+        )
+    return records
 
 
 def section_digest(value: Any, *, drop: Sequence[str] = ("path",)) -> str:
@@ -356,8 +408,9 @@ def user_packages(config: RunConfig) -> dict[str, Path]:
             if any(text == name or text.startswith(name + ".") for name in extra):
                 modules.add(text)
     found: dict[str, Path] = {}
+    recorded = set(PACKAGES_WITH_COMMITS) | set(_extension_packages(config))
     for top in sorted({module.split(".")[0] for module in modules if module}):
-        if top in PACKAGES_WITH_COMMITS:
+        if top in recorded:
             continue
         try:
             located = importlib.util.find_spec(top)
@@ -369,6 +422,26 @@ def user_packages(config: RunConfig) -> dict[str, Path]:
             found[top] = Path(next(iter(located.submodule_search_locations))).resolve()
         elif located.origin:
             found[top] = Path(located.origin).resolve()
+    return found
+
+
+def _extension_packages(config: RunConfig) -> dict[str, Path]:
+    """``{top-level package: its folder}`` for each add-on providing a section this run uses.
+
+    Recorded by commit in the identity's ``extensions``, so they are not user code by content,
+    and watched for uncommitted edits like the core packages. A section RoyaleLearn provides
+    itself is royalelearn's own code and is neither.
+    """
+    from .extensions import active_extensions
+
+    found: dict[str, Path] = {}
+    for entry in active_extensions(config):
+        if entry.builtin:
+            continue
+        package = entry.extension.package
+        location = getattr(package, "__file__", None)
+        if location:
+            found[package.__name__.split(".")[0]] = Path(location).resolve().parent
     return found
 
 
@@ -490,6 +563,8 @@ def _watched_paths(
         # watched every package but the one a user is most likely to be editing.
         for name, path in user_packages(config).items():
             watched.append((f"your code ({name})", path))
+        for name, path in _extension_packages(config).items():
+            watched.append((f"the {name} package", path))
     return watched
 
 
@@ -539,7 +614,6 @@ def dirty_sources(
     return tuple(dirty)
 
 
-@lru_cache(maxsize=1)
 def package_provenance(package: Any) -> str:
     """``<commit sha>`` or ``<commit sha>-dirty`` of the repository ``package`` is tracked in, or
     ``"unknown"``.
@@ -579,6 +653,7 @@ def package_provenance(package: Any) -> str:
     return f"{sha}-dirty" if _uncommitted(folder) else sha
 
 
+@lru_cache(maxsize=1)
 def royalegym_provenance() -> tuple[str, str]:
     """``(version, git description)`` of the royalegym this process imported.
 
@@ -693,5 +768,5 @@ def compute_identity(
         torch_version=torch_version() if torch_version_string is None else torch_version_string,
         device_kind=describe_device(config.net.device) if device_kind is None else device_kind,
         user_code=user_code(config),
-        imitation_digest=imitation_digest_of(config),
+        extensions=extension_records(config),
     )

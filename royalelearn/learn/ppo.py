@@ -547,7 +547,7 @@ class PPOUpdate(Update):
         after_critic = parameters_to_vector(self.critic_params).detach()
         if self._frozen and not torch.equal(after_actor, before_actor):
             raise AssertionError(
-                "the actor moved on an iteration imitation.actor_lr_scale froze it: something "
+                "the actor moved on an iteration its learning-rate scale froze it: something "
                 "other than the actor optimizer wrote to its parameters"
             )
         result = diagnostics.result(

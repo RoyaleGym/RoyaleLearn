@@ -52,8 +52,14 @@ from .checkpoint import (
     check_resume,
 )
 from .config import RunConfig, config_hash, dump_config, geometry, validate
-from .contributions import run_contributions
-from .errors import PreflightError, RoyaleLearnError
+from .errors import CheckpointFormatError, PreflightError, RoyaleLearnError
+from .extensions import (
+    RunContext,
+    active_extensions,
+    actor_lr_scale_of,
+    extension_alarms,
+    schema_contributions,
+)
 from .identity import RunIdentity, compute_identity, describe_device
 from .identity import run_id as run_id_of
 from .ladder.actors import EvalActors
@@ -905,9 +911,10 @@ class LearningCoordinator:
         # Before preflight, which takes a minute against the real engine: a stale digest is a
         # refusal that needs nothing built to be found, and it holds on a resume as on a fresh
         # start, because the identity carries the digests and only this makes them true.
-        from .imitation.init import verify_imitation_files
-
-        self.imitation_files = verify_imitation_files(config.imitation)
+        self.extensions = active_extensions(config)
+        stale = [problem for a in self.extensions for problem in a.extension.verify(a.section)]
+        if stale:
+            raise PreflightError("\n".join(stale))
         self.report = run_preflight(
             config,
             codec=self.codec_path,
@@ -945,8 +952,21 @@ class LearningCoordinator:
         )
         # Before the buffer's shared segment and the workers exist, so a refused init or a set
         # of terms the update could not hold apart is refused before anything costly is built.
-        self._initialise_from_imitation()
-        self.actor_terms = (*self._imitation_terms(), *self._given_terms)
+        context = self.run_context()
+        #: What each extension's ``prepare`` reported, by name: an init's self-test, say.
+        self.extension_facts: dict[str, Any] = {}
+        for entry in self.extensions:
+            facts = entry.extension.prepare(entry.section, context)
+            if facts:
+                self.extension_facts[entry.name] = dict(facts)
+        self.actor_terms = (
+            *(
+                term
+                for entry in self.extensions
+                for term in entry.extension.actor_terms(entry.section, context)
+            ),
+            *self._given_terms,
+        )
         check_actor_terms(self.actor_terms)
         self.freeze = self._freeze_tracker()
         self.buffer = RectBuffer(
@@ -994,11 +1014,13 @@ class LearningCoordinator:
         )
         self.config_json = dump_config(config, indent=2)
         self.sinks.open(identity=self.identity, config_json=self.config_json, run_dir=self.run_dir)
-        parts = run_contributions(config)
-        #: The schema this run's rows are checked against: the core's and its parts'.
-        self.schema = for_run(parts.schema)
+        #: The schema this run's rows are checked against: the core's and its sections'.
+        self.schema = for_run(schema_contributions(config))
         self.alarms = AlarmSet(
-            config.alarms, ratio_atol=self._ratio_atol(), extra=parts.alarms, printer=self.printer
+            config.alarms,
+            ratio_atol=self._ratio_atol(),
+            extra=extension_alarms(config),
+            printer=self.printer,
         )
         self.store = DirCheckpointStore(self.run_dir, keep=config.checkpoint.keep)
         self.components = self._components()
@@ -1099,57 +1121,27 @@ class LearningCoordinator:
         assert self.report is not None
         return RowCodec(self.spec, self.codec, self.report.statics, self.device)
 
-    def _initialise_from_imitation(self) -> None:
-        """Section 19.4, on a fresh start only. On a resume the checkpoint's weights win."""
-        imitation = self.config.imitation
-        if imitation is None or imitation.init is None or self.resume_from is not None:
-            return
-        from .artifacts import read_actor_artifact
-        from .imitation.init import initialise_actor, loaded_ratio_guard
+    def run_context(self) -> RunContext:
+        """What an extension is handed about this run (``extensions.RunContext``)."""
         from .rollout.preflight import precision_name
 
-        codec = self.row_codec()
-        self.init_self_test = initialise_actor(
-            self.model,
-            imitation.init,
-            current=self.artifact_spec(),
-            codec=codec,
-            printer=self.printer,
-        )
-        probe = read_actor_artifact(imitation.init.path).probe
-        assert probe is not None  # initialise_actor refuses an init without one
-        self.init_ratio_precision = loaded_ratio_guard(
-            self.model,
-            codec,
-            probe.rows,
-            atol=self._ratio_atol(),
-            precision=precision_name(self.config),
-            say=self.printer,
-        )
-
-    def _imitation_terms(self) -> tuple[Any, ...]:
-        """The regularisers of section 19.6-19.8, as actor-loss terms; none without them."""
-        imitation = self.config.imitation
-        if imitation is None or not imitation.regularisers:
-            return ()
-        from .imitation.references import build_references
-        from .imitation.regularisers import build_terms
-
-        references = build_references(
-            imitation,
+        return RunContext(
+            config=self.config,
             spec=self.spec,
-            current=self.artifact_spec(),
-            build_actor=self.build_actor,
-            codec=self.row_codec(),
             device=self.device,
             printer=self.printer,
+            model=self.model,
+            build_actor=self.build_actor,
+            artifact_spec=self.artifact_spec,
+            row_codec=self.row_codec,
+            resuming=self.resume_from is not None,
+            ratio_atol=self._ratio_atol(),
+            precision=precision_name(self.config),
         )
-        return build_terms(imitation, references, self.spec)
 
     def _freeze_tracker(self) -> FreezeTracker | None:
-        """The freeze's bookkeeping, on a run that schedules the actor's learning-rate scale."""
-        imitation = self.config.imitation
-        if imitation is None or imitation.actor_lr_scale is None:
+        """The freeze's bookkeeping, on a run whose sections schedule the actor's rate."""
+        if actor_lr_scale_of(self.config) is None:
             return None
         from .learn.freeze import FreezeTracker
 
@@ -2186,7 +2178,16 @@ class LearningCoordinator:
         """Resume from a checkpoint: refuse an identity that moved, or a learner the run's own
         record does not contain, then restore everything."""
         assert self.identity is not None
-        manifest = msgspec.json.decode((Path(path) / "manifest.json").read_bytes(), type=Manifest)
+        manifest_path = Path(path) / "manifest.json"
+        try:
+            manifest = msgspec.json.decode(manifest_path.read_bytes(), type=Manifest)
+        except msgspec.ValidationError as exc:
+            # An identity field this build does not know is the usual cause: a checkpoint
+            # written by a build with a field since removed, or by a newer one.
+            raise CheckpointFormatError(
+                f"{manifest_path} cannot be read by this build: {exc}. Resume it with the "
+                "build that wrote it"
+            ) from exc
         drift = check_resume(
             manifest,
             self.identity,
@@ -2208,6 +2209,11 @@ class LearningCoordinator:
                 )
             )
         self.store.read(Path(path), self.components, strict=self.config.checkpoint.strict_load)
+        context = self.run_context()
+        for entry in self.extensions:
+            facts = entry.extension.loaded(entry.section, context)
+            if facts:
+                self.extension_facts.setdefault(entry.name, {}).update(facts)
         self.iteration = manifest.iteration
         self.cumulative_env_steps = manifest.cumulative_env_steps
         self.cumulative_timesteps = manifest.cumulative_timesteps

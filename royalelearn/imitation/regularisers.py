@@ -31,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.policy import ObsBatch
     from ..api.rollout import EnvSpec
     from ..api.update import ActorTermInputs
-    from ..config import CoefSpec, ImitationConfig, ReferenceKLSpec
+    from .config import CoefSpec, ImitationSection, ReferenceKLSpec
     from .references import Reference
 
 __all__ = [
@@ -349,7 +349,7 @@ class ReferenceKL:
 
 
 def build_terms(
-    imitation: ImitationConfig | None,
+    imitation: ImitationSection | None,
     references: Mapping[str, Reference],
     env: EnvSpec,
 ) -> tuple[ReferenceKL, ...]:

@@ -354,11 +354,16 @@ def _ratio_precision_gate(config: RunConfig, spec: EnvSpec, say: Callable[[str],
     and everything needed to predict that was in the config before it started.
     """
     name = precision_name(config)
-    if config.imitation is not None and config.imitation.init is not None:
+    from ..extensions import active_extensions
+
+    starters = [
+        a.name for a in active_extensions(config) if a.extension.sets_starting_weights(a.section)
+    ]
+    if starters:
         # The estimate below is from noop_bias alone, which is what a SEEDED actor's p_max is.
-        # An initialised actor's is its own, and it is measured on the artifact's probe rows
-        # once the weights are loaded (imitation.init.initialise_actor).
-        say(f"ratio guard   {name}: measured on the init artifact's probe rows after loading")
+        # A loaded actor's is its own, and the section that loads it measures it on the loaded
+        # weights, fresh or resumed.
+        say(f"ratio guard   {name}: measured by {', '.join(starters)} on the loaded actor")
         return
     predicted = ratio_precision(
         noop_bias=config.net.noop_bias, n_actions=spec.n_actions, dtype_name=name
