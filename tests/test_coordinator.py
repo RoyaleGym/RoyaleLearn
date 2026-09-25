@@ -714,8 +714,9 @@ def test_the_run_writes_its_evaluation_seed_set_once(run: Any) -> None:
 def test_a_run_never_leaves_its_shared_segment_behind(tmp_path: Path) -> None:
     """Two runs in one process would collide on a segment name that outlived the first."""
     names = []
-    for _ in range(2):
-        with coordinator(tiny_config(tmp_path)) as run:
+    for index in range(2):
+        # Two RUNS, so two directories: the same config fresh into one directory is refused.
+        with coordinator(tiny_config(tmp_path / str(index))) as run:
             run.iterate()
             names.append(run.buffer.shared_handle().name)
     assert names[0] != names[1], "two runs shared one segment name"

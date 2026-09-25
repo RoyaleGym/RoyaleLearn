@@ -128,7 +128,18 @@ def resume(run_dir: Path, *, until: int | None = None) -> subprocess.CompletedPr
     One that works inside the interpreter that wrote the checkpoint skips the machinery being
     tested: restoring torch's generator, the schedules, and each shard's position.
     """
-    command = [sys.executable, "-m", "royalelearn", "resume", "--run", str(run_dir)]
+    # --allow-dirty because this tests resume's MECHANICS, and a working tree is dirty while it is
+    # worked on -- including by sibling sessions' edits this test cannot control. The refusal
+    # itself is tested on its own, in test_user_code_identity.
+    command = [
+        sys.executable,
+        "-m",
+        "royalelearn",
+        "resume",
+        "--run",
+        str(run_dir),
+        "--allow-dirty",
+    ]
     if until is not None:
         command += ["--until-timesteps", str(until)]
     return subprocess.run(

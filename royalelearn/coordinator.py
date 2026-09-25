@@ -891,6 +891,34 @@ def run_directory(config: RunConfig, run_id: str) -> Path:
     return Path(config.runs_dir) / f"{config.run_name}-{run_id}"
 
 
+def _refuse_an_occupied_run_dir(run_dir: Path) -> None:
+    """Refuse a FRESH start into a directory that already holds a run.
+
+    The directory follows the config's identity, so launching the same config fresh again lands
+    in the same place, and it used to start at iteration 1 and write over the checkpoints there:
+    train-hog26-10's directory holds metric rows for 1-610, then 1-45, then 1-21, then 611-621,
+    under a checkpoint index that mixes launches. There is no flag to allow it, because it cannot
+    be made safe, only destructive; the two things a person could want are both named below.
+    """
+    rows = run_dir / METRICS_NAME
+    checkpoints = run_dir / "checkpoints"
+    holds_rows = rows.is_file() and rows.stat().st_size > 0
+    holds_checkpoints = checkpoints.is_dir() and any(checkpoints.iterdir())
+    if not (holds_rows or holds_checkpoints):
+        return
+    held = [
+        what
+        for what, present in (("metric rows", holds_rows), ("checkpoints", holds_checkpoints))
+        if present
+    ]
+    raise PreflightError(
+        f"{run_dir} already holds a run ({' and '.join(held)}). A fresh start here would begin "
+        "at iteration 1 and write over its checkpoints.\n"
+        f"  To carry that run on:  royalelearn resume --run {run_dir}\n"
+        "  To start a separate run: give it another run_name or runs_dir."
+    )
+
+
 class LearningCoordinator:
     """One run, from preflight to the last checkpoint.
 
@@ -1021,6 +1049,8 @@ class LearningCoordinator:
         self.run_id = run_id_of(self.identity)
         report.note_run_id(self.run_id, printer=self.printer)
         self.run_dir = self.given_run_dir or run_directory(config, self.run_id)
+        if self.resume_from is None:
+            _refuse_an_occupied_run_dir(self.run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self.codec = build_codec(
