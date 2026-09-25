@@ -262,10 +262,11 @@ class PPOUpdate(Update):
     ``vf_coef`` and the critic's learning rate the same knob.
     """
 
-    #: 2 is written only when the state holds a 'freeze' or 'extensions' entry, so a run with
-    #: neither writes exactly what it always did, and a build that knows only 1 refuses a state
-    #: it would otherwise read without them.
-    FORMAT_VERSION = 2
+    #: The newest update-state format this build reads. What an instance WRITES is
+    #: ``FORMAT_VERSION``: 2 only when the state holds a 'freeze' or 'extensions' entry, so a run
+    #: with neither writes -- and its manifest's component_versions records -- exactly what it
+    #: always did, and a build that knows only 1 refuses a state it would read without them.
+    READS_FORMAT = 2
 
     #: What the checkpoint's folder holds.
     ACTOR_FILE = "actor_adam.pt"
@@ -1155,6 +1156,13 @@ class PPOUpdate(Update):
 
     # -- checkpoint ----------------------------------------------------------
 
+    @property
+    def FORMAT_VERSION(self) -> int:
+        """The format this update's state is written at, read as the checkpoint store reads
+        every component's version."""
+        held = self.freeze is not None or any(term.state() for term in self.extra_actor_terms)
+        return 2 if held else 1
+
     def save_checkpoint(self, folder: Path) -> None:
         """The two optimizer states and the update counter.
 
@@ -1165,9 +1173,8 @@ class PPOUpdate(Update):
         folder.mkdir(parents=True, exist_ok=True)
         torch.save(self.actor_optimizer.state_dict(), folder / self.ACTOR_FILE)
         torch.save(self.critic_optimizer.state_dict(), folder / self.CRITIC_FILE)
-        held = self.freeze is not None or any(term.state() for term in self.extra_actor_terms)
         state: dict[str, Any] = {
-            "format_version": self.FORMAT_VERSION if held else 1,
+            "format_version": self.FORMAT_VERSION,
             "cumulative_model_updates": self.model_updates,
         }
         if self.freeze is not None:
@@ -1216,10 +1223,10 @@ class PPOUpdate(Update):
             return
         state = json.loads(path.read_text(encoding="utf-8"))
         version = int(state.get("format_version", 0))
-        if version > self.FORMAT_VERSION:
+        if version > self.READS_FORMAT:
             raise CheckpointFormatError(
                 f"{path} was written at update format {version} and this build reads "
-                f"{self.FORMAT_VERSION}"
+                f"{self.READS_FORMAT}"
             )
         self.model_updates = int(state.get("cumulative_model_updates", 0))
         self._refuse_unread(path, state)

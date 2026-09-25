@@ -1065,12 +1065,21 @@ def _retire(raw: dict[str, Any], say: Callable[[str], None] | None) -> dict[str,
                 )
         raw["alarms"] = alarms
     imitation = raw.get("imitation", {})
-    if imitation is None:
+    if "imitation" in raw and imitation is None:
         dropped.append('"imitation": null')
-    if isinstance(imitation, dict):
+    if "imitation" in raw and isinstance(imitation, dict):
+        # Every IL config.json of that time wrote both keys, null when unset. A null one is
+        # dropped: moving it would make a warm_start section of nothing, and a new run id.
+        imitation = dict(imitation)
         for key in ("init", "actor_lr_scale"):
-            if key in imitation:
+            if key not in imitation:
+                continue
+            if imitation[key] is None:
+                del imitation[key]
+                dropped.append(f"imitation.{key}")
+            else:
                 problems.append(f"imitation.{key} is now warm_start.{key}")
+        raw["imitation"] = imitation
     if problems:
         raise PreflightError("the configuration uses keys that have moved:\n" + "\n".join(
             f"  {p}" for p in problems
@@ -1081,6 +1090,31 @@ def _retire(raw: dict[str, Any], say: Callable[[str], None] | None) -> dict[str,
             + ", ".join(dropped)
         )
     return raw
+
+
+def retired_dropped(document: Mapping[str, Any]) -> dict[str, Any]:
+    """A stored config with what the one-release shim drops without a word dropped: the six
+    retired alarm keys at their old defaults, a null ``imitation`` and its null ``init`` and
+    ``actor_lr_scale``. For comparing a checkpoint's config with this run's; nothing is refused
+    or said here."""
+    stored = dict(document)
+    alarms = stored.get("alarms")
+    if isinstance(alarms, Mapping):
+        stored["alarms"] = {
+            key: value
+            for key, value in alarms.items()
+            if not (key in RETIRED_ALARM_KEYS and value == RETIRED_ALARM_KEYS[key][0])
+        }
+    imitation = stored.get("imitation")
+    if "imitation" in stored and imitation is None:
+        del stored["imitation"]
+    elif isinstance(imitation, Mapping):
+        stored["imitation"] = {
+            key: value
+            for key, value in imitation.items()
+            if not (key in ("init", "actor_lr_scale") and value is None)
+        }
+    return stored
 
 
 def load_config(
@@ -1114,8 +1148,11 @@ def load_config(
 
 
 def dump_config(config: RunConfig, *, indent: int | None = None) -> str:
-    """The canonical JSON of a config: keys in a fixed order, so a reformat is not a new run."""
-    blob = canonical_json(config)
+    """The canonical JSON of a config: keys in a fixed order, so a reformat is not a new run.
+    A section set to None is absent, as it is on load."""
+    from .extensions import normalised
+
+    blob = canonical_json(normalised(config))
     if indent is not None:
         blob = msgspec.json.format(blob, indent=indent)
     return blob.decode("utf-8")
@@ -1123,4 +1160,6 @@ def dump_config(config: RunConfig, *, indent: int | None = None) -> str:
 
 def config_hash(config: RunConfig) -> str:
     """sha256 of the canonical JSON. Recorded, printed and diffed on resume."""
-    return digest_of(config)
+    from .extensions import normalised
+
+    return digest_of(normalised(config))

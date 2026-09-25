@@ -30,8 +30,7 @@ from royalelearn.artifacts import artifact_digest, read_actor_artifact
 from royalelearn.errors import IdentityMismatch, PreflightError
 from royalelearn.extensions import active_extensions, with_sections
 from royalelearn.rollout.envspec import canonical_json
-from test_coordinator import coordinator, tiny_config
-from test_user_code_identity import facts  # noqa: F401 - a fixture
+from royalelearn.testing import coordinator, identity_facts, tiny_config
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("safetensors")
@@ -133,11 +132,16 @@ def test_an_unknown_field_in_the_block_is_refused_at_load() -> None:
 # -- identity ------------------------------------------------------------------------------
 
 
-def _identity(config: cfg.RunConfig, facts: dict[str, Any]) -> I.RunIdentity:  # noqa: F811
+@pytest.fixture
+def facts(env_spec: Any) -> dict[str, Any]:
+    return identity_facts(env_spec)
+
+
+def _identity(config: cfg.RunConfig, facts: dict[str, Any]) -> I.RunIdentity:
     return I.compute_identity(config, **facts)
 
 
-def test_without_the_block_the_identity_encodes_exactly_as_before(facts: Any) -> None:  # noqa: F811
+def test_without_the_block_the_identity_encodes_exactly_as_before(facts: Any) -> None:
     """The encoding of every field that existed before, in their order, and nothing else.
 
     Plant: without ``omit_defaults`` on ``RunIdentity`` the encoding gains
@@ -152,7 +156,7 @@ def test_without_the_block_the_identity_encodes_exactly_as_before(facts: Any) ->
     assert b"extensions" not in canonical_json(identity)
 
 
-def test_the_block_digest_follows_content_not_paths(facts: Any) -> None:  # noqa: F811
+def test_the_block_digest_follows_content_not_paths(facts: Any) -> None:
     env = cfg.default_env_spec(cfg.MOCK_ENGINE)
     base = msgspec.structs.replace(_config(), env=env)
     moved_block = _block(
@@ -189,7 +193,7 @@ def test_the_block_digest_follows_content_not_paths(facts: Any) -> None:  # noqa
     assert digest(other_budget) != digest(base)
 
 
-def test_a_resume_refuses_a_block_added_or_changed(facts: Any) -> None:  # noqa: F811
+def test_a_resume_refuses_a_block_added_or_changed(facts: Any) -> None:
     from royalelearn.checkpoint import check_resume
 
     env = cfg.default_env_spec(cfg.MOCK_ENGINE)
@@ -307,13 +311,23 @@ def test_an_init_loads_the_actor_and_leaves_the_critic_as_seeded(tmp_path: Path)
         assert run.extension_facts["warm_start"]["self_test"] == 0.0
 
 
-def test_an_artifact_whose_weights_no_longer_match_its_probe_is_refused(tmp_path: Path) -> None:
+def test_an_artifact_whose_weights_no_longer_match_its_probe_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refused by the section's prepare, which runs before the rollout buffer and the workers
+    exist. Seen failing: prepare moved after the buffer is built."""
+
     def nudge(tensors: dict[str, Any]) -> None:
         name = next(n for n, t in tensors.items() if t.is_floating_point() and t.numel() > 1)
         tensors[name].view(-1)[0] += 0.5
 
     folder = tmp_path / "nudged"
     digest = seeded_artifact(tiny_config(tmp_path / "donor"), folder, coordinator, edit=nudge)
+
+    def built(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("the rollout buffer was built for a run whose init is refused")
+
+    monkeypatch.setattr("royalelearn.learn.buffer.RectBuffer", built)
     with (
         pytest.raises(PreflightError, match="probe-logit self-test failed"),
         coordinator(_init_config(tmp_path, folder, digest)),
@@ -371,7 +385,13 @@ def test_a_stale_digest_is_refused_before_anything_is_built(
         pass
 
 
-def test_a_resume_keeps_the_checkpoint_weights_and_still_checks_the_digest(tmp_path: Path) -> None:
+def test_a_resume_keeps_the_checkpoint_weights_and_still_checks_the_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard on a resume runs on the checkpoint's actor. Seen failing: call the section's
+    loaded() before the checkpoint is read, and the guard sees the seeded actor instead."""
+    from royalelearn.imitation import init as init_module
+
     folder = tmp_path / "seeded"
     digest = seeded_artifact(tiny_config(tmp_path / "donor", master_seed=7), folder, coordinator)
     config = _init_config(tmp_path, folder, digest)
@@ -379,8 +399,19 @@ def test_a_resume_keeps_the_checkpoint_weights_and_still_checks_the_digest(tmp_p
         run.iterate()
         saved = run.checkpoint()
         trained = actor_state(run)
+    guarded: list[dict[str, Any]] = []
+    measured = init_module.loaded_ratio_guard
+
+    def spy(model: Any, *args: Any, **kwargs: Any) -> float:
+        guarded.append({k: v.detach().clone() for k, v in model.actor.state_dict().items()})
+        return measured(model, *args, **kwargs)
+
+    monkeypatch.setattr(init_module, "loaded_ratio_guard", spy)
     said: list[str] = []
     with coordinator(config, resume=saved, printer=said.append) as resumed:
+        (seen,) = guarded
+        for name, tensor in trained.items():
+            assert torch.equal(seen[name], tensor), f"the guard did not see the checkpoint's {name}"
         for name, tensor in actor_state(resumed).items():
             assert torch.equal(tensor, trained[name]), name
         # Preflight deferred its predicted ratio guard to the section, and on a resume the
@@ -438,3 +469,36 @@ def test_preflight_defers_the_ratio_guard_to_the_init(env_spec: Any) -> None:
     said: list[str] = []
     _ratio_precision_gate(initialised, env_spec, said.append)
     assert said and "measured by warm_start on the loaded actor" in said[0]
+
+
+def test_the_warm_start_digest_follows_the_init_content_not_its_path(facts: Any) -> None:
+    """Each section strips its own file paths from its identity value; for warm_start that is
+    the init's. Seen failing: an identity value that keeps init.path."""
+    env = cfg.default_env_spec(cfg.MOCK_ENGINE)
+
+    def digest(path: str, sha: str) -> str:
+        config = with_sections(
+            cfg.RunConfig(env=env), warm_start={"init": {"path": path, "sha256": sha}}
+        )
+        records = _identity(config, facts).extensions
+        assert records is not None
+        return records["warm_start"].digest
+
+    assert digest("a/init", "1" * 64) == digest("elsewhere/init", "1" * 64)
+    assert digest("a/init", "1" * 64) != digest("a/init", "2" * 64)
+
+
+def test_a_section_contributes_only_what_its_run_can_feed() -> None:
+    """An init without a schedule has no freeze to watch; references without regularisers have
+    no KL to report. Seen failing: contributions made unconditional."""
+    from royalelearn.extensions import extension_alarms, schema_contributions
+    from royalelearn.metrics.schema import SchemaContribution
+
+    init_only = with_sections(cfg.RunConfig(), warm_start={"init": {"path": "x", "sha256": "y"}})
+    references_only = with_sections(
+        cfg.RunConfig(),
+        imitation={"references": {"bc": {"kind": "snapshot", "path": "x", "sha256": "y"}}},
+    )
+    for config in (init_only, references_only):
+        assert extension_alarms(config) == ()
+        assert schema_contributions(config) == (SchemaContribution(),)

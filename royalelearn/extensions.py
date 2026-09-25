@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import re
+import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from functools import cache
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
@@ -194,24 +195,79 @@ def _load(reference: str) -> Any:
     return getattr(importlib.import_module(module_name), attribute)
 
 
-def _declared(names: set[str]) -> dict[str, dict[str, set[str]]]:
-    """``{key: {entry-point value: {distribution, ...}}}`` for every installed declaration.
+def _canonical(name: str) -> str:
+    """A distribution's name as PEP 503 compares them: ``Twin_Ext`` and ``twin-ext`` are one."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _declared(names: set[str]) -> dict[str, dict[str, dict[str, list[Any]]]]:
+    """``{key: {entry-point value: {distribution: [its metadata copies]}}}`` for every
+    installed declaration, distribution names canonical.
 
     Every distribution is walked, duplicates included: ``importlib.metadata.entry_points`` keeps
     only the first copy of a distribution seen twice, and which copy is first depends on the
     working directory, so a stale in-tree egg-info could win from one folder and not another.
+    Reading metadata imports nothing.
     """
-    found: dict[str, dict[str, set[str]]] = {}
+    found: dict[str, dict[str, dict[str, list[Any]]]] = {}
     for distribution in importlib.metadata.distributions():
         try:
             points = distribution.entry_points
-            owner = distribution.metadata["Name"] or "?"
+            owner = _canonical(distribution.metadata["Name"] or "?")
         except Exception:  # pragma: no cover - a broken metadata folder
             continue
         for point in points:
             if point.group == ENTRY_POINT_GROUP and point.name in names:
-                found.setdefault(point.name, {}).setdefault(point.value, set()).add(owner)
+                copies = found.setdefault(point.name, {}).setdefault(point.value, {})
+                copies.setdefault(owner, []).append(distribution)
     return found
+
+
+def _owns(copies: Sequence[Any], module: ModuleType | None) -> bool:
+    """Whether ``module`` was imported from where one of these metadata copies says its
+    distribution lives: under the checkout an editable install points at, or among the files
+    a regular install recorded."""
+    import json
+    from pathlib import Path
+    from urllib.parse import urlparse
+    from urllib.request import url2pathname
+
+    location = getattr(module, "__file__", None)
+    if not location:
+        return False
+    path = Path(location).resolve()
+    for distribution in copies:
+        try:
+            direct = distribution.read_text("direct_url.json")
+        except Exception:  # pragma: no cover - unreadable metadata
+            direct = None
+        if direct:
+            url = str(json.loads(direct).get("url", ""))
+            if url.startswith("file:"):
+                root = Path(url2pathname(urlparse(url).path)).resolve()
+                if root == path or root in path.parents:
+                    return True
+        for entry in distribution.files or ():
+            try:
+                if Path(distribution.locate_file(entry)).resolve() == path:
+                    return True
+            except OSError:  # pragma: no cover - a path the platform cannot resolve
+                continue
+    return False
+
+
+def _unclaimed(names: set[str]) -> list[str]:
+    """The keys among ``names`` that no built-in and no installed declaration claims."""
+    rest = names - set(_BUILTINS)
+    declared = _declared(rest) if rest else {}
+    return sorted(name for name in rest if name not in declared)
+
+
+def _refusal(key: str) -> str:
+    return (
+        f"{key!r} is not a RoyaleLearn config key, and no installed package provides it as a "
+        f"section (entry-point group {ENTRY_POINT_GROUP!r})"
+    )
 
 
 def _discover(names: set[str]) -> tuple[dict[str, Provider], list[str]]:
@@ -224,10 +280,7 @@ def _discover(names: set[str]) -> tuple[dict[str, Provider], list[str]]:
             continue
         values = declared.get(key, {})
         if not values:
-            problems.append(
-                f"{key!r} is not a RoyaleLearn config key, and no installed package provides it "
-                f"as a section (entry-point group {ENTRY_POINT_GROUP!r})"
-            )
+            problems.append(_refusal(key))
             continue
         if len(values) > 1:
             problems.append(
@@ -236,7 +289,33 @@ def _discover(names: set[str]) -> tuple[dict[str, Provider], list[str]]:
             )
             continue
         ((value, owners),) = values.items()
-        providers[key] = Provider(_load(value), sorted(owners)[0], False)
+        if len(owners) > 1:
+            # Which of them the identity would name would depend on the path, and so would the
+            # run id: two distributions claiming one section is refused, not merged.
+            folders = [str(getattr(c, "_path", "?")) for copies in owners.values() for c in copies]
+            problems.append(
+                f"{key!r} ({value}) is declared by more than one distribution: "
+                f"{', '.join(sorted(owners))} ({'; '.join(folders)})"
+            )
+            continue
+        ((owner, copies),) = owners.items()
+        try:
+            extension = _load(value)
+        except Exception as exc:
+            problems.append(
+                f"{key!r} is declared by {owner} as {value}, which could not be imported: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            continue
+        module = sys.modules.get(value.partition(":")[0])
+        if not _owns(copies, module):
+            problems.append(
+                f"{key!r} is declared by {owner}, but {value} was imported from "
+                f"{getattr(module, '__file__', '?')}, which that distribution does not own: a "
+                "stale copy on the path is shadowing the installed one"
+            )
+            continue
+        providers[key] = Provider(extension, owner, False)
     return providers, problems
 
 
@@ -244,8 +323,12 @@ def providers_for(keys: Iterable[str]) -> dict[str, Provider]:
     """The provider of each of ``keys``, loading nothing else.
 
     Refused, by key, all together: a key nothing provides, two different providers for one key,
-    an extension at another API version, and one whose declared name is not its key.
+    one key declared by two distributions, a declaration whose module cannot be imported or was
+    imported from outside its distribution, an extension at another API version, one whose
+    declared name is not its key, and a section type that would not refuse a misspelt field.
     """
+    import msgspec
+
     wanted = set(keys)
     if not wanted:
         return {}
@@ -253,6 +336,7 @@ def providers_for(keys: Iterable[str]) -> dict[str, Provider]:
     for key, provider in sorted(providers.items()):
         extension = provider.extension
         version = getattr(extension, "api_version", None)
+        section_type = getattr(extension, "section_type", None)
         if version != EXTENSION_API_VERSION:
             problems.append(
                 f"{key!r} is provided at extension API version {version}; this RoyaleLearn is at "
@@ -263,42 +347,63 @@ def providers_for(keys: Iterable[str]) -> dict[str, Provider]:
                 f"{key!r} is provided by an extension that calls itself "
                 f"{getattr(extension, 'name', None)!r}"
             )
+        elif not (
+            isinstance(section_type, type)
+            and issubclass(section_type, msgspec.Struct)
+            and section_type.__struct_config__.forbid_unknown_fields
+        ):
+            problems.append(
+                f"{key!r}: its section type {section_type!r} is not a msgspec.Struct that refuses "
+                "unknown fields, so a misspelt key inside the section would load silently"
+            )
     if problems:
         raise PreflightError("\n".join(problems))
     return providers
 
 
-@cache
-def _config_type(table: tuple[tuple[str, Provider], ...]) -> type:
-    """RunConfig with one field per section, in name order after the core's. Cached, so every
-    config with the same sections has the same type."""
+#: One config type per set of sections, keyed by name and by the identity of each provider
+#: object, which the type's own namespace keeps alive. Keyed by identity rather than by value,
+#: so an extension object need not be hashable.
+_TYPES: dict[tuple[Any, ...], type] = {}
+
+
+def config_type(providers: Mapping[str, Provider]) -> type:
+    """RunConfig with one field per section, in name order after the core's; ``RunConfig``
+    itself for none. Every config with the same sections has the same type."""
     import msgspec
 
     from .config import RunConfig
 
-    if not table:
+    if not providers:
         return RunConfig
-    return msgspec.defstruct(
-        "RunConfig",
-        [(name, provider.extension.section_type) for name, provider in table],
-        bases=(RunConfig,),
-        kw_only=True,
-        forbid_unknown_fields=True,
-        namespace={"_extensions": MappingProxyType(dict(table))},
-        module=RunConfig.__module__,
-    )
-
-
-def config_type(providers: Mapping[str, Provider]) -> type:
-    """The config type of a run with these sections; ``RunConfig`` itself for none."""
-    return _config_type(tuple((name, providers[name]) for name in sorted(providers)))
+    table = tuple(sorted(providers.items()))
+    key = tuple((name, id(p.extension), p.distribution, p.builtin) for name, p in table)
+    made = _TYPES.get(key)
+    if made is None:
+        made = msgspec.defstruct(
+            "RunConfig",
+            [(name, provider.extension.section_type) for name, provider in table],
+            bases=(RunConfig,),
+            kw_only=True,
+            forbid_unknown_fields=True,
+            namespace={"_extensions": MappingProxyType(dict(table))},
+            module=RunConfig.__module__,
+        )
+        _TYPES[key] = made
+    return made
 
 
 def build_config(core: Mapping[str, Any], sections: Mapping[str, Any]) -> RunConfig:
-    """A config from the core's fields as builtins and the sections as builtins; a ``None``
-    section is left out."""
+    """A config from the core's fields as builtins and the sections as builtins.
+
+    A ``None`` section is left out -- but only a key some provider claims: a null value is how
+    an absent section is written, not a way past the refusal of a misspelt one.
+    """
     import msgspec
 
+    unclaimed = _unclaimed({name for name, value in sections.items() if value is None})
+    if unclaimed:
+        raise PreflightError("\n".join(_refusal(key) for key in unclaimed))
     present = {name: value for name, value in sections.items() if value is not None}
     cls = config_type(providers_for(present))
     return msgspec.convert({**core, **present}, type=cls)
@@ -308,10 +413,27 @@ def with_sections(config: RunConfig, **sections: Any) -> RunConfig:
     """``config`` with sections set -- a mapping or the section itself -- or removed with None."""
     import msgspec
 
+    from .config import RunConfig
+
+    core_owned = sorted(set(sections) & set(RunConfig.__struct_fields__))
+    if core_owned:
+        raise PreflightError(
+            f"{core_owned} are RoyaleLearn's own config keys, not sections; set them on the "
+            "config itself"
+        )
     data = msgspec.to_builtins(config)
-    current = {active.name: data.pop(active.name) for active in active_extensions(config)}
+    table: Mapping[str, Provider] = getattr(type(config), "_extensions", {})
+    current = {name: data.pop(name, None) for name in table}
     current.update({name: msgspec.to_builtins(value) for name, value in sections.items()})
     return build_config(data, current)
+
+
+def normalised(config: RunConfig) -> RunConfig:
+    """``config`` with any section set to None removed, so it encodes as the run it is."""
+    table: Mapping[str, Provider] = getattr(type(config), "_extensions", {})
+    if any(getattr(config, name, None) is None for name in table):
+        return with_sections(config)
+    return config
 
 
 def active_extensions(config: Any) -> tuple[Active, ...]:
@@ -435,6 +557,7 @@ __all__ = sorted(
         "config_type",
         "extension_alarms",
         "extension_problems",
+        "normalised",
         "providers_for",
         "schema_contributions",
         "with_sections",

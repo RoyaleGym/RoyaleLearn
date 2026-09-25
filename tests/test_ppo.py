@@ -21,7 +21,6 @@ MockEngine's catalogue and would run on the full one.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +29,10 @@ import numpy as np
 import pytest
 
 from royalegym.action import NOOP
-from royalelearn.api.schedule import ScheduleState
 
 torch = pytest.importorskip("torch")
 
-from royalelearn.config import FORCED_ROW_ARMS, LrBackoffConfig, PPOConfig  # noqa: E402
-from royalelearn.learn.gae import GAE  # noqa: E402
+from royalelearn.config import FORCED_ROW_ARMS, LrBackoffConfig  # noqa: E402
 from royalelearn.learn.inference import BatchedInference  # noqa: E402
 from royalelearn.learn.ppo import (  # noqa: E402
     PPOUpdate,
@@ -49,51 +46,27 @@ from royalelearn.learn.ppo import (  # noqa: E402
     value_error,
 )
 from royalelearn.learn.schedules import LrBackoff  # noqa: E402
+
+# The update harness is defined once, in ``royalelearn.testing``.
+from royalelearn.testing import (  # noqa: E402
+    FORCED_CELLS,
+    SAMPLES,
+    collect,
+    plant_forced,
+    update_for,
+)
+from royalelearn.testing import PPO_CONFIG as CONFIG  # noqa: E402
+from royalelearn.testing import PPO_SCHEDULE as SCHEDULE  # noqa: E402
+from royalelearn.testing import RecordingSGD as _Recording  # noqa: E402
+from royalelearn.testing import observations as fresh_observations  # noqa: E402
 from test_buffer import CYCLES, SEED, SLOTS, Fixture, plan_for, round_for  # noqa: E402
 from test_inference import build_model  # noqa: E402
-
-#: Every trainable cell of the rectangle in one batch, so that "the one-batch gradient" is a
-#: thing this fixture actually has.
-SAMPLES = CYCLES * SLOTS
-
-CONFIG = PPOConfig(
-    n_epochs=1,
-    timesteps_per_iteration=SAMPLES,
-    batch_size=SAMPLES,
-    minibatch_size=SAMPLES,
-    critic_chunk=SLOTS * 2,
-    # The clip bound is not what this file is about, and leaving it at its shipped value would
-    # make "the accumulated gradient is the one-batch gradient" a statement about the clip.
-    max_grad_norm=1e9,
-    debug_assert_iterations=1,
-    check_ratio_invariant_every=0,
-)
-
-SCHEDULE = ScheduleState(
-    iteration=0,
-    cumulative_env_steps=0,
-    cumulative_timesteps=0,
-    gamma=0.99,
-    gae_lambda=0.95,
-    ent_coef=0.01,
-    ent_coef_noop=0.02,
-    lr_actor=2e-4,
-    lr_critic=2e-4,
-)
 
 
 @pytest.fixture(scope="module")
 def observations(mock_env_spec: Any) -> list[dict[str, np.ndarray]]:
     """Real observations, all different, to fill the rectangle with."""
-    env = mock_env_spec.build_vec(2)
-    try:
-        batches = [env.reset(seed=3)[0]]
-        actions = np.zeros(env.num_envs, dtype=np.int64)
-        for _ in range(SAMPLES):
-            batches.append(env.step(actions)[0])
-    finally:
-        env.close()
-    return [{key: value[0] for key, value in batch.items()} for batch in batches]
+    return fresh_observations(mock_env_spec, seed=3, steps=SAMPLES)
 
 
 @pytest.fixture
@@ -104,78 +77,6 @@ def rect(env_spec: Any, observations: list[dict[str, np.ndarray]]) -> Any:
         yield built
     finally:
         built.close()
-
-
-def collect(built: Fixture, model: Any, *, iteration: int = 0) -> Any:
-    """One iteration played into the rectangle, the way the coordinator plays one.
-
-    The actions and their log-probabilities come from the real inference path against the real
-    stored masks, which is what makes the importance ratio at the first minibatch meaningful
-    rather than a comparison against a column of zeros.
-    """
-    buffer = built.buffer
-    plan = plan_for(SLOTS, iteration=iteration)
-    buffer.begin_iteration(plan, CYCLES)
-    engine = BatchedInference(buffer, model, master_seed=SEED)
-    engine.begin_iteration(plan)
-    slots = np.arange(SLOTS, dtype=np.int64)
-    rewards = np.random.default_rng(SEED).normal(size=(CYCLES + 1, SLOTS)).astype(np.float32)
-    # Every round of the iteration, the trailing one included: it carries the bootstrap
-    # observation and the last cycle's reward, and without it the last row is never completed.
-    for cycle in range(CYCLES + 1):
-        trailing = cycle == CYCLES
-        terminated = np.zeros(SLOTS, dtype=bool)
-        if cycle == CYCLES - 2:
-            terminated[0] = True
-        played = round_for(
-            cycle,
-            slots,
-            rows=np.array([buffer.layout.row_index(cycle, int(s)) for s in slots]),
-            reward=rewards[cycle],
-            terminated=terminated,
-        )
-        if trailing:
-            buffer.record_round(played, None, None)
-            continue
-        answer = engine.act(played)
-        buffer.record_round(played, answer.actions, answer.log_probs)
-    return buffer
-
-
-def plant_forced(built: Fixture, cells: Sequence[tuple[int, int]]) -> None:
-    """Repack the named cells with a mask that leaves the no-op and nothing else.
-
-    In the stored bytes rather than in a column, because that is what makes the row forced
-    everywhere at once: the rollout forward samples under this mask, the log-probability stored
-    beside the action comes out of it, and the update reads the same mask back. A column set
-    afterwards would describe rows the policy had not actually been forced on.
-
-    Call it before the iteration is collected. ``Fixture.fill`` packs the same observation into
-    several cells, so the cell is repacked from its own copy of the one it already held.
-    """
-    layout = built.buffer.layout
-    view = memoryview(built.buffer.shm.buf)[layout.obs_offset :]
-    try:
-        for cycle, slot in cells:
-            index = (cycle * layout.n_slots + slot) % len(built.observations)
-            observation = dict(built.observations[index])
-            mask = np.zeros_like(np.asarray(observation["action_mask"]))
-            mask[NOOP] = 1
-            observation["action_mask"] = mask
-            built.codec.pack(observation, view, layout.row_index(cycle, slot))
-    finally:
-        view.release()
-
-
-#: Five cells in every eight, so that the rectangle holds 30 forced rows and 18 choice rows.
-#: The count matters: 18 is not a multiple of ``SAMPLES // 4``, so under the choice-first
-#: partition the choice rows run across a minibatch boundary rather than filling minibatches.
-FORCED_CELLS = [
-    (cycle, slot)
-    for cycle in range(CYCLES)
-    for slot in range(SLOTS)
-    if (cycle * SLOTS + slot) % 8 < 5
-]
 
 
 #: Two slots whose every cell is forced. They are the padding an arm either divides by or does
@@ -200,41 +101,6 @@ def count_rows(module: Any) -> list[int]:
 
     module.forward = forward
     return seen
-
-
-def update_for(model: Any, config: PPOConfig = CONFIG, **kwargs: Any) -> PPOUpdate:
-    """An update over a scaler that does not standardise, so a reward is its own number."""
-    return PPOUpdate(
-        model,
-        GAE(standardize_rewards=False),
-        config,
-        master_seed=SEED,
-        **kwargs,
-    )
-
-
-class _Recording(torch.optim.SGD):
-    """An optimizer that records the gradient it was handed and changes nothing.
-
-    A real optimizer would answer a different question: Adam divides by the square root of the
-    second moment, so two gradients that agree to a part in a million can still produce
-    parameters that differ by the whole step size where a coordinate's gradient is near zero.
-    What has to be equal is the gradient.
-    """
-
-    def __init__(self, params: Any, **kwargs: Any) -> None:
-        super().__init__(list(params), lr=float(kwargs.get("lr", 0.0)))
-        self.recorded: list[torch.Tensor] = []
-
-    def step(self, closure: Any = None) -> None:  # type: ignore[override]
-        flat = [
-            parameter.grad.reshape(-1)
-            if parameter.grad is not None
-            else torch.zeros(parameter.numel())
-            for group in self.param_groups
-            for parameter in group["params"]
-        ]
-        self.recorded.append(torch.cat(flat).clone())
 
 
 # --------------------------------------------------------------------------

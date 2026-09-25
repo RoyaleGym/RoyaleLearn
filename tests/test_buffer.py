@@ -10,7 +10,6 @@ space's, and the footprint is checked against the arithmetic recomputed from bot
 from __future__ import annotations
 
 import math
-import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -23,24 +22,26 @@ from royalelearn.api.rollout import (
     EPISODE_END_WIN,
     GROUP_DEAD,
     GROUP_LEARNER,
-    ROLE_MIRROR,
-    Assignment,
     EnvSpec,
-    RolloutRound,
-    SlotPlan,
 )
-from royalelearn.rollout.codec import SpatialObsCodec
 from royalelearn.seeding import derive_generator
 
 torch = pytest.importorskip("torch")
 
-import msgspec  # noqa: E402
 
 from royalelearn.learn.buffer import RectBuffer  # noqa: E402
 
-SEED = 20260921
-CYCLES = 6
-SLOTS = 8
+# The rectangle harness is defined once, in ``royalelearn.testing``, where a package built on
+# RoyaleLearn finds it too; the names are imported here, where the other test modules find them.
+from royalelearn.testing import (  # noqa: E402
+    CYCLES,
+    SEED,
+    SLOTS,
+    plan_for,
+    round_for,
+)
+from royalelearn.testing import RectFixture as Fixture  # noqa: E402
+
 BITS_PER_BYTE = 8
 
 
@@ -58,62 +59,6 @@ def observations(mock_env_spec: Any) -> list[dict[str, np.ndarray]]:
     return [{key: value[0] for key, value in batch.items()} for batch in batches]
 
 
-def plan_for(slots: int, *, iteration: int = 0) -> SlotPlan:
-    """A mirror plan: every battle is the learner against itself."""
-    assignments = tuple(
-        Assignment(
-            battle=slot // 2,
-            ordinal=0,
-            role=ROLE_MIRROR,
-            opponent_id=None,
-            group=(GROUP_LEARNER, GROUP_LEARNER),
-            learner_seat=slot % 2,
-        )
-        for slot in range(slots)
-    )
-    return SlotPlan(
-        iteration=iteration,
-        n_battles=slots // 2,
-        n_slots=slots,
-        assignment=assignments,
-        resident_snapshots=(),
-    )
-
-
-def round_for(
-    cycle: int,
-    slots: np.ndarray,
-    *,
-    rows: np.ndarray,
-    group: int = GROUP_LEARNER,
-    reward: np.ndarray | None = None,
-    terminated: np.ndarray | None = None,
-    truncated: np.ndarray | None = None,
-    valid: bool = True,
-    episode_end: np.ndarray | None = None,
-    tick: np.ndarray | None = None,
-    deploy_status: int = -1,
-) -> RolloutRound:
-    count = slots.size
-    zeros = np.zeros(count, dtype=bool)
-    return RolloutRound(
-        cycle=cycle,
-        shard=0,
-        slots=slots,
-        obs_rows=rows,
-        group=np.full(count, group, dtype=np.int8),
-        reward=reward if reward is not None else np.zeros(count, dtype=np.float32),
-        terminated=terminated if terminated is not None else zeros,
-        truncated=truncated if truncated is not None else zeros,
-        valid=np.full(count, valid, dtype=bool),
-        deploy_status=np.full(count, deploy_status, dtype=np.int8),
-        tick=tick if tick is not None else np.full(count, cycle, dtype=np.int32),
-        episode_end=episode_end
-        if episode_end is not None
-        else np.zeros(count, dtype=np.int8),
-    )
-
-
 def record_clean_iteration(buffer: RectBuffer, slots: np.ndarray, cycles: int = CYCLES) -> None:
     """Every round of an iteration that ended no episode and lost no worker.
 
@@ -128,52 +73,6 @@ def record_clean_iteration(buffer: RectBuffer, slots: np.ndarray, cycles: int = 
             actions=None if trailing else np.zeros(slots.size, dtype=np.int16),
             log_probs=None if trailing else np.zeros(slots.size, dtype=np.float32),
         )
-
-
-class Fixture:
-    """A rectangle, its codec, and the rows a worker would have written into it."""
-
-    def __init__(
-        self,
-        spec: EnvSpec,
-        observations: list[dict[str, np.ndarray]],
-        *,
-        cycles: int = CYCLES,
-        slots: int = SLOTS,
-        frame_stack: int = 1,
-    ) -> None:
-        self.spec = msgspec.structs.replace(spec, frame_stack=frame_stack)
-        self.codec = SpatialObsCodec()
-        # A handful of rows is all this file needs a table for -- it is how a row is sized and
-        # packed. What a table may be decided from for a run is asserted in tests/test_codec.py.
-        self.codec.table(self.spec, observations, min_states=0)
-        self.observations = observations
-        self.buffer = RectBuffer(
-            self.spec,
-            self.codec,
-            run_id=uuid.uuid4().hex[:12],
-            cycles=cycles,
-            n_slots=slots,
-        )
-        self.buffer.set_static_planes(self.codec.static_planes(observations[0]))
-
-    def fill(self, cycles: int | None = None) -> None:
-        """Pack an observation into every cell of the rectangle, as a worker would."""
-        layout = self.buffer.layout
-        view = memoryview(self.buffer.shm.buf)[layout.obs_offset :]
-        try:
-            top = layout.cycles if cycles is None else cycles
-            for cycle in range(top + 1):
-                for slot in range(layout.n_slots):
-                    index = (cycle * layout.n_slots + slot) % len(self.observations)
-                    self.codec.pack(
-                        self.observations[index], view, layout.row_index(cycle, slot)
-                    )
-        finally:
-            view.release()
-
-    def close(self) -> None:
-        self.buffer.close()
 
 
 @pytest.fixture

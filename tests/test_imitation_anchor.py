@@ -44,20 +44,20 @@ torch = pytest.importorskip("torch")
 
 from imitation_support import seeded_artifact, with_imitation  # noqa: E402
 from royalelearn.imitation.references import FieldMLPReference, SnapshotReference  # noqa: E402
-from test_coordinator import coordinator, tiny_config  # noqa: E402
-from test_inference import build_model  # noqa: E402
-from test_ppo import (  # noqa: E402
-    CONFIG,
+from royalelearn.testing import (  # noqa: E402
     FORCED_CELLS,
     SAMPLES,
-    SCHEDULE,
-    _Recording,
+    build_model,
     collect,
-    observations,  # noqa: F401 - a fixture
+    coordinator,
     plant_forced,
-    rect,  # noqa: F401 - a fixture
+    tiny_config,
     update_for,
 )
+from royalelearn.testing import PPO_CONFIG as CONFIG  # noqa: E402
+from royalelearn.testing import PPO_SCHEDULE as SCHEDULE  # noqa: E402
+from royalelearn.testing import RecordingSGD as _Recording  # noqa: E402
+from test_ppo import observations, rect  # noqa: E402, F401 - fixtures
 
 # --------------------------------------------------------------------------
 # The algebra

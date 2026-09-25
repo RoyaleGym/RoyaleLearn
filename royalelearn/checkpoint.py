@@ -78,6 +78,19 @@ class IndexEntry(msgspec.Struct):
     created_unix_ns: int
 
 
+class _Located(msgspec.Struct):
+    """The three fields of a manifest the index is rebuilt from; the decoder skips the rest.
+
+    Lenient on purpose: a manifest this build cannot read in full -- an identity field written
+    by a build that has since removed it -- is still a checkpoint, and the resume that picks it
+    refuses it by name. Skipping it here would report a run with no checkpoint at all.
+    """
+
+    iteration: int
+    cumulative_env_steps: int
+    created_unix_ns: int
+
+
 class CheckpointIndex(msgspec.Struct):
     """The run's checkpoints, newest last.
 
@@ -358,15 +371,15 @@ class DirCheckpointStore(CheckpointStore):
             if not candidate.is_dir() or not manifest_path.is_file():
                 continue
             try:
-                manifest = msgspec.json.decode(manifest_path.read_bytes(), type=Manifest)
+                located = msgspec.json.decode(manifest_path.read_bytes(), type=_Located)
             except msgspec.DecodeError:
                 continue
             entries.append(
                 IndexEntry(
                     name=candidate.name,
-                    iteration=manifest.iteration,
-                    cumulative_env_steps=manifest.cumulative_env_steps,
-                    created_unix_ns=manifest.created_unix_ns,
+                    iteration=located.iteration,
+                    cumulative_env_steps=located.cumulative_env_steps,
+                    created_unix_ns=located.created_unix_ns,
                 )
             )
         return entries
@@ -426,7 +439,11 @@ def check_resume(
         raise IdentityMismatch(drift)
     for sentence in unverified(manifest.identity, identity):
         print(f"not checked on resume: {sentence}")
-    differences = config_differences(manifest.config, config)
+    # The stored config through the same one-release shim load_config applies, so keys it has
+    # just dropped at their old defaults are not reported as settings that changed.
+    from .config import retired_dropped
+
+    differences = config_differences(retired_dropped(manifest.config), config)
     for name, (was, now) in differences.items():
         print(f"config differs from the checkpoint's: {name}: {was!r} -> {now!r}")
     return differences

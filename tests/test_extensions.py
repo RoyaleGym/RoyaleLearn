@@ -29,8 +29,11 @@ from test_user_code_identity import facts  # noqa: F401 - a fixture
 DATA = Path(__file__).parent / "data"
 
 
-def _install(site: Path, distribution: str, points: dict[str, str]) -> None:
-    """What ``pip install`` leaves for an entry point: a dist-info folder on the path."""
+def _install(
+    site: Path, distribution: str, points: dict[str, str], *, code: Path | None = None
+) -> None:
+    """What ``pip install -e`` leaves for an entry point: a dist-info folder on the path, and a
+    ``direct_url.json`` naming the checkout the package is imported from."""
     info = site / f"{distribution}-0.1.dist-info"
     info.mkdir(parents=True)
     (info / "METADATA").write_text(
@@ -38,6 +41,9 @@ def _install(site: Path, distribution: str, points: dict[str, str]) -> None:
     )
     lines = [f"[{ENTRY_POINT_GROUP}]"] + [f"{key} = {value}" for key, value in points.items()]
     (info / "entry_points.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if code is not None:
+        direct = {"url": code.resolve().as_uri(), "dir_info": {"editable": True}}
+        (info / "direct_url.json").write_text(json.dumps(direct), encoding="utf-8")
 
 
 def _package(root: Path, name: str, *, marker: Path | None = None) -> None:
@@ -105,12 +111,14 @@ def test_the_same_declaration_seen_twice_is_one_provider(
     code = tmp_path / "code"
     _package(code, "dup_ext")
     monkeypatch.syspath_prepend(str(code))
-    _install(site, "dup-ext", {"dup_ext": "dup_ext:EXTENSION"})
-    _install(site / "stale", "dup-ext", {"dup_ext": "dup_ext:EXTENSION"})
+    _install(site, "dup-ext", {"dup_ext": "dup_ext:EXTENSION"}, code=code)
+    _install(site / "stale", "Dup_Ext", {"dup_ext": "dup_ext:EXTENSION"}, code=code)
     monkeypatch.syspath_prepend(str(site / "stale"))
     try:
         loaded = cfg.load_config({"dup_ext": {}})
-        assert [a.name for a in active_extensions(loaded)] == ["dup_ext"]
+        assert [(a.name, a.distribution) for a in active_extensions(loaded)] == [
+            ("dup_ext", "dup-ext")
+        ], "one distribution under two spellings is one provider, named canonically"
     finally:
         _forget("dup_ext")
 
@@ -129,26 +137,38 @@ def test_another_api_version_and_a_wrong_name_are_refused(monkeypatch: pytest.Mo
 # -- installed but unused ----------------------------------------------------------------------
 
 
+def _plain_run(config: cfg.RunConfig, folder: Path) -> dict[str, Any]:
+    with coordinator(config, run_dir=folder) as run:
+        run.iterate()
+        assert run.identity is not None
+        return {
+            "run_id": run.run_id,
+            "config.json": (folder / "config.json").read_bytes(),
+            "identity.json": (folder / "identity.json").read_bytes(),
+            "alarms": [alarm.name for alarm in run.alarms.alarms],
+            "schema": (sorted(run.schema.metrics), [p.template for p in run.schema.patterns]),
+            "state_digest": run.rows[-1]["run/state_digest"],
+        }
+
+
 def test_an_installed_but_unused_extension_changes_nothing(
     site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Its module is never imported, so it cannot move a config, an identity, an alarm table, a
-    schema or a digest. Seen failing: a load that resolves every installed provider imports it."""
+    """The same plain run without the package installed and with it: run_id, config.json,
+    identity.json, the alarm table, the schema and the state digest are equal, and the package's
+    module is never imported. Seen failing: an identity that reads the installed entry points."""
     marker = tmp_path / "imported"
     code = tmp_path / "code"
     _package(code, "unused_ext", marker=marker)
     monkeypatch.syspath_prepend(str(code))
-    _install(site, "unused-ext", {"unused_ext": "unused_ext:EXTENSION"})
-    config = tiny_config(tmp_path / "plain")
-    loaded = cfg.load_config(cfg.dump_config(config))
-    assert type(loaded) is cfg.RunConfig
-    with coordinator(loaded) as run:
-        run.iterate()
-        names = [alarm.name for alarm in run.alarms.alarms]
-        assert len(names) == 24
-        assert run.identity is not None and run.identity.extensions is None
-        assert not any(key.startswith("unused_ext/") for key in run.schema.metrics)
-        assert run.update.extra_state() == []
+    config = cfg.load_config(cfg.dump_config(tiny_config(tmp_path / "plain")))
+    assert type(config) is cfg.RunConfig
+    without = _plain_run(config, tmp_path / "without")
+    _install(site, "unused-ext", {"unused_ext": "unused_ext:EXTENSION"}, code=code)
+    importlib.invalidate_caches()
+    with_it = _plain_run(cfg.load_config(cfg.dump_config(config)), tmp_path / "with")
+    assert with_it == without
+    assert len(with_it["alarms"]) == 24
     assert "unused_ext" not in sys.modules
     assert not marker.exists()
     # and it IS findable: naming it loads it
@@ -184,7 +204,7 @@ def test_an_active_extension_is_recorded_by_commit_and_watched(
     _git(repo, "commit", "-qm", "c")
     sha = _git(repo, "rev-parse", "HEAD")
     monkeypatch.syspath_prepend(str(repo))
-    _install(site, "watched-ext", {"watched_ext": "watched_ext:EXTENSION"})
+    _install(site, "watched-ext", {"watched_ext": "watched_ext:EXTENSION"}, code=repo)
     try:
         plain = cfg.RunConfig(env=cfg.default_env_spec(cfg.MOCK_ENGINE))
         used = with_sections(plain, watched_ext={"coefficient": 0.5, "alarms": {"x": 1.0}})
@@ -218,7 +238,7 @@ def test_an_extension_whose_commit_cannot_be_named_refuses_the_run(
     code = tmp_path / "loose"
     _package(code, "loose_ext")
     monkeypatch.syspath_prepend(str(code))
-    _install(site, "loose-ext", {"loose_ext": "loose_ext:EXTENSION"})
+    _install(site, "loose-ext", {"loose_ext": "loose_ext:EXTENSION"}, code=code)
     try:
         used = with_sections(cfg.RunConfig(env=cfg.default_env_spec(cfg.MOCK_ENGINE)), loose_ext={})
         with pytest.raises(PreflightError, match="cannot be named"):
@@ -289,3 +309,259 @@ def test_the_supported_surface_resolves_and_importing_it_imports_nothing_else() 
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert done.stdout.strip() == "[]", done.stdout + done.stderr
+
+
+
+# -- what the S3 review found --------------------------------------------------------------------
+
+
+def test_a_null_key_no_provider_claims_is_still_refused() -> None:
+    """A null value is how an absent section is written, not a way past a misspelt key."""
+    with pytest.raises(PreflightError, match="'nosuch' is not a RoyaleLearn config key"):
+        cfg.load_config({"nosuch": None})
+
+
+def test_a_section_type_that_would_accept_a_misspelt_field_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Loose(msgspec.Struct):
+        coefficient: float = 0.0
+
+    loose = StubExtension("loose")
+    loose.section_type = Loose  # type: ignore[assignment]
+    use_extensions(monkeypatch, {"loose": loose})
+    with pytest.raises(PreflightError, match="refuses unknown fields"):
+        cfg.load_config({"loose": {"coefficent": 0.5}})
+
+
+def test_a_declaration_whose_module_is_gone_is_refused_by_its_key(site: Path) -> None:
+    """An editable install whose checkout was moved leaves its metadata behind."""
+    _install(site, "ghost-ext", {"ghost": "ghost_mod:EXTENSION"})
+    with pytest.raises(PreflightError, match="'ghost' is declared by ghost-ext as ghost_mod"):
+        cfg.load_config({"ghost": {}})
+
+
+def test_one_key_declared_by_two_distributions_is_refused(
+    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Which of the two the identity named would depend on the path, and so would the run id."""
+    code = tmp_path / "code"
+    _package(code, "twin_ext")
+    monkeypatch.syspath_prepend(str(code))
+    _install(site, "a-ext", {"twin_ext": "twin_ext:EXTENSION"}, code=code)
+    _install(site, "b-ext", {"twin_ext": "twin_ext:EXTENSION"}, code=code)
+    try:
+        with pytest.raises(
+            PreflightError, match="declared by more than one distribution: a-ext, b-ext"
+        ):
+            cfg.load_config({"twin_ext": {}})
+    finally:
+        _forget("twin_ext")
+
+
+def test_a_package_imported_from_outside_its_distribution_is_refused(
+    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale copy earlier on the path shadows the installed one: the code that would run is
+    not the code the identity would name."""
+    installed = tmp_path / "installed"
+    stale = tmp_path / "stale"
+    _package(installed, "shadow_ext")
+    _package(stale, "shadow_ext")
+    monkeypatch.syspath_prepend(str(installed))
+    monkeypatch.syspath_prepend(str(stale))
+    _install(site, "shadow-ext", {"shadow_ext": "shadow_ext:EXTENSION"}, code=installed)
+    try:
+        with pytest.raises(PreflightError, match="which that distribution does not own"):
+            cfg.load_config({"shadow_ext": {}})
+    finally:
+        _forget("shadow_ext")
+
+
+def test_an_extension_need_not_be_hashable(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Unhashable(StubExtension):
+        __hash__ = None  # type: ignore[assignment]
+
+    use_extensions(monkeypatch, {"plain_eq": Unhashable("plain_eq")})
+    loaded = cfg.load_config({"plain_eq": {}})
+    assert [a.name for a in active_extensions(loaded)] == ["plain_eq"]
+
+
+def test_a_section_set_to_none_encodes_as_absent() -> None:
+    sectioned = with_sections(
+        cfg.laptop(), warm_start={"actor_lr_scale": {"kind": "constant", "value": 1.0}}
+    )
+    cleared = msgspec.structs.replace(sectioned, warm_start=None)
+    assert cfg.dump_config(cleared) == cfg.dump_config(cfg.laptop())
+    assert cfg.config_hash(cleared) == cfg.config_hash(cfg.laptop())
+    assert type(with_sections(cleared)) is cfg.RunConfig
+    with pytest.raises(PreflightError, match="RoyaleLearn's own config keys"):
+        with_sections(cfg.laptop(), ppo={})
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("identity", "imitation_digest"),
+        ("identity", "engine_build", "built_by"),
+        ("identity", "extensions", "warm_start", "signed_by"),
+    ],
+    ids=["identity", "engine_build", "extension_record"],
+)
+def test_a_resume_refuses_an_unknown_field_at_every_level_of_the_identity(
+    tmp_path: Path, path: tuple[str, ...]
+) -> None:
+    """Seen failing: without forbid_unknown_fields on EngineBuild or ExtensionRecord, the nested
+    cases resume."""
+    config = with_sections(
+        tiny_config(tmp_path / "run"),
+        warm_start={"actor_lr_scale": {"kind": "constant", "value": 1.0}},
+    )
+    with coordinator(config) as run:
+        run.iterate()
+        saved = run.checkpoint()
+    manifest = json.loads((saved / "manifest.json").read_text(encoding="utf-8"))
+    node = manifest
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = "0" * 16
+    (saved / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with (
+        pytest.raises(CheckpointFormatError, match=path[-1]),
+        coordinator(config, resume=saved),
+    ):
+        pass
+
+
+def test_a_checkpoint_this_build_cannot_read_is_still_found_without_an_index(
+    tmp_path: Path,
+) -> None:
+    """With no index, the store rebuilds its list from the manifests; one this build cannot read
+    in full is still a checkpoint, so the resume refuses it by name instead of finding none."""
+    from royalelearn.checkpoint import INDEX_NAME, DirCheckpointStore
+
+    config = tiny_config(tmp_path / "run")
+    with coordinator(config) as run:
+        run.iterate()
+        saved = run.checkpoint()
+    manifest = json.loads((saved / "manifest.json").read_text(encoding="utf-8"))
+    manifest["identity"]["imitation_digest"] = "0" * 16
+    (saved / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (saved.parent / INDEX_NAME).unlink()
+    store = DirCheckpointStore(saved.parent.parent, keep=2)
+    assert [entry.name for entry in store._entries(saved.parent)] == [saved.name]
+
+
+def test_a_resume_does_not_report_keys_the_shim_dropped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run made between 0ab7a29 and S2 stored the six retired alarm keys and a null imitation
+    in its checkpoint's config; resumed now, they are not 'config differs' lines."""
+    config = tiny_config(tmp_path / "run")
+    with coordinator(config) as run:
+        run.iterate()
+        saved = run.checkpoint()
+    manifest = json.loads((saved / "manifest.json").read_text(encoding="utf-8"))
+    for key, (default, _home) in cfg.RETIRED_ALARM_KEYS.items():
+        manifest["config"]["alarms"][key] = default
+    manifest["config"]["imitation"] = None
+    (saved / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    capsys.readouterr()
+    with coordinator(config, resume=saved):
+        pass
+    printed = capsys.readouterr().out
+    assert "config differs" not in printed, printed
+
+
+def test_an_old_il_config_with_null_init_and_scale_loads_without_a_warm_start() -> None:
+    """Every IL config.json of that time wrote both keys, null when unset."""
+    said: list[str] = []
+    loaded = cfg.load_config(
+        {"imitation": {"init": None, "actor_lr_scale": None, "references": {}, "regularisers": []}},
+        say=said.append,
+    )
+    assert [a.name for a in active_extensions(loaded)] == ["imitation"]
+    assert said and "imitation.init" in said[0] and "imitation.actor_lr_scale" in said[0]
+
+
+def test_two_copies_of_one_distribution_that_disagree_are_refused(
+    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale in-tree egg-info earlier on the path: the first-copy-wins walk of
+    ``importlib.metadata.entry_points`` would silently take it. Seen failing with that walk."""
+    code = tmp_path / "code"
+    _package(code, "split_ext")
+    monkeypatch.syspath_prepend(str(code))
+    _install(site, "split-ext", {"split_ext": "split_ext:EXTENSION"}, code=code)
+    _install(site / "stale", "split-ext", {"split_ext": "split_ext.old:EXTENSION"}, code=code)
+    monkeypatch.syspath_prepend(str(site / "stale"))
+    with pytest.raises(PreflightError, match="'split_ext' is provided by more than one"):
+        cfg.load_config({"split_ext": {}})
+
+
+def test_an_installed_extension_stays_unimported_while_another_is_used(
+    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The walk over installed declarations runs for the section that is named; it must read
+    the others' metadata only. Seen failing: a walk that loads every entry point it passes."""
+    marker = tmp_path / "imported"
+    code = tmp_path / "code"
+    _package(code, "used_ext")
+    _package(code, "idle_ext", marker=marker)
+    monkeypatch.syspath_prepend(str(code))
+    _install(site, "used-ext", {"used_ext": "used_ext:EXTENSION"}, code=code)
+    _install(site, "idle-ext", {"idle_ext": "idle_ext:EXTENSION"}, code=code)
+    try:
+        loaded = cfg.load_config({"used_ext": {}})
+        assert [a.name for a in active_extensions(loaded)] == ["used_ext"]
+        assert "idle_ext" not in sys.modules
+        assert not marker.exists()
+    finally:
+        _forget("used_ext", "idle_ext")
+
+
+def test_two_sections_scheduling_the_actor_s_rate_are_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only one schedule can drive the freeze; the second would be silently ignored."""
+
+    class Scheduler(StubExtension):
+        def actor_lr_scale(self, section: Any) -> Any:
+            return cfg.ConstantSpec(1.0)
+
+    use_extensions(monkeypatch, {"first": Scheduler("first"), "second": Scheduler("second")})
+    config = with_sections(cfg.RunConfig(), first={}, second={})
+    assert any(
+        "more than one section schedules the actor's learning-rate scale: ['first', 'second']"
+        in problem
+        for problem in cfg.check_consistency(config)
+    )
+
+
+def test_the_recorded_version_is_the_package_s_own_not_the_metadata_s(
+    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, facts: Any  # noqa: F811
+) -> None:
+    """Install metadata can be stale; the package's ``__version__`` is what was imported."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    _package(repo, "versioned_ext")
+    (repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "c")
+    monkeypatch.syspath_prepend(str(repo))
+    _install(site, "versioned-ext", {"versioned_ext": "versioned_ext:EXTENSION"}, code=repo)
+    info = next(site.glob("versioned-ext-*.dist-info"))
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: versioned-ext\nVersion: 9.9\n", encoding="utf-8"
+    )
+    try:
+        used = with_sections(
+            cfg.RunConfig(env=cfg.default_env_spec(cfg.MOCK_ENGINE)), versioned_ext={}
+        )
+        record = I.compute_identity(used, **facts).extensions["versioned_ext"]
+        assert record.version == "0.1"
+    finally:
+        _forget("versioned_ext")

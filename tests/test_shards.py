@@ -26,7 +26,7 @@ from royalelearn.imitation.shards import (
 
 torch = pytest.importorskip("torch")
 
-from test_coordinator import coordinator, tiny_config  # noqa: E402
+from royalelearn.testing import coordinator, tiny_config  # noqa: E402
 
 
 @pytest.fixture(scope="module")

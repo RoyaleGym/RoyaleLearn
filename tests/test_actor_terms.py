@@ -170,6 +170,30 @@ def test_an_update_without_terms_keeps_no_state_for_them(tmp_path: Path) -> None
     assert kept_digest != plain_digest
 
 
+def _component_versions(checkpoint: Path) -> dict[str, int]:
+    return json.loads((checkpoint / "manifest.json").read_text(encoding="utf-8"))[
+        "component_versions"
+    ]
+
+
+def test_the_manifest_records_the_format_the_update_wrote(tmp_path: Path) -> None:
+    """The checkpoint store records each component's format beside its files; for the update it
+    is the format it wrote, so a run without terms records what it always did. Seen failing: the
+    store reading a class constant raised to 2 for every run."""
+    with coordinator(tiny_config(tmp_path / "plain")) as run:
+        run.iterate()
+        saved = run.checkpoint()
+    assert _component_versions(saved)["optimizers"] == 1
+    assert _update_state(saved)["format_version"] == 1
+    with coordinator(
+        tiny_config(tmp_path / "keeper"), extra_actor_terms=(StubTerm(0.0, keep_state=True),)
+    ) as run:
+        run.iterate()
+        saved = run.checkpoint()
+    assert _component_versions(saved)["optimizers"] == 2
+    assert _update_state(saved)["format_version"] == 2
+
+
 def test_a_build_that_knows_no_terms_refuses_their_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -181,7 +205,7 @@ def test_a_build_that_knows_no_terms_refuses_their_state(
         run.iterate()
         saved = run.checkpoint()
     (state,) = list(saved.rglob(PPOUpdate.STATE_FILE))
-    monkeypatch.setattr(PPOUpdate, "FORMAT_VERSION", 1)
+    monkeypatch.setattr(PPOUpdate, "READS_FORMAT", 1)
     with (
         coordinator(tiny_config(tmp_path / "old")) as run,
         pytest.raises(CheckpointFormatError, match="update format 2"),
