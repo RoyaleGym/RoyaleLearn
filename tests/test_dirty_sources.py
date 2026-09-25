@@ -114,3 +114,40 @@ def test_only_a_real_run_is_stopped() -> None:
     parser = build_parser()
     for command in (["doctor"], ["bench"], ["config"]):
         assert not hasattr(parser.parse_args(command), "allow_dirty")
+
+
+def test_verify_resume_refuses_dirty_code_before_its_first_half(monkeypatch) -> None:
+    """Its second half is a resume, which refuses uncommitted code. Asked only there, the proof
+    ran for minutes and then failed as a subprocess with nothing saying why."""
+    from royalelearn import cli, identity
+
+    monkeypatch.setattr(identity, "dirty_sources", lambda *_a, **_k: ("royalegym (abc-dirty)",))
+    monkeypatch.setattr(
+        cli, "_coordinator", lambda *_a, **_k: pytest.fail("the first half ran on dirty code")
+    )
+    monkeypatch.setattr(cli, "_config_of", lambda _args: __import__("royalelearn").config.laptop())
+    assert cli.main(["verify-resume", "--config", "x.json"]) == 2
+    args = build_parser().parse_args(["verify-resume", "--config", "x.json", "--allow-dirty"])
+    assert args.allow_dirty
+
+
+def test_bench_and_verify_resume_leave_folders_of_their_own(monkeypatch) -> None:
+    """Not the config's run folder: a later `train` of the same config would refuse it."""
+    from royalelearn import cli
+
+    seen: list[str] = []
+
+    class _Stop(Exception):
+        pass
+
+    def capture(config, **_kwargs):
+        seen.append(config.run_name)
+        raise _Stop
+
+    monkeypatch.setattr(cli, "_coordinator", capture)
+    monkeypatch.setattr(cli, "_config_of", lambda _args: __import__("royalelearn").config.laptop())
+    monkeypatch.setattr("royalelearn.identity.dirty_sources", lambda *_a, **_k: ())
+    for argv in (["bench"], ["verify-resume", "--config", "x.json"]):
+        with pytest.raises(_Stop):
+            cli.main(argv)
+    assert seen[0].startswith("bench-") and seen[1].startswith("verify-resume-")

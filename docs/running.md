@@ -1,7 +1,7 @@
 # running.md: running a job, and what to do when something looks wrong
 
 This page is for the person sitting in front of a run. It covers starting one, reading what
-scrolls past, the 23 alarms and what to do about each, the two ways a shared machine eats an
+scrolls past, the 28 alarms and what to do about each, the two ways a shared machine eats an
 afternoon, and the one memory setting that is worth understanding before you touch it.
 
 Every command block on this page is written for Windows PowerShell, the shell that opens by
@@ -15,9 +15,8 @@ here was checked against the code on 2026-09-22 and names the file it came from.
 and the spec disagree, the code wins.
 
 **What has not been shown.** A run completes its loop. Nobody has trained a good bot with this
-harness. As of 2026-09-22 the README records an open defect in the path that carries collected
-experience into the update, and no run so far shows a bot improving. So this page tells you what
-each number *would* mean, and you should not read any of them as a result yet.
+harness yet. So this page tells you what each number *would* mean, and you should not read any of
+them as a result.
 
 A few words used throughout:
 
@@ -25,7 +24,7 @@ A few words used throughout:
   per lap.
 - **Timestep.** One decision by one bot in one battle.
 - **The update.** The part of an iteration where the network changes. The long quiet part.
-- **Alarm.** A yes-or-no question asked about one row of numbers. 23 of them, in
+- **Alarm.** A yes-or-no question asked about one row of numbers. 28 of them, in
   `royalelearn/metrics/alarms.py`.
 - **Patience.** How many iterations in a row the answer must be yes before the alarm speaks.
 
@@ -45,8 +44,8 @@ catches most first-run failures without spawning a worker or allocating a buffer
 (`royalelearn/cli.py`, `_doctor`). Run it first. It is free.
 
 `train` takes `--config` (required), and optionally `--run-name`, `--until-timesteps`,
-`--inline` (one process, no worker farm, useful for debugging) and `--device cuda|cpu`
-(`cli.py`, `build_parser`). Everything a run writes lands in
+`--inline` (one process, no worker farm, useful for debugging), `--device cuda|cpu` and
+`--allow-dirty` (below) (`cli.py`, `build_parser`). Everything a run writes lands in
 `runs/<run_name>-<run_id>/` (`coordinator.py`, `run_directory`).
 
 **What happens before any battle is played.** `LearningCoordinator.__enter__`
@@ -61,7 +60,7 @@ rather than a traceback (`errors.py`, `cli.py`).
 
 | Refusal | Where | What it means |
 | --- | --- | --- |
-| Inconsistent config | `config.validate` | A number contradicts another one. The message names every problem at once, not just the first. `ppo.batch_size` not being a multiple of `ppo.minibatch_size` is the common one. |
+| Inconsistent config | `config.validate` | A number contradicts another one, a component in the `env` block is given a setting it does not take, a shaping weight is not a finite number of zero or more, or the `imitation` block is malformed. The message names every problem at once, not just the first. `ppo.batch_size` not being a multiple of `ppo.minibatch_size` is the common one. |
 | Stale engine build | `preflight._construct` | One environment is constructed first. A calibration or build mismatch dies here rather than at cycle 0, and the message names the fix: `maturin develop --release, in the RoyaleSim checkout` (`preflight.REBUILD_COMMAND`). |
 | Mask disagreement | `preflight._mask_disagreement_gate` | For both teams, exhaustively, the action mask and the engine are asked about every action. A bot trained against a wrong mask is worthless, so this refuses rather than warns. Off with `doctor.run_mask_disagreement_gate = false`. |
 | No legal no-op | `preflight._noop_gate` | Checked on 1000 sampled states and on a finished battle. A state with no legal action is a distribution over nothing, and what that produces is a NaN in the first backward pass. |
@@ -70,6 +69,10 @@ rather than a traceback (`errors.py`, `cli.py`).
 | One minibatch will not fit | `coordinator._vram_gate` | Section 5. This is the one that matters most on a small card. |
 | A worker did not come up | `rollout/farm.py`, `_await_report` | The child's traceback is printed after `rollout worker N did not come up:`. |
 | Identity drift, on resume | `coordinator._load` | The checkpoint was made by a different run. It names every differing field. `--allow-identity-drift` overrides it. |
+| A run is already in that folder | `coordinator._refuse_an_occupied_run_dir` | The same config on the same code always gets the same `runs/<run_name>-<run_id>/`. A fresh start refuses that folder once it holds metric rows or checkpoints, before writing anything. `resume` the run that is there, or give the new one another `--run-name`. There is no flag to overwrite it. |
+| Uncommitted code | `cli.refuse_dirty_sources` | `train` refuses when the royalelearn, royalegym or royaleviser package, the engine's data, the config file, or a package your own components come from has uncommitted or untracked files. `resume` and `verify-resume` check the same, apart from the config file. `--allow-dirty` runs anyway. |
+| A worker on another engine build | `rollout/farm.py`, `check_worker_binaries` | Every worker reports the compiled engine file it loaded, and it must be the one the run's identity names. At start this means the engine changed while the run was starting. A worker restarted after a rebuild is refused the same way, so do not rebuild RoyaleSim under a running job. |
+| An imitation file is not the one the config names | `imitation/init.py`, `verify_imitation_files` | A run with an `imitation` block names each folder it reads by path and digest. At every start, fresh or resumed, each folder is hashed again, and one whose content has changed is refused before preflight runs. `royalelearn artifact-digest <folder>` prints a folder's digest. |
 
 One thing is a warning and not a refusal: if the projection exceeds what is free on the machine
 *right now*, preflight says so and continues (`preflight.run_preflight`, around line 204). The
@@ -135,7 +138,7 @@ an interrupt is a checkpoint rather than a lost afternoon.
 
 ## 3. The alarms, one group at a time
 
-There are exactly 23. You can print the table without starting a run:
+There are exactly 28. You can print the table without starting a run:
 
 ```
 ../.venv/Scripts/python -c "
@@ -148,7 +151,7 @@ for a in default_alarms(AlarmConfig()):
 
 Three rules govern all of them, from `metrics/alarms.py`:
 
-- **`warn`** (16 alarms) prints a line and appends to `alarms.jsonl`. The run continues.
+- **`warn`** (21 alarms) prints a line and appends to `alarms.jsonl`. The run continues.
 - **`halt`** (7 alarms) does that, then writes a checkpoint and a diagnostic bundle into
   `bundles/<iteration>/`, then stops the run with exit code 2.
 - **A missing key never fires.** An iteration in which no battle finished carries no `env/`
@@ -263,9 +266,9 @@ the most likely explanation of a run that has stopped changing. Nothing on this 
 established a healthy value here yet, so treat a firing as a prompt to investigate rather than
 as a verdict.
 
-### 3.4 The bot's behaviour is going wrong (seven alarms)
+### 3.4 The bot's behaviour is going wrong (eight alarms)
 
-These are about what the policy is actually doing in battles. Six warn; one stops the run.
+These are about what the policy is actually doing in battles. Seven warn; one stops the run.
 
 | Alarm | Reads | Fires when | Severity, patience |
 | --- | --- | --- | --- |
@@ -332,6 +335,38 @@ rating you read while this is firing is not measuring what you think it is.
 **`gate_starved`.** Five gates failed in a row, so no new snapshot has joined the pool. This is
 the plateau signal stated as an event rather than as a curve. It is a warning because a plateau
 is information, not a fault. See [ladder.md](ladder.md).
+
+### 3.6 Learning from demonstrations (four alarms)
+
+These fire only on a run with an `imitation` block: a run that started from a cloned policy, or
+that is held near a reference policy while it learns. Section 19 of
+[harness-spec.md](harness-spec.md) describes the block. All four warn and none stops the run,
+because a run stopped early would drop out of any comparison it is part of.
+
+| Alarm | Reads | Fires when | Severity, patience |
+| --- | --- | --- | --- |
+| `imitation_ref_kl_high` | `imitation/<name>/kl` | a regulariser's KL above `alarms.imitation_ref_kl_warn` (1.0 nats) | warn, 1 |
+| `imitation_lambda_saturated` | `imitation/<name>/lambda_at_max` | the anchor's coefficient sat at its ceiling | warn, `alarms.imitation_lambda_saturated_patience` (10) |
+| `imitation_handoff` | `ppo/kl`, `ppo/clip_fraction`, `imitation/iterations_since_unfreeze` | in the first `alarms.imitation_handoff_window` (20) iterations after a frozen actor starts to move, KL above 0.05 or clip fraction above 0.3 | warn, 1 |
+| `imitation_critic_unready` | `imitation/ev_at_unfreeze` | the critic's explained variance when the actor was unfrozen, below 0.3 | warn, 1 |
+
+**`imitation_ref_kl_high`.** The policy has moved far from the reference it is anchored to. That
+can be the anchor letting go on schedule, or the reward pulling the policy somewhere the reference
+never goes. Read `imitation/<name>/kl_noop`, `kl_card` and `kl_tile` to see which part moved.
+
+**`imitation_lambda_saturated`.** The coefficient has been at `coef.max` for ten iterations and
+the KL is still above its budget. The anchor is pulling as hard as it is allowed to and losing.
+That is a statement about the reward, not about the anchor.
+
+**`imitation_handoff`.** The first iterations after the freeze moved the policy fast. The
+learning-rate backoff acts on its own; this says why it acted.
+
+**`imitation_critic_unready`.** The critic was trained on the frozen policy's battles and still
+explained little of the return when the actor was let go, so the first policy updates run on a
+poor baseline. A longer freeze is the usual answer.
+
+`kl_dead` cannot fire on a frozen iteration. Its key, `ppo/kl`, is left out of a frozen row
+rather than written as 0.0, because nothing was measured.
 
 ---
 
@@ -491,7 +526,10 @@ tells you which existing checkpoint to resume from instead.
 **Resuming.** `python -m royalelearn resume --run runs\royalelearn-<id>`. With no `--checkpoint`
 it takes the newest from the run index and prints which one it chose. A checkpoint whose identity
 does not match is refused, with every differing field named; `--allow-identity-drift` overrides
-that.
+that. Resume also refuses while code the run executes has uncommitted changes, your own reward
+package included; `--allow-dirty` overrides that. A checkpoint written by an older version, from
+before runs recorded the engine file and your own code, prints a `not checked on resume:` line
+for each and carries on.
 
 **What survives, what does not.** Read [checkpoints.md](checkpoints.md). It covers what is in the
 file, how big it is, how often one is written, how to tell a resume is really continuing rather

@@ -58,7 +58,7 @@ which prints `[('jsonl', True), ('console', True), ('viser', True), ('wandb', Fa
 - **viser** feeds the live viewer, if you have one attached. It sends nothing at all until a
   viewer says hello, so a run with no viewer costs one clock read per iteration.
 - **wandb** is Weights and Biases, a hosted dashboard. It is **off in every shipped config**:
-  all three profiles (`laptop`, `workstation`, `many_core`) and all eight files in
+  all three profiles (`laptop`, `workstation`, `many_core`) and all the `.json` files in
   `examples/configs/` have `"kind": "wandb", "enabled": false`. It needs an account and the
   `wandb` package, which is not installed here. If you turn it on without installing the package,
   the run refuses to start with a message telling you to install it
@@ -71,7 +71,11 @@ So out of the box: a file, and your terminal. Nothing leaves the machine.
 ## How to read one row
 
 A row is flat. Every key is `group/name`, and there are eight groups, in this order: `run`,
-`throughput`, `time`, `ppo`, `policy`, `env`, `ladder`, `health`.
+`throughput`, `time`, `ppo`, `policy`, `env`, `ladder`, `health`. A run that learns from
+demonstrations adds a ninth, `imitation`, after them; section 19 of
+[harness-spec.md](harness-spec.md) lists its keys. On an iteration where such a run holds its bot
+still (`imitation/actor_frozen` 1), the `ppo/` keys computed from the bot's own update, such as
+`ppo/kl` and `ppo/entropy`, are left out of the row, because nothing was measured.
 
 The console prints exactly the row it was handed, grouped by the part before the slash. Here is a
 real block, from `runs/train-diag0-hog26k-1ad6a480b7666090` on 2026-09-22, trimmed to twelve keys
@@ -193,7 +197,7 @@ every row they appear in. As of 2026-09-22 there were 56 metric files and 249 ro
 | `time/codec` | 0.0 in every row on disk | Time spent packing observations in the workers. It reads `codec_ms` out of the rollout source's stats, and no shipped source reports it yet. |
 | `ladder/champion_step` | 0 in every row on disk | The env step the champion was snapshotted at. Every admission was filed at step 0 until 2026-09-24, because the pool looked the step up in the registry the candidate was about to be added to. New runs carry the real step. |
 | `ladder/paired_rho` | 0.0 in every row on disk | The champion comparison's paired-seed correlation. It was read off whichever comparison ran last, and an undefined correlation was written as 0.0; both fixed 2026-09-24. It is now absent when there is nothing to report. |
-| `env/reward_terminal_abs` | 0.0 in every row on disk | How much of the reward came from actually winning. A fix landed on 2026-09-22 (commit `c38dc82`) that files the win/loss term under the fixed name `terminal` rather than under its Python class name. Every row currently on disk predates that fix, so they all read 0.0. New runs should carry a real number. |
+| `env/reward_terminal_abs` | 0.0 in every row written before the 2026-09-22 fix | How much of the reward came from actually winning. A fix landed on 2026-09-22 (commit `c38dc82`) that files the win/loss term under the fixed name `terminal` rather than under its Python class name. Rows written before it read 0.0. Runs since carry a real number. |
 
 Some other rows are zero simply because nothing has happened yet, and those are fine:
 `health/worker_restarts`, `health/nan_guard_trips`, `health/obs_codec_clipped`,
@@ -206,14 +210,15 @@ the schema gives both a healthy range of exactly 0 to 0, and a non-zero value is
 
 ## How the alarms work
 
-The harness watches 23 conditions, and you do not have to know them to start a run. They are
+The harness watches 28 conditions, and you do not have to know them to start a run. They are
 defined in `royalelearn/metrics/alarms.py`.
 
 Each alarm is one yes-or-no question about one row, plus a patience and a severity.
 
 - **Patience** is how many iterations in a row the condition has to hold before the alarm says
   anything. Most are 3 or 5. `ev_negative` is 50, because a critic being bad early is normal.
-- **Severity `warn`** (16 of them) prints a line and appends to `alarms.jsonl`. The run keeps going.
+- **Severity `warn`** (21 of them) prints a line and appends to `alarms.jsonl`. The run keeps going.
+  Four of them watch a run that learns from demonstrations and are silent on any other run.
 - **Severity `halt`** (7 of them) does all of that, then writes a checkpoint and a diagnostic
   bundle into `bundles/`, then stops the run. `royalelearn train` exits with code 2.
 
@@ -334,5 +339,5 @@ a `vram_spilling` warning during it. The relevant rows are `health/vram_availabl
 - [harness-spec.md](harness-spec.md) for the full specification, including the alarm table this
   page summarises.
 - [design.md](design.md) for why the harness is shaped the way it is.
-- `royalelearn/metrics/schema.py` for all 129 fixed keys and 10 key families, each with a unit, a
+- `royalelearn/metrics/schema.py` for every fixed key and every key family, each with a unit, a
   sentence and a healthy range. If this page and that file ever disagree, the file is right.

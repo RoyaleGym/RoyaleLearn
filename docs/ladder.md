@@ -171,7 +171,19 @@ it, and has quietly forgotten how to play.
 span the rating range. The candidate's average score has to reach what the fitted model
 predicts the champion would score against those same 8, less one standard error.
 
-That is 1,000 + 400 + 800 = **2,200 battles per gate**.
+Early in a run the pool may hold nothing besides the champion and the two anchors. Then there is
+nothing to sample, and the gate records condition 3 as skipped, with that reason. The verdict
+rests on conditions 1 and 2, so a candidate that passes both is admitted and becomes champion.
+Until the fix of 2026-09-24 (`3077d87`) the same case was recorded as a pass with `n` of 0.
+
+That is 1,000 + 400 + 800 = **2,200 battles per gate** at most. A gate stops as soon as its
+outcome is settled and records the conditions it did not play as skipped: when condition 1 fails
+the gate costs 1,000 battles, and when condition 2 fails it costs 1,400 (`ladder/gate.py`).
+
+The first gate of a run can cost more. The run's first snapshot joins the pool without a gate, so
+as champion it has no record against the anchors. When condition 2 needs that record, the
+champion plays each anchor itself, 200 battles on the same seeds, and later gates read the result
+instead of playing it again.
 
 The verdict is not a single yes or no:
 
@@ -201,6 +213,9 @@ real one, trimmed, from a smoke-sized run on 2026-09-22:
   "anchors:scripted:noop":{"passed":true,"n":2,"observed":1.0,"bound":0.6119},
   "anchors:scripted:random_legal":{"passed":false,"n":2,"observed":0.0,"bound":0.1498}}}
 ```
+
+That file predates the early stop. Today a gate whose first condition fails plays nothing more,
+so its file carries `beats_champion` and records the anchors and the pool as skipped.
 
 You can re-run a gate from stored snapshots without touching the training run:
 
@@ -306,9 +321,9 @@ The rows that are worth your attention, built in `royalelearn/metrics/records.py
 | `ladder/rating/<member>` | One pool member's fitted rating, only after the first refit |
 | `ladder/rating_ci95_lo/<member>` and `..._hi/<member>` | That rating's interval. A wide one means you do not know yet |
 | `ladder/transitivity_residual` | Above 0.10, stop trusting the rating column. Appears once a rating fit exists |
-| `ladder/paired_rho` | How much the starting position decides, rather than the players. Appears once the paired-seed correlation has been computed |
+| `ladder/paired_rho` | How much the starting position decides, rather than the players, in the last gate's champion comparison. Appears once a gate has played the champion and the correlation is defined. Runs before 2026-09-24's fix wrote 0.0 in every row, so ignore it there |
 | `ladder/draw_rate_eval` | Draw rate in evaluation battles |
-| `ladder/gate_seconds_frac` | Share of wall clock spent gating rather than training. Appears on an iteration where a gate ran |
+| `ladder/gate_seconds_frac` | Share of this run's wall clock spent gating rather than training, so far. On every row, and 0 until the first gate. Absent only after resuming a checkpoint written before runs recorded the gate total |
 | `ladder/elo_readout` | The live dashboard Elo. Never a decision. Appears once a training game has been scored this run |
 
 A row that is missing a key is not a bug. The harness uses absence to say "nothing to report"
@@ -385,20 +400,25 @@ python -c "import json,sys; print(sum(1 for l in open(sys.argv[1],encoding='utf-
 
 This matters more than any of the above.
 
-**No run on this machine has ever executed the shipped gate.** Measured 2026-09-22: of the 50
-run folders under `runs/` with a metrics file, 24 ran at least one gate, and every one used
-`champion_games: 2`, which is the smoke setting. The 1,000-battle gate in `laptop.json` and
-`workstation.json` has never fired. The code path is the same and the suite covers it, but
-the numbers it produces on a real run have not been seen.
+**The shipped gate has only just been run.** Measured 2026-09-22: of the 50 run folders under
+`runs/` with a metrics file, 24 ran at least one gate, and every one used `champion_games: 2`,
+which is the smoke setting. After that, `train-hog26-10` ran the same 1,000-battle gate that
+`laptop.json` and `workstation.json` ship. Reading its first real gate showed that conditions 2
+and 3 could not fail there: the champion had no record against the anchors, and the pool held
+nothing to sample. Both were fixed on 2026-09-24. No numbers from a real gate are written up on
+this page yet.
 
-**The ladder has never had more than a handful of members.** The largest pool in any run on
-disk is 3, which is 2 anchors plus 1 snapshot. Eviction, the stratified sample in condition 3,
-and the anti-forgetting argument for keeping old snapshots are all untested at the pool sizes
-they were designed for.
+**The ladder has never had more than a handful of members.** On 2026-09-22 the largest pool in
+any run on disk was 3, which is 2 anchors plus 1 snapshot. Eviction, the stratified sample in
+condition 3, and the anti-forgetting argument for keeping old snapshots are all untested at the
+pool sizes they were designed for.
 
-**Nobody has measured what a gate costs on the laptop profile.** `ladder/gate_seconds_frac`
-exists to tell you, and the schema flags it above 0.1. That is 2,200 full matches with no step
-cap, so it will not be free, but there is no measured figure to quote.
+**What a gate costs is measured per battle, not per gate.** On 2026-09-23 one evaluation battle
+took 8.02 s network against network and 0.195 s scripted against scripted on this laptop, the
+median of three full matches (`EVAL_BATTLE_SECONDS` in `ladder/gate.py`). So a full 2,200-battle
+gate is hours, and preflight prints a gate's battles and hours at that rate before a run starts
+(`rollout/preflight.py`). `ladder/gate_seconds_frac` tells you what gating is costing a run, and
+the schema flags it above 0.1.
 
 What is measured, on a 4-core laptop with an RTX 3050 4 GB and 7.8 GB of RAM shared with six
 other jobs, on 2026-09-22: in a diagnostic run at 2 workers by 24 battles and 8,192 timesteps

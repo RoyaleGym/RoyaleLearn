@@ -30,7 +30,12 @@ not a lost afternoon. That handler is installed in `royalelearn/coordinator.py`,
 
 Everything one run writes lives in one directory, named `<runs_dir>/<run_name>-<run_id>`. The
 default `runs_dir` is `runs`, relative to wherever you started the command
-(`royalelearn/config.py`, `runs_dir: str = "runs"`).
+(`royalelearn/config.py`, `runs_dir: str = "runs"`). The id comes from the run's identity, so the
+same config on the same code always gets the same directory. A fresh `train` refuses a directory
+that already holds metric rows or checkpoints, and names the two ways on: `resume` the run that is
+there, or give the new one another `run_name` (`train --run-name`) or `runs_dir`. `bench` and
+`verify-resume` name their own folders (`bench-<time>`, `verify-resume-<time>`), so they never
+take the one your `train` will use.
 
 ```
 runs/my-run-f4a99b1ce0c23888/
@@ -284,7 +289,8 @@ royalelearn verify-resume --config my.json --iterations 6 --split 3
 
 It prints `the resumed process loaded the same learner state, byte for byte` or it tells you the two
 digests that disagreed. This takes real time, since it runs six iterations of your config twice
-over.
+over. Its second half is a `resume`, so it refuses uncommitted code the same way, and it says so
+before the first half starts; `--allow-dirty` passes through to both halves.
 
 ## What does not come back
 
@@ -325,7 +331,14 @@ about this process and not about the run, and a paused run's pause does not surv
 
 ## When a resume refuses
 
-It refuses rather than continuing something subtly different. Four ways:
+It refuses rather than continuing something subtly different. Six ways:
+
+- **Code the run executes has uncommitted changes.** That covers the royalelearn, royalegym and
+  royaleviser packages, the engine's data, and any package your own components come from, such as
+  a reward in `mybot`. Commit or stash, or pass `--allow-dirty` to resume anyway.
+- **A file the `imitation` block names has changed.** A run that learns from demonstrations names
+  each folder it reads by path and digest, and each is hashed again on every start. A folder whose
+  content differs is refused by name before anything is built.
 
 - **The identity moved.** The identity is what the run is: the engine build, the card catalogue,
   the observation layout, the network architecture, the master seed and a few more. If any of it

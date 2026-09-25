@@ -43,8 +43,10 @@ torch, like `train` and `doctor` do.
 
 Two consequences. It takes as long as one iteration of the config you pointed it at, which on the
 `laptop` profile is minutes rather than seconds. And it leaves a run folder behind at
-`runs/<run_name>-<run_id>/`, with `config.json`, `identity.json` and `metrics.jsonl` in it, because
-it goes through the same code path a run does (`royalelearn/cli.py`, `_bench`).
+`runs/bench-<time>-<run_id>/`, with `config.json`, `identity.json` and `metrics.jsonl` in it, because
+it goes through the same code path a run does (`royalelearn/cli.py`, `_bench`). The folder is named
+for the bench and the time it started, not for the config's `run_name`, so it never occupies the
+folder `train` will start in; delete bench folders when you are done with them.
 
 If you want a quick answer rather than a real one, point it at a smaller config:
 

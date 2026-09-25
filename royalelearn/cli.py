@@ -112,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--config", type=Path, required=True)
     verify.add_argument("--iterations", type=int, default=6)
     verify.add_argument("--split", type=int, default=3)
+    verify.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="prove the resume although code the run executes has uncommitted changes",
+    )
     verify.set_defaults(handler=_verify_resume)
 
     evaluate = commands.add_parser("eval", help="a paired evaluation between two members")
@@ -432,28 +437,33 @@ def _verify_resume(args: argparse.Namespace) -> int:
     digest across the process boundary, which is what a resume has to get right: the weights,
     both optimizers' moments, the return scaler and the schedule positions, byte for byte.
     """
+    from . import identity
+
     config = _config_of(args)
+    # The second half is a `resume`, which refuses uncommitted code. Asked here, before the
+    # first half spends its minutes, the refusal names the files; asked there, it surfaced as a
+    # failed subprocess and nothing said why.
+    refuse_dirty_sources(args.allow_dirty, identity.dirty_sources(None, config=config))
+    config.run_name = _scratch_name("verify-resume")
     with _coordinator(config) as run:
         run.learn(until_timesteps=_timesteps_for(config, args.split))
         run.checkpoint()
         digest = run.state_digest()
         run_dir, iteration = run.run_dir, run.iteration
-    print(f"checkpointed at iteration {iteration}, state {digest}")
-    done = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "royalelearn",
-            "resume",
-            "--run",
-            str(run_dir),
-            "--until-timesteps",
-            str(_timesteps_for(config, args.iterations)),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    print(f"checkpointed at iteration {iteration}, state {digest}, in {run_dir}")
+    command = [
+        sys.executable,
+        "-m",
+        "royalelearn",
+        "resume",
+        "--run",
+        str(run_dir),
+        "--until-timesteps",
+        str(_timesteps_for(config, args.iterations)),
+    ]
+    if args.allow_dirty:
+        command.append("--allow-dirty")
+    done = subprocess.run(command, check=False, capture_output=True, text=True)
     print(done.stdout, end="")
     loaded = _loaded_digest(done.stdout)
     if done.returncode != 0:
@@ -464,6 +474,16 @@ def _verify_resume(args: argparse.Namespace) -> int:
         return 1
     print("the resumed process loaded the same learner state, byte for byte")
     return 0
+
+
+def _scratch_name(tool: str) -> str:
+    """A run name of the tool's own, so what it leaves behind is not the config's run folder.
+
+    A run's folder is ``<run_name>-<run_id>`` and the id is the identity, so ``bench`` or
+    ``verify-resume`` on a config would otherwise fill the very folder that config's ``train``
+    starts in -- and a fresh start refuses a folder that already holds a run.
+    """
+    return f"{tool}-{time.strftime('%Y%m%d-%H%M%S')}"
 
 
 def _loaded_digest(output: str) -> str:
@@ -530,6 +550,7 @@ def _bench(args: argparse.Namespace) -> int:
     already past the default deadline, so the default is one iteration.
     """
     config = _config_of(args)
+    config.run_name = _scratch_name("bench")
     deadline = time.perf_counter() + max(1.0, args.seconds)
     cap = max(1, int(args.iterations))
     with _coordinator(config) as run:

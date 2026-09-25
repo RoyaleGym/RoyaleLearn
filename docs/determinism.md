@@ -154,9 +154,11 @@ thousand iterations would never show up in a fixture.
 
 Each of these genuinely changes the numbers. Most of them are caught for you.
 
-**A different card list or a different engine build.** The card table's hash and the engine's
-own build and calibration hashes are part of the run's identity. Rebuild the engine with
-different data and you have a different game, so you have a different experiment.
+**A different card list or a different engine build.** The card table's hash, the engine's own
+build and calibration hashes, and a hash of the compiled engine file are part of the run's
+identity. Rebuild the engine, from different data or from different code, and the identity
+changes, so you have a different experiment. Do not rebuild it under a running job: a worker that
+restarts on the new build is refused.
 
 **A different number of workers or battles per worker.** The rectangle of seats is laid out
 worker by worker, and battle 7 is a different battle when the layout changes. Worker count,
@@ -249,7 +251,7 @@ What goes into it, and roughly why:
 | `master_seed` | it changes every byte after it |
 | `determinism_tier` | it decides whether the numbers repeat at all |
 | `device_kind`, `torch_version` | different kernels, different arithmetic |
-| engine class, build hash, calibration hash, card list hash | the game itself |
+| engine class, build hash, calibration hash, card list hash, compiled engine file hash | the game itself |
 | observation, action and env spec hashes | what the policy sees and can do |
 | `frame_stack` | how many past frames the network gets |
 | network architecture hash | the model |
@@ -257,6 +259,8 @@ What goes into it, and roughly why:
 | rollout geometry hash | workers, battles, shards, cycles, seats |
 | ladder hash | who the learner plays |
 | both package versions and their git descriptions | the code |
+| the Python source of any package your own components come from, by hash | your code, such as a reward in `mybot` |
+| the `imitation` block, with every file it names by content (only when the block is present) | what the run learns from besides its own battles |
 
 Recorded but deliberately **not** in it: the run name, the output directory, the timestep
 limit, metric sinks, checkpoint settings, alarm thresholds, and the collection scheduling
@@ -346,7 +350,9 @@ python -m royalelearn verify-resume --config laptop.json --iterations 6 --split 
 ```
 
 This runs three iterations, checkpoints, starts a **second process** that loads the
-checkpoint, and compares the learner's whole state hash across the process boundary. A second
+checkpoint, and compares the learner's whole state hash across the process boundary. The second
+process is a `resume`, so uncommitted code is refused before the first half starts; pass
+`--allow-dirty` if the tree is dirty on purpose. A second
 process is the only version of this worth running. One that works inside the interpreter that
 wrote the checkpoint skips the machinery being tested.
 
