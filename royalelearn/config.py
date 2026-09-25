@@ -828,6 +828,31 @@ def check_consistency(config: RunConfig) -> list[str]:
     problems: list[str] = []
     ppo, rollout, net = config.ppo, config.rollout, config.net
 
+    # The environment's components, checked against their own signatures, so a misspelt kwarg
+    # is named here rather than raised from inside a worker when the environment is built. The
+    # shaping weights get the reward's own rule on top: a config passing this says something
+    # about them now, where it used to inspect none of them.
+    from .rollout.envspec import component_kwarg_problems
+
+    modules = tuple(config.extra_component_modules)
+    env = config.env
+    for spec in (
+        env.engine,
+        env.obs_builder,
+        env.action_parser,
+        env.reward_fn,
+        env.state_mutator,
+        *env.termination,
+        *env.truncation,
+    ):
+        problems.extend(f"env: {problem}" for problem in component_kwarg_problems(spec, modules))
+    if env.reward_fn.cls == "royalelearn.rewards.default_potential_reward":
+        from .rewards import shaping_weight_problems
+
+        problems.extend(
+            f"env.reward_fn: {problem}" for problem in shaping_weight_problems(env.reward_fn.kwargs)
+        )
+
     if rollout.overlap:
         # Refused rather than accepted and ignored. Spec 14.1 says what it would do: collect
         # iteration i on a second thread and a second buffer while the update of i-1 runs,

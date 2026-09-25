@@ -278,12 +278,15 @@ def test_hoarding_while_the_opponent_regenerates_is_negative(engine: Any) -> Non
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "weights", [{}, {"crown": 0.3, "tower_hp": 0.7, "elixir": 0.11}], ids=["shipped", "other"]
+)
 def test_the_composition_is_exactly_antisymmetric_between_the_seats(
-    engine: Any, cards: list[CardInfo]
+    engine: Any, cards: list[CardInfo], weights: dict[str, float]
 ) -> None:
     """Every seat's reward is the other's negated, to the last bit, on a transition in which
-    both seats did something different."""
-    reward = default_potential_reward()
+    both seats did something different -- at the shipped weights and at weights a config set."""
+    reward = default_potential_reward(**weights)
     reward.bind(engine)
     set_gamma(reward, GAMMA)
     previous = state(

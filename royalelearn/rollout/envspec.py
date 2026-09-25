@@ -141,6 +141,27 @@ def bound_kwargs(spec: ComponentSpec, extra_modules: tuple[str, ...] = ()) -> di
     return _normal(out)
 
 
+def component_kwarg_problems(spec: ComponentSpec, extra_modules: tuple[str, ...] = ()) -> list[str]:
+    """What is wrong with one component's kwargs, found without building it.
+
+    A kwarg the component does not take used to surface as a raw ``TypeError`` inside a worker
+    when the environment was built. Binding it to the signature here names it at config load.
+    """
+    try:
+        target = spec.resolve(extra_modules)
+    except PreflightError as exc:
+        return [str(exc)]
+    try:
+        signature = inspect.signature(target)
+    except (TypeError, ValueError):
+        return []
+    try:
+        signature.bind_partial(**spec.kwargs)
+    except TypeError as exc:
+        return [f"{spec.cls}: {exc}"]
+    return []
+
+
 def env_value_digest(spec: EnvFactorySpec, extra_modules: tuple[str, ...] = ()) -> str:
     """sha256 of the environment as it will be BUILT: every component's kwargs bound first.
 

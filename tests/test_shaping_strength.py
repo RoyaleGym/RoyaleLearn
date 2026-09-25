@@ -250,3 +250,56 @@ def test_a_record_written_before_the_magnitude_existed_leaves_it_absent() -> Non
     assert "env/reward_shaping_step_abs" not in fields
     assert not any(key.startswith("env/reward_terms_step_abs/") for key in fields)
     assert "env/reward_shaping_abs" in fields, "the old metric must not disappear with the new one"
+
+
+# -- the weights' domain, at build and at load --------------------------------------------
+
+
+@pytest.mark.parametrize("value", [True, "0.3"])
+def test_a_bool_or_a_string_is_not_a_weight(value: object) -> None:
+    """``True`` is quietly 1 to Python; ``"0.3"`` constructs and then fails inside a worker."""
+    with pytest.raises(ValueError, match="crown"):
+        default_potential_reward(crown=value)  # type: ignore[arg-type]
+
+
+def test_the_config_names_every_bad_component_kwarg_at_load() -> None:
+    """All at once, each by name: a typo in the reward, a bad weight, a typo in another component.
+
+    ``check_consistency`` inspected no env component kwargs, so a config passing it said nothing
+    about the weights and a misspelt kwarg surfaced as a raw TypeError when the env was built.
+    """
+    import royalelearn.config as cfg
+
+    base = cfg.default_env_spec(cfg.MOCK_ENGINE)
+    limit = base.truncation[0]
+    env = msgspec.structs.replace(
+        base,
+        reward_fn=msgspec.structs.replace(base.reward_fn, kwargs={"elixer": 0.3, "crown": -1.0}),
+        truncation=[msgspec.structs.replace(limit, kwargs={"max_stepz": 5})],
+    )
+    problems = cfg.check_consistency(cfg.RunConfig(env=env))
+    joined = "\n".join(problems)
+    assert "elixer" in joined, problems
+    assert "crown" in joined, problems
+    assert "max_stepz" in joined, problems
+
+
+def test_a_clean_config_raises_nothing_about_its_components() -> None:
+    import royalelearn.config as cfg
+
+    problems = cfg.check_consistency(cfg.RunConfig(env=cfg.default_env_spec(cfg.MOCK_ENGINE)))
+    assert not [p for p in problems if p.startswith("env")], problems
+
+
+def test_the_defaults_written_out_build_the_same_reward_bit_for_bit() -> None:
+    """``{}`` and the defaults spelled out must be one reward, not only one digest."""
+    states = _trajectory()
+    left_out = default_potential_reward()
+    written_out = default_potential_reward(crown=0.2, tower_hp=0.1, elixir=0.05)
+    for reward in (left_out, written_out):
+        set_gamma(reward, 0.999)
+    for prev, nxt in pairwise(states):
+        for team in (0, 1):
+            assert left_out.get_reward(team, prev, nxt, []) == written_out.get_reward(
+                team, prev, nxt, []
+            )

@@ -26,8 +26,10 @@ WHY THESE THREE AND NOT ROYALEGYM'S SHIPPED DEFAULTS
 ``CommittedElixirPotential`` replaces both. Playing a card moves elixir from the bar to the
 board and is net zero; losing a unit costs what the unit cost; killing one gains it; and sitting
 at ten elixir is penalised on its own, because the opponent's side of the potential keeps rising
-while yours cannot. There is no coefficient to re-tune and no annealing schedule, which is what
-RoyaleGym's house rule -- weights should settle, not drift -- asks for.
+while yours cannot. It replaces the leak penalty's coefficient with a property of the state,
+and it needs no annealing schedule, which is what RoyaleGym's house rule -- weights should
+settle, not drift -- asks for. Its weight in the composition is configurable (see
+``default_potential_reward``); that is a scale, set once for a run, not a schedule.
 
 EXACT ARITHMETIC
 
@@ -43,7 +45,7 @@ from __future__ import annotations
 
 import math
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from fractions import Fraction
 
 from royalegym.protocol import (
@@ -326,6 +328,29 @@ def set_gamma(reward: RewardFunction, gamma: float) -> None:
         setter(gamma)
 
 
+#: The shaping weights ``default_potential_reward`` takes, by name.
+SHAPING_WEIGHTS: tuple[str, ...] = ("crown", "tower_hp", "elixir")
+
+
+def shaping_weight_problems(weights: Mapping[str, object]) -> list[str]:
+    """Everything wrong with a set of shaping weights, every one named, all at once.
+
+    Shared by ``default_potential_reward`` and ``config.check_consistency`` so that a config is
+    refused at load for exactly what the reward would refuse at build.
+    """
+    problems: list[str] = []
+    for name, weight in weights.items():
+        if name not in SHAPING_WEIGHTS:
+            problems.append(
+                f"{name!r} is not a shaping weight; the weights are {', '.join(SHAPING_WEIGHTS)}"
+            )
+        elif isinstance(weight, bool) or not isinstance(weight, int | float):
+            problems.append(f"{name}={weight!r} is not a number")
+        elif not math.isfinite(weight) or weight < 0:
+            problems.append(f"{name}={weight!r} must be finite and zero or more")
+    return problems
+
+
 def default_potential_reward(
     *,
     crown: float = 0.2,
@@ -343,27 +368,30 @@ def default_potential_reward(
         "reward_fn": {"cls": "royalelearn.rewards.default_potential_reward",
                       "kwargs": {"crown": 0.2, "tower_hp": 0.1, "elixir": 0.05}}
 
-    Every term is a potential difference, so a weight changes how the signal is spread over a
-    battle and not which policy is optimal. It does change how loud each term is step to step, and
-    that is what to read before changing one: ``env/reward_terms_step_abs/<term>``, the mean of
-    each seat's ``sum |F_t|`` over an episode. NOT ``env/reward_terms_abs/<term>``, which is the
-    episode's SUM: for a potential it telescopes to ``1 - gamma`` times how far the potential
-    wandered, so it falls as the discount schedule rises whatever the weights are.
+    Every term is a potential difference, so no weight can change which policy is optimal: a
+    weight SCALES a term's per-step magnitude and changes nothing about when it arrives. That holds
+    for any real weight, negative ones included, so it neither justifies raising a weight nor
+    bounds it. The bound here is a choice, stated below. What a weight does change is how loud
+    each term is step to step, and that is what to read before changing one:
+    ``env/reward_terms_step_abs/<term>``, the mean of each seat's ``sum |F_t|`` over an episode.
+    NOT ``env/reward_terms_abs/<term>``, which is the episode's SUM: for a potential it telescopes
+    to ``1 - gamma`` times how far the potential wandered, so it falls as the discount schedule
+    rises whatever the weights are.
 
     How loud the shipped weights are, measured 2026-09-24 on train-hog26-10's environment, ten
     random-legal battles at gamma 0.999, per seat per episode **[M]**: elixir 0.80, tower 0.15,
     crown 0.15, against a terminal of 0.80. The elixir term alone is already about as loud as the
     objective. Each magnitude is linear in its weight.
 
-    A weight must be finite and not negative. A negative potential weight pays a seat for losing
-    ground, and a NaN reaches every return it touches; both would train, silently.
+    A weight must be a real number, finite and not negative: not a bool, which Python would
+    quietly take as 1, and not a string, which constructs and then fails inside a worker on the
+    first step. A negative potential weight pays a seat for losing ground, and a NaN reaches every
+    return it touches; both would train, silently. ``config.check_consistency`` applies the same
+    rule when a config is loaded, so a bad weight is named before any environment is built.
     """
-    for name, weight in (("crown", crown), ("tower_hp", tower_hp), ("elixir", elixir)):
-        if not math.isfinite(weight) or weight < 0:
-            raise ValueError(
-                f"default_potential_reward({name}={weight!r}): a shaping weight must be a finite "
-                "number, zero or more. Zero turns the term off and keeps its row."
-            )
+    problems = shaping_weight_problems({"crown": crown, "tower_hp": tower_hp, "elixir": elixir})
+    if problems:
+        raise ValueError("default_potential_reward: " + "; ".join(problems))
     return PotentialCombinedReward(
         [
             (WinLossReward(draw=0.0), 1.0),

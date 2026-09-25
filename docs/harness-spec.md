@@ -2238,7 +2238,7 @@ forwarded to every term that takes one. Nothing in RoyaleGym is modified; these 
 live here until they are absorbed upstream (section 16, ask 4).
 
 ```python
-def default_potential_reward() -> CombinedReward:
+def default_potential_reward(*, crown=0.2, tower_hp=0.1, elixir=0.05) -> CombinedReward:
     return PotentialCombinedReward([
         (WinLossReward(draw=0.0),               1.0),    # royalegym's; the objective
         (PotentialCrownReward(),                0.2),
