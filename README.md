@@ -151,11 +151,12 @@ Discrete(2305)
 Eight rows, because four battles have two players each and both feed one bot. Each row sees its own
 king tower at the bottom, so the bot never has to learn the board twice.
 
-`action_mask` marks the legal card-and-tile moves for that row. For the first nine decisions it
-is 1 on every row, the wait, because a match refuses every deploy for its opening seconds. After
-that, how many are legal depends on the deck and on what is in hand, so it differs between rows:
-when play opened in this program, with randomly dealt decks, it ranged from 691 to 1277 across the
-eight rows (2026-09-24, engine build `cb784bb583586789`).
+`action_mask` marks the legal card-and-tile moves for that row. For the first nine decisions only
+one move is legal on every row, the wait, because a match refuses every deploy for its opening
+seconds. After that, how many are legal depends on the deck and on what is in hand, so it differs
+between rows. Step these four battles with the wait nine times and play opens: with the decks
+seed 0 deals, the count then ranges from 691 to 1277 across the eight rows (2026-09-24, engine
+build `cb784bb583586789`).
 
 One step is one decision, and a decision is half a second of game time by default. That is the
 `decision_ms` setting. Waiting is a legal choice, and it is the no-op.
