@@ -212,13 +212,13 @@ most first-run failures. `bench` measures your own machine's throughput instead 
 someone else's. It runs at least one whole training iteration, so on a real profile it takes as
 long as one iteration does.
 
-`bench` also leaves a run folder behind in `runs`, and that changes what you type next. A run's
-folder is named after its config, so the same config on the same code always gets the same folder.
-`train` will not start a fresh run in a folder that already holds one. So after `bench`, give your
-first real run a name of its own, for example
-`python -m royalelearn train --config examples/configs/laptop.json --run-name first`. The same goes
-for starting one config twice. If you meant to carry on the earlier run instead, the refusal
-prints the `resume` command for it.
+`bench` also leaves a run folder behind in `runs`, named `bench-` and the time it started, so it
+never takes the folder your real run will use. A run's folder is named after its config, so the
+same config on the same code always gets the same folder, and `train` will not start a fresh run
+in a folder that already holds one. So starting one config twice is refused. If you meant to carry
+on the earlier run, the refusal prints the `resume` command for it. If you meant a second fresh
+run, give it a name of its own, for example
+`python -m royalelearn train --config examples/configs/laptop.json --run-name second`.
 
 The config profiles are `laptop`, `workstation` and `many_core`. The first two also ship as files
 in `examples/configs/`. `workstation.json` has not been run yet. Its minibatch, the number of
@@ -448,7 +448,7 @@ The pages in `docs/` go further than this README does. If you are about to start
 first one.
 
 - [`docs/running.md`](docs/running.md). Running a job: starting one, reading what scrolls past,
-  the 24 alarms and what to do about each, and the one memory setting worth understanding.
+  the 28 alarms and what to do about each, and the one memory setting worth understanding.
 - [`docs/throughput.md`](docs/throughput.md). How long a training step takes, how to measure your
   own machine instead of trusting a number from someone else's, and which part of your computer
   is holding you up.
