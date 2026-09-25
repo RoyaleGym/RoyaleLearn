@@ -273,7 +273,7 @@ loud each term really is, read `env/reward_terms_step_abs/<term>` in your metric
 
 ## With the rest of the stack
 
-<p align="center"><img src="docs/media/family.svg" width="100%" alt="The five Royale repos: RoyaleLearn trains on RoyaleGym, which steps RoyaleSim; RoyaleViser draws traces and streams; RoyaleLive's recordings calibrate RoyaleSim"></p>
+<p align="center"><img src="docs/media/family.svg" width="100%" alt="How the Royale repos depend on each other: RoyaleLearn trains on RoyaleGym, which steps RoyaleSim; RoyaleViser draws traces and streams; RoyaleLive's recordings calibrate RoyaleSim"></p>
 
 You need four repos to train a bot, and all four are public, under the GitHub organisation
 [RoyaleGym](https://github.com/RoyaleGym). RoyaleLearn is the top layer. It imports `royalegym`
