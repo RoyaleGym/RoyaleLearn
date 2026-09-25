@@ -35,13 +35,28 @@ TOWERS = (EntityKind.KING_TOWER, EntityKind.PRINCESS_TOWER)
 #: The catalogue's own ways of saying "this card puts nothing of its own on the board", spelled
 #: out here from the engine's placement classes rather than taken from the term under test.
 SPELL_PLACEMENTS = (Placement.SPELL, Placement.ROLLING, Placement.SPELL_NOT_ON_WATER)
-ENGINES = ["mock", pytest.param("rust", marks=pytest.mark.engine)]
+ENGINES = [
+    "mock",
+    pytest.param("rust", marks=pytest.mark.engine),
+    # The catalogue runs actually train on. Which card an engine files a produced unit under
+    # depends on which cards are loaded, so the default catalogue is not the population that
+    # matters: on build 1ba01d7d the old rule read a Goblin Gang as 6 and Rascals as 15 on this
+    # catalogue, where the review had measured a Goblin Gang at 18 on the build before.
+    pytest.param("rust-training", marks=pytest.mark.engine),
+]
 
 
 def _engine(kind: str) -> Any:
-    if kind == "rust":
+    if kind.startswith("rust"):
         from royalegym.rust_engine import RustEngine
 
+        if kind == "rust-training":
+            import json
+            from pathlib import Path
+
+            config = Path(__file__).parents[1] / "examples" / "configs" / "train-hog26-10.json"
+            names = json.loads(config.read_text(encoding="utf-8"))["env"]["engine"]["kwargs"]
+            return RustEngine(card_names=names["card_names"])
         return RustEngine()
     from royalegym.mock_engine import MockEngine
 
