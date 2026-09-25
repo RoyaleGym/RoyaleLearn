@@ -85,5 +85,5 @@
    "why": "the schedules file sha in both checkpoints, nothing else: config_hash, run_id, state_digest and component_versions equal"
   }
  },
- "note": "Pinned 2026-09-25: commit, last.actor_lr_scale (1.0) and the schedules file sha carry their measured values. The play-rate members' values cannot be compared here (8bf6a67 has none); they are compared by value in s3-plain-vs-490c74c-mock.json. The plain S3 pairs still fail on manifest component_versions.optimizers 1 -> 2 (3ff1f22 learn/ppo.py:268 FORMAT_VERSION = 2, recorded unconditionally by checkpoint.py:210 while a plain run's misc.json stays format_version 1). That is a finding in 3ff1f22, not allowed here."
+ "note": "Pinned 2026-09-25: commit, last.actor_lr_scale (1.0) and the schedules file sha carry their measured values. The play-rate members' values cannot be compared here (8bf6a67 has none); they are compared by value in s3-plain-vs-490c74c-mock.json. Before 3ff1f22 was committed, a sitting on its working tree found manifest component_versions.optimizers 1 -> 2 on these pairs (FORMAT_VERSION a class constant of 2, recorded by the checkpoint store while a plain run's misc.json stayed format_version 1). 3ff1f22 makes FORMAT_VERSION a property that is 2 only when a freeze or term state is held; the ab4 sitting passed this file at 3ff1f22 with component_versions equal. It was never allowed here."
 }

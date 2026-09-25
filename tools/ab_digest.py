@@ -65,13 +65,19 @@ WHAT A COMPARISON SEES (every column of ``diff``):
   rollout, matchmaker, ladder, rating, advantage, metrics, arch, rng minus python_random).
 - other_modules: every royale* module other than royalelearn/royalegym that was loaded, with its
   file.
+- entry_points: every entry point in a royale* group (royalelearn.extensions) that the child's
+  install metadata declares, one row per metadata copy (value, distribution, version, where the
+  metadata sits), read without loading any: the one thing an installed but unused add-on changes
+  in a child. A result from before this column records none; one side recorded and the other not
+  is entry_points_unrecorded (never waivable), and ``compare`` says so when neither side did.
 - rename_problems (never waivable): an expect rename that matched nothing on side A.
 
 WHAT IT CANNOT SEE: anything the tiny config does not run (rollout workers, snapshot opponents, the
 ladder refit, eval and gate, the probe, CUDA and bfloat16, frame stacks, the recorder, long
 schedules); the values of clock and machine keys; rng.json's python_random, which differs between
 two identical runs; files the Rust engine reads natively outside the fixed data list; installed
-distribution metadata, which still comes from the venv (royalegym_version; ``--imitate`` writes the
+distribution metadata other than royale* entry points, which still comes from the venv
+(royalegym_version; ``--imitate`` writes the
 pinned clone's own entry points and ``direct_url.json`` beside it, which RoyaleLearn's discovery
 takes, and a copy installed in the venv that declares the same entry points is merged with it); the
 BLAS thread variables of the operator's shell (inherited, not recorded); a hash-order dependence the
@@ -614,6 +620,30 @@ def sweep_modules():
     return others
 
 
+def entry_points_seen():
+    """Every entry point in a royale* group that this process's install metadata declares, one
+    row per metadata copy, read as RoyaleLearn's discovery reads it (every distribution,
+    duplicates included) and without loading any: an installed add-on that a run never imports
+    changes nothing else a child can observe."""
+    import importlib.metadata as metadata
+
+    seen = {}
+    for dist in metadata.distributions():
+        try:
+            points = list(dist.entry_points)
+            name, version = dist.metadata["Name"], dist.version
+        except Exception:
+            continue
+        where = getattr(dist, "_path", None)
+        where = _where(str(where)) if where is not None else "?"
+        for point in points:
+            if point.group.startswith("royale"):
+                seen.setdefault(f"{point.group}:{point.name}", []).append(
+                    f"{point.value} | {name} {version} | {where}"
+                )
+    return {key: sorted(rows) for key, rows in sorted(seen.items())}
+
+
 def _sha_file(path):
     digest = hashlib.sha256()
     with _real_open(path, "rb") as handle:
@@ -838,6 +868,7 @@ if MODE == "fresh":
     record["dropped_finders"] = {"fresh": DROPPED_FINDERS}
     record["child_hashseed"] = {"fresh": CHILD_SEED}
     record["modules"] = {"fresh": sweep_modules()}
+    record["entry_points"] = {"fresh": entry_points_seen()}
 else:
     record = json.loads(Path(JOB["result"]).read_text(encoding="utf-8"))
     run_dir = Path(record["run_dir"])
@@ -891,6 +922,7 @@ else:
     record["dropped_finders"]["resumed"] = DROPPED_FINDERS
     record["child_hashseed"]["resume"] = CHILD_SEED
     record["modules"]["resumed"] = sweep_modules()
+    record["entry_points"]["resumed"] = entry_points_seen()
 Path(JOB["result"]).write_text(json.dumps(record, indent=1), encoding="utf-8")
 '''
 )
@@ -1209,6 +1241,12 @@ def _same_process_environment(record: dict[str, Any]) -> None:
     clash = sorted(k for k in set(ma) & set(mb) if ma[k] != mb[k])
     if clash:
         raise SystemExit(f"a module came from another file on resume: {clash}")
+    points = record.get("entry_points") or {}
+    if points.get("fresh") != points.get("resumed"):
+        raise SystemExit(
+            "the entry points the install metadata declares changed between the fresh and the "
+            f"resumed process: {points.get('fresh')!r} -> {points.get('resumed')!r}"
+        )
 
 
 def make_artifacts(learn_sha: str, gym_sha: str, out: Path, run: RunOptions) -> Path:
@@ -1275,11 +1313,13 @@ PARTS = (
     "alarm_firings",
     "checkpoint",
     "other_modules",
+    "entry_points",
 )
 #: Columns no expect file can allow.
 NEVER = (
     "environment",
     "engine_binary",
+    "entry_points_unrecorded",
     "config_order",
     "alarm_order",
     "resumed_alarm_order",
@@ -1557,6 +1597,20 @@ def diff(
     if modules:
         out["other_modules"] = modules
 
+    # entry points in royale* groups: what an installed add-on changes in a run that never
+    # imports it. A result from before this column records none, which is not "none declared":
+    # one side recorded and the other not is never comparable, and neither side recorded is
+    # said by ``compare``.
+    pa, pb = a.get("entry_points"), b.get("entry_points")
+    if (pa is None) != (pb is None):
+        out["entry_points_unrecorded"] = {"a": pa is None, "b": pb is None}
+    elif pa is not None:
+        ea = {k: _text(v) for k, v in {**pa["fresh"], **pa["resumed"]}.items()}
+        eb = {k: _text(v) for k, v in {**pb["fresh"], **pb["resumed"]}.items()}
+        points = _parts(ea, eb)
+        if points:
+            out["entry_points"] = points
+
     problems += renamer.unused()
     if problems:
         out["rename_problems"] = problems
@@ -1793,6 +1847,11 @@ def compare(a_path: Path, b_path: Path, expect_path: Path | None) -> int:
             return 2
     expect = json.loads(expect_path.read_text(encoding="utf-8")) if expect_path else None
     found = diff(a, b, rename=(expect or {}).get("rename"))
+    if a.get("entry_points") is None and b.get("entry_points") is None:
+        print(
+            "NOTE: neither side recorded entry_points (results from before that column), so "
+            "what install metadata declared was not compared"
+        )
     print(json.dumps(found, indent=1, sort_keys=True) if found else "identical on every column")
     if expect is None:
         return 1 if found else 0
@@ -2364,6 +2423,29 @@ def _near_misses(
         "other_modules.only_b: royaleimitate.ab_digest",
     )
 
+    def entry_point(side: dict[str, Any]) -> None:
+        for process in ("fresh", "resumed"):
+            side["entry_points"][process]["royalelearn.extensions:ab_digest"] = [
+                "ab_digest.x:X | ab-digest 0 | <venv>/ab_digest-0.dist-info"
+            ]
+
+    case(
+        "an entry point only side B's install metadata declares",
+        diff(ref, mutated(entry_point)),
+        plain,
+        "entry_points.only_b: royalelearn.extensions:ab_digest",
+    )
+
+    def unrecorded(side: dict[str, Any]) -> None:
+        side.pop("entry_points")
+
+    case(
+        "side B recorded no entry points (everything else allowed)",
+        diff(ref, mutated(unrecorded)),
+        expect_from(diff(ref, mutated(unrecorded))),
+        "entry_points_unrecorded (never allowed)",
+    )
+
     def replica(side: dict[str, Any]) -> None:
         side["resume_config_via"] = "replicated cli._run_config"
 
@@ -2433,6 +2515,16 @@ def _parent_refusals(ref: dict[str, Any]) -> list[str]:
         module,
         same,
         "a module came from another file",
+    )
+
+    def points(record: dict[str, Any]) -> None:
+        record["entry_points"]["resumed"]["royalelearn.extensions:ab_digest"] = ["x"]
+
+    case(
+        "the declared entry points changed between the processes",
+        points,
+        same,
+        "the entry points the install metadata declares changed",
     )
     planned = dict(ref["hashseeds"])
     case(
