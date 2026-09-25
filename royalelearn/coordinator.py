@@ -456,7 +456,6 @@ class PolicyProbe:
         import torch
 
         cells = np.argwhere(trainable)
-        fields: dict[str, MetricValue] = {}
         self.card_plays, self.tile_plays, self.card_tile_plays = {}, {}, {}
         if cells.size == 0:
             return _empty_policy_fields()
@@ -465,10 +464,8 @@ class PolicyProbe:
         cycles, slots = sampled[:, 0].copy(), sampled[:, 1].copy()
         taken = actions[cycles, slots].astype(np.int64)
 
-        legal_counts: list[np.ndarray] = []
-        slot_legal: list[np.ndarray] = []
-        elixir: list[np.ndarray] = []
-        onehots: list[np.ndarray] = []
+        vectors: list[np.ndarray] = []
+        masks: list[np.ndarray] = []
         # The gather's staging ring is one round wide, so the probe reads in blocks of at
         # most that: it borrows the update's gather rather than allocating a second one.
         chunk = max(1, min(self.rows, buffer.n_slots))
@@ -477,12 +474,6 @@ class PolicyProbe:
             obs = gather.observations(cycles[block], slots[block])
             with torch.no_grad():
                 mask = obs.mask
-                legal_counts.append(mask.sum(dim=-1).to("cpu").numpy())
-                # Per hand slot rather than per action: a slot is playable when ANY of its tiles
-                # is. This is what separates "the policy does not choose this card" from "this
-                # card is rarely affordable", and nothing measured it before.
-                slots_wide = mask[:, 1:].reshape(mask.shape[0], self.hand.hand_size, self.tiles)
-                slot_legal.append(slots_wide.any(dim=-1).to("cpu").numpy())
                 chosen = mask.gather(
                     -1,
                     torch.from_numpy(taken[block]).to(mask.device).unsqueeze(-1),
@@ -496,28 +487,40 @@ class PolicyProbe:
                         cycle=int(cycles[first]),
                         slot=int(slots[first]),
                     )
-                vector = obs.vector.to("cpu").numpy()
-            elixir.append(vector[:, self.elixir].reshape(-1))
-            onehots.append(vector[:, self.onehot])
+                vectors.append(obs.vector.to("cpu").numpy())
+                masks.append(mask.to("cpu").numpy())
+        return self.fields_of(np.concatenate(vectors), np.concatenate(masks), taken)
 
-        legal = np.concatenate(legal_counts).astype(np.float64)
+    def fields_of(
+        self, vector: np.ndarray, mask: np.ndarray, actions: np.ndarray
+    ) -> dict[str, MetricValue]:
+        """The probe's fields from rows: each row's vector, its mask, and the action taken.
+
+        Separate from the gather so that rows which never went through a rollout buffer -- a
+        demonstration driven through the environment -- are measured by this same code, and a
+        difference between a policy and a demonstration is never a difference between two
+        implementations of one statistic.
+        """
+        fields: dict[str, MetricValue] = {}
+        self.card_plays, self.tile_plays, self.card_tile_plays = {}, {}, {}
+        mask = np.asarray(mask).astype(bool)
+        actions = np.asarray(actions).astype(np.int64)
+        legal = mask.sum(axis=-1).astype(np.float64)
+        # Per hand slot rather than per action: a slot is playable when ANY of its tiles is.
+        # This is what separates "the policy does not choose this card" from "this card is
+        # rarely affordable", and nothing measured it before.
+        slot_legal = mask[:, 1:].reshape(mask.shape[0], self.hand.hand_size, self.tiles).any(-1)
         fields["policy/legal_actions_mean"] = float(legal.mean())
         for percentile, name in ((5, "p05"), (50, "p50"), (95, "p95")):
             fields[f"policy/legal_actions_{name}"] = float(np.percentile(legal, percentile))
         fields["policy/forced_noop_frac"] = float(np.mean(legal <= 1))
 
-        bar = np.concatenate(elixir).astype(np.float64)
+        bar = vector[:, self.elixir].reshape(-1).astype(np.float64)
         fields["env/mean_elixir_at_decision"] = float(bar.mean() * self.max_mana)
         fields["env/frac_elixir_above_99"] = float(np.mean(bar >= 0.99))
-        fields.update(play_rate_by_elixir(bar * self.max_mana, legal, taken))
+        fields.update(play_rate_by_elixir(bar * self.max_mana, legal, actions))
 
-        fields.update(
-            self._plays(
-                taken,
-                np.concatenate(onehots, axis=0),
-                np.concatenate(slot_legal, axis=0),
-            )
-        )
+        fields.update(self._plays(actions, vector[:, self.onehot], slot_legal))
         return fields
 
     def _plays(
