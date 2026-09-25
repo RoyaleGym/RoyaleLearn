@@ -4228,8 +4228,9 @@ slot, then tile): `kl = kl_noop + kl_card + kl_tile`, where `kl_card` is p_ref(p
 of the slot given play, and `kl_tile` is the reference-weighted KL of the tile given the slot. The
 identity is tested to float tolerance.
 
-**`imitation/<name>/grad_ratio`**: ‖∇ of the unscaled KL sum‖ / ‖∇ of the policy term‖ over the
-actor's parameters, on the first minibatch of each iteration that has a choice row. It is for
+**`imitation/<name>/grad_ratio`**: ‖∇ of the KL sum times `actor_scale`‖ / ‖∇ of the policy term‖
+over the actor's parameters, before the coefficient (lambda), on the first minibatch of each
+iteration that has a choice row. It is for
 setting the coefficient's start. At π_θ = π_ref the forward KL's gradient is exactly zero, so the
 ratio is only informative some iterations after the two have parted; a dry run reads it there.
 

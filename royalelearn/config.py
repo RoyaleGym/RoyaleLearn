@@ -982,8 +982,12 @@ def _alarm_override_problems(config: RunConfig) -> list[str]:
     from .extensions import extension_alarms
     from .metrics.alarms import default_alarms, names, override_problems
 
-    table = default_alarms(config.alarms, extra=extension_alarms(config))
-    return override_problems(config.alarms, names(table))
+    table = names(default_alarms(config.alarms, extra=extension_alarms(config)))
+    doubled = sorted({name for name in table if table.count(name) > 1})
+    problems = []
+    if doubled:
+        problems.append(f"the run's alarm table names these alarms more than once: {doubled}")
+    return problems + override_problems(config.alarms, table)
 
 
 def validate(config: RunConfig) -> RunConfig:

@@ -57,9 +57,9 @@ IMITATION_PATTERNS = (
         "imitation/{name}/grad_ratio",
         _m(
             "ratio",
-            "||grad of the unscaled KL|| / ||grad of the policy term|| on the first minibatch "
-            "with a choice row. Zero while the policy equals the reference. For setting "
-            "coef.start.",
+            "||grad of the KL sum times the policy term's per-batch scale|| / ||grad of the "
+            "policy term||, before the coefficient, on the first minibatch with a choice row. "
+            "Zero while the policy equals the reference. For setting coef.start.",
         ),
     ),
     pattern(

@@ -13,6 +13,8 @@ rename a decision rather than a side effect.
 
 from __future__ import annotations
 
+import pytest
+
 from royalelearn.metrics import schema
 
 PUBLISHED_KEYS = (
@@ -295,3 +297,35 @@ def test_every_key_the_viewer_panel_reads_is_a_key_the_schema_publishes() -> Non
         f"by a key that does not exist is an em dash, and an em dash is what the panel shows "
         f"when no learner is attached at all."
     )
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        # a key a core pattern already answers for
+        {"metrics": {"env/reward_terms/win": "count"}},
+        # a pattern over a core group: every typo in a ppo key would become a known key
+        {"patterns": ["ppo/{anything}"]},
+        # a pattern whose members a core pattern already covers
+        {"patterns": ["ladder/rating/{who}"]},
+    ],
+)
+def test_a_contribution_that_overlaps_the_core_is_refused(part: dict) -> None:
+    from royalelearn.metrics.schema import MetricSpec, SchemaContribution, for_run, pattern
+
+    spec = MetricSpec(unit="count", description="A test key.")
+    contribution = SchemaContribution(
+        metrics={key: spec for key in part.get("metrics", {})},
+        patterns=tuple(pattern(template, spec) for template in part.get("patterns", [])),
+    )
+    with pytest.raises(ValueError, match="redefines names"):
+        for_run([contribution])
+
+
+def test_a_contribution_in_its_own_namespace_is_accepted() -> None:
+    from royalelearn.metrics.schema import MetricSpec, SchemaContribution, for_run, pattern
+
+    spec = MetricSpec(unit="count", description="A test key.")
+    run_schema = for_run([SchemaContribution(patterns=(pattern("ext/{term}/calls", spec),))])
+    assert run_schema.is_known("ext/a/calls")
+    assert not run_schema.is_known("ppo/klx")

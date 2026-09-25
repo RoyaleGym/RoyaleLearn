@@ -262,7 +262,10 @@ class PPOUpdate(Update):
     ``vf_coef`` and the critic's learning rate the same knob.
     """
 
-    FORMAT_VERSION = 1
+    #: 2 is written only when the state holds a 'freeze' or 'extensions' entry, so a run with
+    #: neither writes exactly what it always did, and a build that knows only 1 refuses a state
+    #: it would otherwise read without them.
+    FORMAT_VERSION = 2
 
     #: What the checkpoint's folder holds.
     ACTOR_FILE = "actor_adam.pt"
@@ -655,14 +658,14 @@ class PPOUpdate(Update):
             * weight
         )
         loss = policy_loss + value_loss + entropy_loss
-        if self.extra_actor_terms and minibatch.n_choice:
+        if self.extra_actor_terms:
             if result.distribution is None:
                 raise TypeError(
                     f"{type(self.model).__name__}.backprop returned no distribution, and an "
                     "extra actor-loss term needs every legal action's log-probability"
                 )
             rows = minibatch.choice_index
-            loss = loss + self._extra_actor_loss(
+            extra = self._extra_actor_loss(
                 minibatch,
                 result.distribution.log_probs.index_select(0, rows),
                 minibatch.obs.mask.index_select(0, rows),
@@ -670,6 +673,8 @@ class PPOUpdate(Update):
                 actor_scale,
                 policy_loss,
             )
+            if extra is not None:
+                loss = loss + extra
         loss.backward()
         with torch.no_grad():
             diagnostics.minibatch(
@@ -765,7 +770,7 @@ class PPOUpdate(Update):
             )
             actor_loss = policy_loss + entropy_loss
             if self.extra_actor_terms:
-                actor_loss = actor_loss + self._extra_actor_loss(
+                extra = self._extra_actor_loss(
                     minibatch,
                     distribution.log_probs,
                     distribution.mask,
@@ -773,11 +778,28 @@ class PPOUpdate(Update):
                     actor_scale,
                     policy_loss,
                 )
+                if extra is not None:
+                    actor_loss = actor_loss + extra
             actor_loss.backward()
         else:
             # Every row of this minibatch was forced, so there is no actor forward to run and
-            # nothing to differentiate. The diagnostics are still told about the rows, because
-            # the value loss and the sample count are theirs.
+            # nothing of the policy term to differentiate. The diagnostics are still told about
+            # the rows, because the value loss and the sample count are theirs. A term scaled by
+            # the minibatch weight still runs: its raw value is a mean over rows of its own, and
+            # skipping it here would make its weight depend on how the batch was cut.
+            if self.extra_actor_terms:
+                width = minibatch.obs.mask.shape[-1]
+                extra = self._extra_actor_loss(
+                    minibatch,
+                    torch.empty((0, width), device=minibatch.obs.mask.device),
+                    minibatch.obs.mask[:0],
+                    epoch,
+                    actor_scale,
+                    None,
+                )
+                # A term that read only the empty choice rows has no graph and adds nothing.
+                if extra is not None and extra.requires_grad:
+                    extra.backward()
             empty = minibatch.advantages[:0]
             ratio = advantages = surr = dual = entropy = noop_entropy = empty
             logit_std = empty
@@ -813,13 +835,17 @@ class PPOUpdate(Update):
         mask: Tensor,
         epoch: int,
         actor_scale: float,
-        policy_loss: Tensor,
-    ) -> Tensor:
-        """The sum over extra terms of ``coefficient * raw * scale``, in that order.
+        policy_loss: Tensor | None,
+    ) -> Tensor | None:
+        """The sum over extra terms of ``coefficient * raw * scale``, in that order, or None
+        when no term ran.
 
         ``policy`` and ``mask`` are the actor's masked log-probabilities and mask on the
         minibatch's choice rows, in ``minibatch.choice_index`` order, whichever actor path this
-        is. What a term measures, it measures in the first epoch.
+        is. A ``rows`` term runs on a minibatch with a choice row, whose sum it is; a
+        ``minibatch`` term runs on every minibatch, because its raw value is a mean of its own
+        and the minibatch weights sum to one over the batch only if none is skipped. What a
+        term measures, it measures in the first epoch.
         """
         inputs = ActorTermInputs(
             obs=minibatch.obs,
@@ -831,10 +857,13 @@ class PPOUpdate(Update):
             weight=minibatch.weight,
         )
         measure = epoch == 0
-        ratio_now = self._grad_ratio_pending
+        has_choice = bool(minibatch.n_choice)
+        ratio_now = self._grad_ratio_pending and has_choice and policy_loss is not None
         total: Tensor | None = None
         scaled: list[tuple[ActorLossTerm, Tensor]] = []
         for term in self.extra_actor_terms:
+            if term.scaling == "rows" and not has_choice:
+                continue
             coefficient, raw = term.loss(inputs, epoch=epoch, measure=measure)
             scale = actor_scale if term.scaling == "rows" else minibatch.weight
             if ratio_now and term.measure_grad_ratio:
@@ -844,9 +873,9 @@ class PPOUpdate(Update):
             contribution = coefficient * raw * scale
             total = contribution if total is None else total + contribution
         if ratio_now:
+            assert policy_loss is not None
             self._grad_ratio_pending = False
             self._grad_ratio(policy_loss, scaled)
-        assert total is not None
         return total
 
     def _grad_ratio(
@@ -866,6 +895,11 @@ class PPOUpdate(Update):
         )
         policy_norm = _grad_norm(policy_grads)
         for term, value in scaled:
+            if not (isinstance(value, Tensor) and value.requires_grad):
+                # A term with nothing to add this minibatch -- a detached zero, say -- has no
+                # gradient, which is a ratio of zero rather than a reason to stop the update.
+                self._grad_ratios[(term.extension, term.name)] = 0.0
+                continue
             grads = torch.autograd.grad(value, params, retain_graph=True, allow_unused=True)
             self._grad_ratios[(term.extension, term.name)] = float(
                 (_grad_norm(grads) / policy_norm.clamp_min(1e-30)).item()
@@ -1131,8 +1165,9 @@ class PPOUpdate(Update):
         folder.mkdir(parents=True, exist_ok=True)
         torch.save(self.actor_optimizer.state_dict(), folder / self.ACTOR_FILE)
         torch.save(self.critic_optimizer.state_dict(), folder / self.CRITIC_FILE)
+        held = self.freeze is not None or any(term.state() for term in self.extra_actor_terms)
         state: dict[str, Any] = {
-            "format_version": self.FORMAT_VERSION,
+            "format_version": self.FORMAT_VERSION if held else 1,
             "cumulative_model_updates": self.model_updates,
         }
         if self.freeze is not None:

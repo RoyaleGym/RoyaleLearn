@@ -37,6 +37,7 @@ __all__ = [
     "MetricSpec",
     "RunSchema",
     "SchemaContribution",
+    "core_groups",
     "current_name",
     "for_run",
     "groups",
@@ -986,6 +987,44 @@ def groups() -> tuple[str, ...]:
     return tuple(seen)
 
 
+def core_groups() -> frozenset[str]:
+    """Every first key segment the core publishes, fixed or patterned. No extension may be
+    named after one: its keys are held to its own name's segment."""
+    return frozenset(
+        [key.split("/", 1)[0] for key in METRICS]
+        + [family.template.split("/", 1)[0] for family in PATTERNS]
+    )
+
+
+def _instance(template: str) -> str:
+    """A key a template's family contains: every placeholder filled with one segment."""
+    return re.sub(r"\{[a-z_]+\}", "x", template)
+
+
+def _overlaps(
+    part: SchemaContribution,
+    metrics: dict[str, MetricSpec],
+    patterns: list[MetricPattern],
+    alarm_metrics: dict[str, tuple[str, ...]],
+) -> list[str]:
+    """Names in ``part`` that would answer for a key the run already has, or the reverse."""
+    found: set[str] = set(part.metrics) & set(metrics)
+    found |= set(part.alarm_metrics) & set(alarm_metrics)
+    for key in part.metrics:
+        found.update(key for family in patterns if family.regex.match(key))
+    for family in part.patterns:
+        if any(family.regex.match(key) for key in metrics):
+            found.add(family.template)
+        for other in patterns:
+            if (
+                other.template == family.template
+                or other.regex.match(_instance(family.template))
+                or family.regex.match(_instance(other.template))
+            ):
+                found.add(family.template)
+    return sorted(found)
+
+
 class SchemaContribution(NamedTuple):
     """What an optional part of a run adds to the schema that run is checked against.
 
@@ -1035,16 +1074,15 @@ class RunSchema:
 
 
 def for_run(contributions: Iterable[SchemaContribution] = ()) -> RunSchema:
-    """The core schema plus ``contributions``, refusing a name defined twice."""
+    """The core schema plus ``contributions``, refusing a name that overlaps one already there."""
     metrics: dict[str, MetricSpec] = dict(METRICS)
     patterns: list[MetricPattern] = list(PATTERNS)
     conditional: dict[str, str] = dict(CONDITIONAL)
     alarm_metrics: dict[str, tuple[str, ...]] = dict(ALARM_METRICS)
     for part in contributions:
-        clashes = sorted(
-            {*(set(part.metrics) & set(metrics)), *(set(part.alarm_metrics) & set(alarm_metrics))}
-            | {p.template for p in part.patterns} & {p.template for p in patterns}
-        )
+        # A contributed key a core pattern already matches would take that key's spec, and a
+        # contributed pattern over a core group would make a typo in a core key a known key.
+        clashes = _overlaps(part, metrics, patterns, alarm_metrics)
         if clashes:
             raise ValueError(
                 f"a schema contribution redefines names the run already has: {clashes}"

@@ -172,11 +172,22 @@ def check_actor_terms(terms: Sequence[ActorLossTerm]) -> None:
     terms are first assembled, before anything that needs cleaning up exists, and again by the
     update itself.
     """
+    from ..metrics.schema import core_groups
+
     keys = [(term.extension, term.name) for term in terms]
     doubled = sorted({key for key in keys if keys.count(key) > 1})
     if doubled:
         raise ValueError(f"two actor-loss terms share an (extension, name): {doubled}")
+    reserved = core_groups()
     for term in terms:
+        # A term's keys are held to '<extension>/', so an extension named after a core group
+        # could write that group's keys -- ppo/kl, which an alarm halts on.
+        if not term.extension or "/" in term.extension or term.extension in reserved:
+            raise ValueError(
+                f"actor-loss term {term.extension}/{term.name}: {term.extension!r} cannot be an "
+                f"extension's name; it is empty, has a '/', or is a core metric group "
+                f"({', '.join(sorted(reserved))})"
+            )
         if term.scaling not in ("rows", "minibatch"):
             raise ValueError(
                 f"actor-loss term {term.extension}/{term.name} declares scaling "

@@ -484,3 +484,85 @@ def test_a_quiet_iteration_hands_over_nothing() -> None:
     calls: list[list[AlarmResult]] = []
     assert alarms.evaluate(_row(), on_fired=calls.append) == []
     assert calls == []
+
+
+def test_a_plain_run_builds_the_core_table_and_nothing_else() -> None:
+    """What a run without sections holds, from its config the way the coordinator gets it."""
+    from royalelearn.extensions import extension_alarms, schema_contributions, with_sections
+    from royalelearn.metrics.schema import for_run
+
+    plain = RunConfig()
+    assert extension_alarms(plain) == ()
+    assert schema_contributions(plain) == ()
+    built = AlarmSet(plain.alarms, extra=extension_alarms(plain), printer=None)
+    assert {alarm.name for alarm in built.alarms} == set(schema.ALARM_METRICS)
+    assert not for_run(schema_contributions(plain)).is_known("imitation/bc/kl")
+    refused = msgspec.structs.replace(plain, alarms=AlarmConfig(disabled=["critic_unready"]))
+    assert any("critic_unready" in problem for problem in check_consistency(refused))
+    # a section that only loads weights schedules no freeze and anchors nothing
+    init_only = with_sections(plain, warm_start={"init": {"path": "x", "sha256": "y"}})
+    assert extension_alarms(init_only) == ()
+
+
+@pytest.mark.parametrize(
+    ("alarm", "keys", "over", "under"),
+    [
+        (
+            "actor_handoff",
+            ("ppo/kl", "ppo/clip_fraction", "ppo/iterations_since_unfreeze"),
+            (0.071, 0.0, 5.0),
+            (0.069, 0.0, 5.0),
+        ),
+        (
+            "actor_handoff",
+            ("ppo/kl", "ppo/clip_fraction", "ppo/iterations_since_unfreeze"),
+            (0.0, 0.41, 5.0),
+            (0.0, 0.39, 5.0),
+        ),
+        (
+            "actor_handoff",
+            ("ppo/kl", "ppo/clip_fraction", "ppo/iterations_since_unfreeze"),
+            (0.2, 0.0, 5.0),
+            (0.2, 0.0, 6.0),
+        ),
+        ("critic_unready", ("ppo/ev_at_unfreeze",), (0.19,), (0.21,)),
+    ],
+)
+def test_each_freeze_threshold_is_the_one_its_section_names(
+    alarm: str, keys: tuple[str, ...], over: tuple[float, ...], under: tuple[float, ...]
+) -> None:
+    """Four thresholds set to four distinct values, each probed either side of its own number:
+    swapping two of them in the wiring would move a boundary here."""
+    from royalelearn.extensions import extension_alarms, with_sections
+
+    config = with_sections(
+        RunConfig(),
+        warm_start={
+            "actor_lr_scale": {"kind": "constant", "value": 1.0},
+            "alarms": {
+                "handoff_window": 5,
+                "handoff_kl": 0.07,
+                "handoff_clip": 0.4,
+                "ev_at_unfreeze": 0.2,
+            },
+        },
+    )
+    (built,) = [a for a in extension_alarms(config) if a.name == alarm]
+    assert built.holds(dict(zip(keys, over, strict=True)))
+    assert not built.holds(dict(zip(keys, under, strict=True)))
+
+
+def test_a_doubled_alarm_name_is_refused_by_the_config_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Before anything is built: the config check sees the run's whole table, sections and all."""
+    from royalelearn.extensions import with_sections
+    from royalelearn.testing import StubExtension, use_extensions
+
+    class _Doubler(StubExtension):
+        def alarms(self, section: object) -> tuple[Alarm, ...]:
+            return (MetricAlarm("kl_high", lambda kl: kl > 1.0),)
+
+    use_extensions(monkeypatch, {"doubler": _Doubler("doubler")})
+    config = with_sections(RunConfig(), doubler={})
+    assert any("more than once: ['kl_high']" in p for p in check_consistency(config))

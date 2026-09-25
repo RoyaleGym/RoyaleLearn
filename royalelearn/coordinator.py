@@ -959,14 +959,22 @@ class LearningCoordinator:
             facts = entry.extension.prepare(entry.section, context)
             if facts:
                 self.extension_facts[entry.name] = dict(facts)
-        self.actor_terms = (
-            *(
-                term
-                for entry in self.extensions
-                for term in entry.extension.actor_terms(entry.section, context)
-            ),
-            *self._given_terms,
+        from_sections = [
+            (entry.name, term)
+            for entry in self.extensions
+            for term in entry.extension.actor_terms(entry.section, context)
+        ]
+        strays = sorted(
+            f"{name}: {term.extension}/{term.name}"
+            for name, term in from_sections
+            if term.extension != name
         )
+        if strays:
+            raise PreflightError(
+                "an actor-loss term reports under an extension name other than its section's, "
+                f"so its keys and its checkpoint state would belong to another: {strays}"
+            )
+        self.actor_terms = (*(term for _, term in from_sections), *self._given_terms)
         check_actor_terms(self.actor_terms)
         self.freeze = self._freeze_tracker()
         self.buffer = RectBuffer(
