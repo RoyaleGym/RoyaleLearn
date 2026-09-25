@@ -400,11 +400,12 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Who the scripted share of ``mix`` trains against. Each scripted battle draws one of these,
     #: uniformly, at every episode, and so does a pool battle until the first snapshot is
     #: admitted. The default is the two anchors, which is what every run before this field
-    #: played. A run whose scripted share meets only those never meets an attacker: one never
-    #: plays and the other plays at random, so nothing in the run punishes a missing defence.
-    #: Naming ``scripted:push`` or ``scripted:patient`` here, both of which commit forward, is
-    #: how a run trains against something that attacks. Only training moves: the rating anchor,
-    #: the gate's anchors and the probe's default rungs do not change with this list.
+    #: played: ``noop`` never plays a card and ``random_legal`` passes nine decisions in ten and
+    #: otherwise plays a random legal move. ``scripted:push`` plays a card as soon as one is
+    #: playable, as far up the board as the rules allow, and ``scripted:patient`` does the same
+    #: once three of its cards are playable, so naming either here gives the scripted share an
+    #: opponent that places forward on purpose. Only training moves: the rating anchor, the
+    #: gate's anchors and the probe's default rungs do not change with this list.
     scripted_opponents: tuple[str, ...] = ("scripted:noop", "scripted:random_legal")
     #: The three probe fields are in the run identity, and they are meant to be, although the
     #: integrator measured that two runs differing only in them produce the same weights at every
@@ -837,9 +838,9 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
 def _scripted_opponent_problems(ladder: LadderConfig) -> list[str]:
     """Everything wrong with the scripted share's training opponents.
 
-    Checked here rather than at the first scripted assignment, which the worker would meet as an
-    index it cannot look up, some way into a run. The names follow ``probe_opponents``: a full
-    scripted id or a typo.
+    Checked here rather than at the first plan, where ``plan.opponent_index`` would raise in the
+    parent after preflight has already been paid for. The names follow ``probe_opponents``: a
+    full scripted id or a typo.
     """
     from .rollout.scripted import SCRIPTED_NAMES, scripted_id
 

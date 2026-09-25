@@ -2530,13 +2530,14 @@ that a run replayed at a different worker count lays its roles out differently, 
   one seat, so the iteration is still exactly the size it was planned at. It draws from the same
   `ladder.scripted_opponents` list as a scripted slot.
 - **The scripted share trains against `ladder.scripted_opponents`.** The list defaults to the two
-  anchors, which is what every run before the field played. A run that meets only those never meets
-  an attacker: `noop` never plays and `random_legal` plays at random, so nothing in the run punishes
-  a missing defence. Naming `scripted:push` or `scripted:patient`, which both commit forward, is how
-  a run trains against something that attacks. The list changes training only. The gate's anchors,
-  the rating anchor and the probe's default rungs stay as they were. The whole config is hashed into
-  the run identity, so adding the field moved every identity, and the default keeps every run's
-  behaviour.
+  anchors, which is what every run before the field played: `noop` never plays a card and
+  `random_legal` passes nine decisions in ten and otherwise plays a random legal move.
+  `scripted:push` plays a card as soon as one is playable, as far up the board as the rules allow,
+  and `scripted:patient` does the same once three of its cards are playable. Naming either is how
+  the scripted share meets an opponent that places forward on purpose. The list changes training
+  only. The gate's anchors, the rating anchor and the probe's default rungs stay as they were. The
+  ladder section is part of the run identity (`ladder_digest`), so adding the field moved every
+  identity, and the default keeps every run's behaviour.
 - **Evaluation is not in this mixture at all** (D10). The studied alternative folds evaluation into the
   rollout worker at a small probability and swaps the live match object in place; that makes "win rate"
   depend on the training curriculum and, in the reference, leaves a worker permanently misconfigured if

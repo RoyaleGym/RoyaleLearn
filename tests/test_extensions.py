@@ -277,7 +277,7 @@ def test_a_resume_refuses_an_identity_field_this_build_does_not_know(tmp_path: P
 def test_a_config_an_older_build_wrote_loads_to_the_same_run() -> None:
     """``examples/configs/laptop.json`` as 490c74c shipped it: ``"imitation": null`` and six
     ``alarms.imitation_*`` keys at their defaults. They are dropped with a notice, and the hash is
-    the one the profile has, as it was before any of them existed."""
+    the one the profile has now."""
     said: list[str] = []
     loaded = cfg.load_config(DATA / "config-490c74c-laptop.json", say=said.append)
     assert cfg.config_hash(loaded) == cfg.config_hash(cfg.laptop())

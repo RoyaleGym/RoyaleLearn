@@ -5,13 +5,15 @@ that plays at random. A learner that beats those has shown very little, so the o
 RoyaleGym's one-sentence strategies, there so a run can be measured against something that plays.
 
 ``ladder.scripted_opponents`` is who the scripted share of the mixture trains against. It
-defaults to the two anchors. A run that only ever meets those never meets an attacker, so the
-second half of this file holds the list to three things: a bad list fails at load, the
-matchmaker draws exactly the listed opponents, and a run's workers really play them.
+defaults to the two anchors: noop never plays a card and random_legal passes nine decisions in
+ten. The second half of this file holds the list to four things: the default draws exactly what
+runs drew before the field existed, a bad list fails at load, the matchmaker draws exactly the
+listed opponents, and a run's workers really play them.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -98,28 +100,52 @@ def test_the_default_is_the_two_anchors_everywhere_a_run_starts_from() -> None:
         assert cfg.profile(name).ladder.scripted_opponents == SCRIPTED_IDS, name
 
 
-def test_the_default_draws_what_every_earlier_run_drew(tmp_path: Path) -> None:
-    """Bit for bit, not only as a set: the draw is an index into the list, so the anchors in
-    another order would hand every scripted episode of a resumed or repeated run the other one.
+def test_the_config_default_draws_what_the_matchmaker_default_draws(tmp_path: Path) -> None:
+    """In order, not only as a set, because the draw is an index into the list.
 
-    ``before`` is the matchmaker as the coordinator built it until this field existed.
+    A run passes the config's list and most tests build the matchmaker without one, so those
+    tests describe a run only while the two defaults agree. Both sides here run the same
+    ``assign``, so this cannot see a change to the draw itself. The pin below does.
     """
     pool = LadderPool(ResultLog(tmp_path / "games.jsonl"))
     ladder = cfg.LadderConfig()
-    before = MixMatchmaker(SEED, ladder, n_battles=96)
-    after = MixMatchmaker(SEED, ladder, n_battles=96, scripted_ids=ladder.scripted_opponents)
+    constructor = MixMatchmaker(SEED, ladder, n_battles=96)
+    configured = MixMatchmaker(SEED, ladder, n_battles=96, scripted_ids=ladder.scripted_opponents)
     scripted = 0
     for battle in range(96):
         for ordinal in range(10):
-            old = before.assign(battle, ordinal, pool, None)
-            assert after.assign(battle, ordinal, pool, None) == old
-            scripted += old.opponent_id is not None
+            expected = constructor.assign(battle, ordinal, pool, None)
+            assert configured.assign(battle, ordinal, pool, None) == expected
+            scripted += expected.opponent_id is not None
     assert scripted > 0, "an empty pool plays scripted in the pool slots too"
 
 
+def test_the_default_draw_is_the_one_runs_made_before_the_field(tmp_path: Path) -> None:
+    """Pinned, not compared with a second matchmaker running the same code.
+
+    The digest was recorded from 919406c, the commit before ``scripted_opponents`` existed, with
+    the same seed, rectangle and empty pool: 480 scripted draws, from the 14 scripted battles
+    and the 34 pool battles standing in for them, ten episodes each. A change to the default list,
+    its order or the way ``assign`` reads it hands resumed and repeated runs other opponents,
+    and moves this digest.
+    """
+    pool = LadderPool(ResultLog(tmp_path / "games.jsonl"))
+    ladder = cfg.LadderConfig()
+    matchmaker = MixMatchmaker(SEED, ladder, n_battles=96, scripted_ids=ladder.scripted_opponents)
+    drawn = []
+    for battle in range(96):
+        for ordinal in range(10):
+            assignment = matchmaker.assign(battle, ordinal, pool, None)
+            drawn.append(f"{assignment.opponent_id}/{assignment.learner_seat}")
+    assert sum(entry.startswith("scripted:") for entry in drawn) == 480
+    digest = hashlib.sha256("\n".join(drawn).encode()).hexdigest()
+    assert digest == "a972e51f48dd2ba920b8b3950df63eb30ffb20d76a681cec437063ba5e26ad53"
+
+
 def test_an_unknown_opponent_fails_at_load_naming_it_and_the_known_ones() -> None:
-    """Not at the first scripted assignment, which the worker would meet as an index it cannot
-    look up. A bare name is a typo too: the field takes full ids, as probe_opponents does."""
+    """Not at the first plan, where ``plan.opponent_index`` would raise in the parent after
+    preflight has already been paid for. A bare name is a typo too: the field takes full ids, as
+    probe_opponents does."""
     for typo in ("scripted:agressive", "push"):
         loaded = cfg.load_config({"ladder": {"scripted_opponents": [typo]}}, say=None)
         with pytest.raises(PreflightError) as raised:
@@ -146,9 +172,11 @@ def test_an_empty_list_is_refused_while_any_battle_would_draw_from_it() -> None:
     assert len(before_the_first_snapshot) == 1 and "pool" in before_the_first_snapshot[0]
     assert cfg.check_consistency(_with_ladder(scripted_opponents=(), mix=(1.0, 0.0, 0.0))) == []
 
-    # The matchmaker refuses the same thing, for a caller that never went through a config.
-    with pytest.raises(ValueError, match="no scripted opponent"):
-        MixMatchmaker(SEED, cfg.LadderConfig(mix=(0.5, 0.5, 0.0)), scripted_ids=())
+    # The matchmaker refuses the same thing, for a caller that never went through a config: once
+    # with only a scripted share, and once with a pool share and no scripted share.
+    for mix in ((0.0, 0.0, 1.0), (0.5, 0.5, 0.0)):
+        with pytest.raises(ValueError, match="no scripted opponent"):
+            MixMatchmaker(SEED, cfg.LadderConfig(mix=mix), scripted_ids=())
     MixMatchmaker(SEED, cfg.LadderConfig(mix=(1.0, 0.0, 0.0)), scripted_ids=())
 
 
@@ -219,9 +247,11 @@ def test_a_run_plays_the_listed_opponent_and_records_it(
         ),
     )
     with coordinator(config) as run:
-        # Only training moves: the rating's and the gate's anchors are still the two.
+        # Only training moves: the rating's and the gate's anchors are still the two, and the
+        # rater still pins the first of them.
         assert run.pool.anchors == SCRIPTED_IDS
         assert run.gate.anchors == SCRIPTED_IDS
+        assert run.rater.anchor == cfg.LadderConfig().rater.anchor == SCRIPTED_IDS[0]
         run.iterate()
         episodes = list(run.recent_episodes)
         games = [game for game in run.results.read() if game.kind == KIND_TRAIN]

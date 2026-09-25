@@ -1,0 +1,149 @@
+{
+ "format": 2,
+ "why": "ladder.scripted_opponents (eb848fb) against its parent 919406c, plain arm on MockEngine. eb848fb adds one config field, LadderConfig.scripted_opponents, whose default is the two anchors, and passes it to MixMatchmaker. With the default nothing a run does changes, so the only differences are the new key in config.json and what hashes the config: the config hashes, the identity's ladder_digest (it digests the whole ladder block), the run_id derived from the identity, and the manifest's copies of config_hash and run_id in both checkpoints. Weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, every other checkpoint leaf and every checkpoint file sha are equal. Measured 2026-09-25 11:42 (PDT) with RoyaleGym 30ca79b pinned on both sides and RoyaleSim 8126375.",
+ "may_differ": {
+  "commit": {
+   "why": "side A is 919406c, side B is eb848fb; pinned so the file holds only this pair of commits",
+   "values": [
+    "919406ca8d7e115bd432162560cb05b801012c02",
+    "eb848fb34031288a77038b3ae302903116007e8a"
+   ]
+  },
+  "config_json_sha256": {
+   "why": "config.json gains ladder.scripted_opponents; pinned: side A's is the S3 side-B value in s3-plain-vs-490c74c-mock.json, so the plain mock config did not move between 3ff1f22 and 919406c",
+   "values": [
+    "bc6dd9d7487ab85492da20cef9106b9974266c78a24cc50e168f35240ddbb4a3",
+    "d2f56e8792e0e1404bf6e0890876a117cce410a4cfc140d770424dffd330d5b1"
+   ]
+  },
+  "config_hash": {
+   "why": "the canonical config gains the same field; pinned: side A's is the S3 side-B value",
+   "values": [
+    "2ac2a229f29b7b971ce3fbd3f4f7294b26f2d3c7739c67aa5c3409c5a4c6ecec",
+    "7728840b3e7a807142747adaf3909a8584afcea83f30f2923753c6453bb98c6d"
+   ]
+  },
+  "resumed_config_hash": {
+   "why": "the reloaded <run>/config.json carries the same field; pinned: equals config_hash on each side",
+   "values": [
+    "2ac2a229f29b7b971ce3fbd3f4f7294b26f2d3c7739c67aa5c3409c5a4c6ecec",
+    "7728840b3e7a807142747adaf3909a8584afcea83f30f2923753c6453bb98c6d"
+   ]
+  },
+  "run_id": {
+   "why": "the run_id is derived from the identity, and the identity's ladder_digest moves with the new field (identity.py digests the whole ladder block with the master seed)",
+   "values": [
+    "f00b4c406b198052",
+    "e7a03dbcd9d56212"
+   ]
+  },
+  "resumed_run_id": {
+   "why": "the resumed process derives the same run_id from the same identity; pinned: equals run_id on each side",
+   "values": [
+    "f00b4c406b198052",
+    "e7a03dbcd9d56212"
+   ]
+  }
+ },
+ "allow": {
+  "config_keys": {
+   "only_b": {
+    "ladder.scripted_opponents.0": {
+     "why": "eb848fb config.py: LadderConfig.scripted_opponents, default (scripted:noop, scripted:random_legal); the first default entry, in the anchors' order",
+     "value": "\"scripted:noop\""
+    },
+    "ladder.scripted_opponents.1": {
+     "why": "the second default entry, in the anchors' order",
+     "value": "\"scripted:random_legal\""
+    }
+   }
+  },
+  "identity_fields": {
+   "changed": {
+    "ladder_digest": {
+     "why": "identity.py: ladder_digest = digest_of({ladder, master_seed}), so a new ladder field moves it; the same pair on both engines",
+     "value": [
+      "\"adf51fed3399f91127703204583fe20f25ea987533158c02bb44530a4966ee74\"",
+      "\"68d3582020905c2f52cef319c89efa1c50c2f49cba6c9c08cbfd79c6d7be44f0\""
+     ]
+    }
+   }
+  },
+  "checkpoint": {
+   "changed": {
+    "fresh:manifest:config_hash": {
+     "why": "the manifest's copy of config_hash; pinned: equals the config_hash column",
+     "value": [
+      "\"2ac2a229f29b7b971ce3fbd3f4f7294b26f2d3c7739c67aa5c3409c5a4c6ecec\"",
+      "\"7728840b3e7a807142747adaf3909a8584afcea83f30f2923753c6453bb98c6d\""
+     ]
+    },
+    "resumed:manifest:config_hash": {
+     "why": "the resumed checkpoint's copy of config_hash; pinned: equals the config_hash column",
+     "value": [
+      "\"2ac2a229f29b7b971ce3fbd3f4f7294b26f2d3c7739c67aa5c3409c5a4c6ecec\"",
+      "\"7728840b3e7a807142747adaf3909a8584afcea83f30f2923753c6453bb98c6d\""
+     ]
+    },
+    "fresh:manifest:run_id": {
+     "why": "the manifest's copy of run_id; pinned: equals the run_id column",
+     "value": [
+      "\"f00b4c406b198052\"",
+      "\"e7a03dbcd9d56212\""
+     ]
+    },
+    "resumed:manifest:run_id": {
+     "why": "the resumed checkpoint's copy of run_id; pinned: equals the run_id column",
+     "value": [
+      "\"f00b4c406b198052\"",
+      "\"e7a03dbcd9d56212\""
+     ]
+    }
+   }
+  }
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits",
+   "config_json_sha256": "every run's config.json must carry the new field",
+   "config_hash": "and its canonical config",
+   "resumed_config_hash": "and the reloaded one",
+   "run_id": "a new config field is a new identity: runs resume only on the build they started on",
+   "resumed_run_id": "the resumed process names the same new run"
+  },
+  "config_keys": {
+   "only_b": {
+    "ladder.scripted_opponents.0": "the default must be written out, first anchor first",
+    "ladder.scripted_opponents.1": "and the second anchor second"
+   }
+  },
+  "identity_fields": {
+   "changed": {
+    "ladder_digest": "the ladder block is in the identity"
+   }
+  },
+  "checkpoint": {
+   "changed": {
+    "fresh:manifest:config_hash": "moves with config_hash",
+    "resumed:manifest:config_hash": "moves with config_hash",
+    "fresh:manifest:run_id": "moves with run_id",
+    "resumed:manifest:run_id": "moves with run_id"
+   }
+  }
+ },
+ "count": {
+  "config_keys.only_b": {
+   "n": 2,
+   "why": "exactly the two entries of the default list"
+  },
+  "identity_fields.changed": {
+   "n": 1,
+   "why": "ladder_digest and no other identity field"
+  },
+  "checkpoint.changed": {
+   "n": 4,
+   "why": "the manifest's config_hash and run_id copies in both checkpoints, nothing else: state_digest, every file sha and component_versions equal"
+  }
+ },
+ "note": "Pinned from the 11:42 sitting (four runs: mock and rust, each commit once, RoyaleGym 30ca79ba7e68 on every side; royalesim.pyd 3d062d96a96c on the rust pair). The rust pair has its own file, scripted-default-rust.json, since the config hashes and run_ids are per engine. What this pair cannot see: the tiny config is all mirror (ladder.mix [1, 0, 0]), so no battle draws a scripted opponent on either side. The pair shows that the new field and the coordinator's new argument leave a mirror run bit for bit alone; it says nothing about the scripted draw itself, which only the unit tests reach."
+}

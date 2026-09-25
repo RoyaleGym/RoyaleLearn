@@ -96,13 +96,14 @@ Before the first snapshot exists there is nothing in the pool, so a pool draw fa
 scripted (`matchmaker.py`, in `assign`). That keeps the number of trainable rows per battle
 exactly what the mixture says it is, which the loop checks every iteration.
 
-`LadderConfig.scripted_opponents` lets your bot train against opponents that attack. With the
-default, the scripted share only meets the two anchors: one never plays a card and the other
-plays at random. Nothing in such a run punishes a bot that never learned to defend. Set it to,
-for example, `["scripted:push", "scripted:defend", "scripted:patient"]` and each scripted battle
-draws one of those, uniformly, every episode. So does a pool battle until the first snapshot
-exists. `push` and `patient` both commit forward. The list changes training only: the anchors
-the gate and the rating use do not change. A name that is not a scripted opponent, a name listed
+`LadderConfig.scripted_opponents` picks the hard-coded opponents your bot trains against. With
+the default, the scripted share only meets the two anchors: one never plays a card and the other
+plays a random legal card on one decision in ten. Set it to, for example,
+`["scripted:push", "scripted:defend", "scripted:patient"]` and each scripted battle draws one of
+those, uniformly, every episode. So does a pool battle until the first snapshot exists. `push`
+plays a card as soon as one is playable, as far up the board as the rules allow. `patient` does
+the same once three of its cards are playable. The list changes training only: the anchors the
+gate and the rating use do not change. A name that is not a scripted opponent, a name listed
 twice, or an empty list while the mixture has pool or scripted battles is refused when the
 config loads.
 
@@ -137,7 +138,8 @@ wrong, it is just not what the name suggests, and it has not been fixed yet.
 
 An **anchor** is an opponent whose strength never changes. They matter because everything
 else in the ladder is improving, so a rating measured only against other snapshots is a
-rating on a scale that is itself sliding. `royalelearn/rollout/scripted.py` ships two:
+rating on a scale that is itself sliding. `royalelearn/rollout/scripted.py` ships six scripted
+opponents. These two are the anchors:
 
 - **`scripted:noop`** does nothing at all. It never plays a card.
 - **`scripted:random_legal`** plays a legal random move, but only 10% of the time. The other
@@ -257,7 +259,9 @@ Two different numbers in the metrics file, and they are not interchangeable.
 higher number means stronger and a 400-point gap means roughly a 10-to-1 favourite. This one
 updates live as training battles finish, starting from 1200 (`EloReadout` in
 `ladder/rating.py`, `k_factor = 32`). It depends on the order the results arrive in, which
-under parallel workers is not reproducible. It is for watching. No decision reads it.
+under parallel workers is not reproducible. It is for watching. No decision reads it. It is
+fed by training games, so it moves with `scripted_opponents`: two runs with different lists do
+not compare on it.
 
 **The fitted rating** is the real one. It refits from scratch over the entire stored result
 log every `refit_every_iterations` iterations, which defaults to 10. Same games in, same
