@@ -13,8 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..errors import PreflightError
-from .artifacts import (
+from ..artifacts import (
     PROBE_CHUNK,
     check_actor_artifact,
     load_actor_state,
@@ -22,11 +21,12 @@ from .artifacts import (
     self_test,
     verify_artifact,
 )
+from ..errors import PreflightError
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..config import ImitationConfig, InitSpec
     from ..ladder.snapshots import SnapshotSpec
-    from .rows import RowCodec
+    from ..learn.rows import RowCodec
 
 __all__ = ["initialise_actor", "loaded_ratio_guard", "verify_imitation_files"]
 

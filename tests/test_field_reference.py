@@ -16,8 +16,9 @@ import numpy as np
 import pytest
 
 from royalelearn import config as cfg
+from royalelearn.artifacts import artifact_digest
 from royalelearn.errors import PreflightError
-from royalelearn.imitation.artifacts import artifact_digest, read_field_model
+from royalelearn.imitation.artifacts import read_field_model
 from royalelearn.imitation.split import is_validation
 
 torch = pytest.importorskip("torch")

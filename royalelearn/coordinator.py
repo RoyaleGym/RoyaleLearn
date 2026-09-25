@@ -64,7 +64,7 @@ from .ladder.rating import BradleyTerryDavidsonRater, EloReadout
 from .ladder.results import KIND_PROBE, ResultLog, context_digest
 from .ladder.snapshots import DiskSnapshotStore, SnapshotSpec
 from .metrics.alarms import AlarmSet
-from .metrics.behaviour import play_rate_by_elixir
+from .metrics.behaviour import RowBehaviour
 from .metrics.bundle import RatioOutlier, replay_episode, write_bundle
 from .metrics.records import (
     IterationMetrics,
@@ -75,7 +75,6 @@ from .metrics.records import (
     update_fields,
 )
 from .metrics.sinks import METRICS_NAME, build_sinks
-from .obs_layout import HAND_CARD_ONEHOT, field_slice, hand_fields
 from .rollout.inline import (
     InlineRolloutSource,
     assignments_constant_within_episodes,
@@ -417,14 +416,16 @@ def _is_publisher(value: Any) -> bool:
     return value is not True and value is not False and hasattr(value, "publish")
 
 
-class PolicyProbe:
+class PolicyProbe(RowBehaviour):
     """What the policy did, measured on a bounded sample of the iteration's own cells.
 
     Three of the metric groups cannot be read off a scalar column: how many actions were legal,
     how much elixir was in the bar, and which card each play was. All three are in the stored
     observation, so they are read from it -- through the same gather the update uses, on an
     evenly spaced sample of the trainable cells rather than on all of them, because this is a
-    measurement and not a phase of the update.
+    measurement and not a phase of the update. The statistics themselves are
+    ``metrics.behaviour.RowBehaviour``'s, so rows that never went through a rollout buffer are
+    measured by the same code.
 
     The sample is a stride and not a draw. A random sample would need a stream of its own and
     would make a diagnostic move the run, and a stride over an ascending cell list is spread
@@ -432,17 +433,8 @@ class PolicyProbe:
     """
 
     def __init__(self, spec: EnvSpec, *, rows: int = PROBE_ROWS) -> None:
-        self.spec = spec
+        super().__init__(spec)
         self.rows = max(1, int(rows))
-        self.hand = hand_fields(spec)
-        self.elixir = field_slice(spec, "own_elixir")
-        self.onehot = field_slice(spec, HAND_CARD_ONEHOT)
-        self.tiles = spec.tiles[0] * spec.tiles[1]
-        self.max_mana = _max_mana()
-        self.card_plays: dict[int, int] = {}
-        self.card_legal: dict[int, int] = {}
-        self.tile_plays: dict[int, int] = {}
-        self.card_tile_plays: dict[tuple[int, int], int] = {}
 
     def measure(
         self, buffer: Any, gather: Any, actions: np.ndarray, trainable: np.ndarray
@@ -489,131 +481,8 @@ class PolicyProbe:
                     )
                 vectors.append(obs.vector.to("cpu").numpy())
                 masks.append(mask.to("cpu").numpy())
-        return self.fields_of(np.concatenate(vectors), np.concatenate(masks), taken)
+        return self.fields(np.concatenate(vectors), np.concatenate(masks), taken)
 
-    def fields_of(
-        self, vector: np.ndarray, mask: np.ndarray, actions: np.ndarray
-    ) -> dict[str, MetricValue]:
-        """The probe's fields from rows: each row's vector, its mask, and the action taken.
-
-        Separate from the gather so that rows which never went through a rollout buffer -- a
-        demonstration driven through the environment -- are measured by this same code, and a
-        difference between a policy and a demonstration is never a difference between two
-        implementations of one statistic.
-        """
-        fields: dict[str, MetricValue] = {}
-        self.card_plays, self.tile_plays, self.card_tile_plays = {}, {}, {}
-        mask = np.asarray(mask).astype(bool)
-        actions = np.asarray(actions).astype(np.int64)
-        legal = mask.sum(axis=-1).astype(np.float64)
-        # Per hand slot rather than per action: a slot is playable when ANY of its tiles is.
-        # This is what separates "the policy does not choose this card" from "this card is
-        # rarely affordable", and nothing measured it before.
-        slot_legal = mask[:, 1:].reshape(mask.shape[0], self.hand.hand_size, self.tiles).any(-1)
-        fields["policy/legal_actions_mean"] = float(legal.mean())
-        for percentile, name in ((5, "p05"), (50, "p50"), (95, "p95")):
-            fields[f"policy/legal_actions_{name}"] = float(np.percentile(legal, percentile))
-        fields["policy/forced_noop_frac"] = float(np.mean(legal <= 1))
-
-        bar = vector[:, self.elixir].reshape(-1).astype(np.float64)
-        fields["env/mean_elixir_at_decision"] = float(bar.mean() * self.max_mana)
-        fields["env/frac_elixir_above_99"] = float(np.mean(bar >= 0.99))
-        fields.update(play_rate_by_elixir(bar * self.max_mana, legal, actions))
-
-        fields.update(self._plays(actions, vector[:, self.onehot], slot_legal))
-        return fields
-
-    def _plays(
-        self, actions: np.ndarray, onehot: np.ndarray, slot_legal: np.ndarray
-    ) -> dict[str, MetricValue]:
-        """Where the cards went, and which cards they were.
-
-        The action index says the hand slot and the tile; the card in that slot is read out of
-        the observation's own one-hot, so the counters are per card rather than per hand
-        position -- which is the only one of the two that means anything across a cycle.
-        """
-        fields: dict[str, MetricValue] = {}
-        fields.update(self._availability(onehot, slot_legal))
-        played = actions > 0
-        fields["policy/noop_rate"] = float(np.mean(~played))
-        if not played.any():
-            fields["policy/tile_entropy"] = 0.0
-            fields["policy/tile_top1_share"] = 0.0
-            fields["policy/card_tile_top10_share"] = 0.0
-            return fields
-        index = actions[played] - 1
-        slot = index // self.tiles
-        tile = index % self.tiles
-        block = self.hand.onehot_width
-        rows = np.arange(onehot.shape[0])[played]
-        cards = np.array(
-            [
-                int(np.argmax(onehot[row, s * block : (s + 1) * block]))
-                for row, s in zip(rows, slot, strict=True)
-            ],
-            dtype=np.int64,
-        )
-        counts = np.bincount(tile, minlength=self.tiles).astype(np.float64)
-        share = counts / counts.sum()
-        positive = share[share > 0]
-        fields["policy/tile_entropy"] = float(-(positive * np.log(positive)).sum())
-        fields["policy/tile_top1_share"] = float(share.max())
-
-        pairs: dict[tuple[int, int], int] = {}
-        for card, position in zip(cards, tile, strict=True):
-            pairs[(int(card), int(position))] = pairs.get((int(card), int(position)), 0) + 1
-            self.card_plays[int(card)] = self.card_plays.get(int(card), 0) + 1
-        self.card_tile_plays = pairs
-        self.tile_plays = {int(t): int(c) for t, c in enumerate(counts) if c}
-        top = sorted(pairs.values(), reverse=True)[:10]
-        fields["policy/card_tile_top10_share"] = float(sum(top) / sum(pairs.values()))
-        total = float(sum(self.card_plays.values()))
-        for card, played_count in sorted(self.card_plays.items()):
-            fields[f"policy/card_play_frac/{card}"] = played_count / total
-            # The share of plays is a share of a policy AND of an elixir bar, and a reader
-            # cannot tell which they are looking at. Divided by the decisions where the card
-            # was affordable, it is the policy alone.
-            affordable = self.card_legal.get(card, 0)
-            if affordable:
-                fields[f"policy/card_play_rate/{card}"] = played_count / affordable
-        return fields
-
-    def _availability(self, onehot: np.ndarray, slot_legal: np.ndarray) -> dict[str, MetricValue]:
-        """How often each card was in the hand at all, and how often it was affordable.
-
-        Without these, a per-card play share answers a question nobody asked. A three-cost card
-        is legal at a decision far more often than a four-cost one when the bar averages about
-        one and a half elixir, so a policy that chooses uniformly among what it can afford still
-        plays cheap cards many times more often. Reading that as a preference is reading the
-        elixir economy as a policy.
-        """
-        block = self.hand.onehot_width
-        rows, hand = slot_legal.shape
-        wide = onehot[:, : hand * block].reshape(rows, hand, block)
-        cards = wide.argmax(axis=-1)
-        self.card_legal = {}
-        fields: dict[str, MetricValue] = {}
-        for card in np.unique(cards):
-            in_hand = cards == card
-            legal = int(np.count_nonzero(in_hand & slot_legal))
-            self.card_legal[int(card)] = legal
-            fields[f"policy/card_in_hand_frac/{int(card)}"] = float(
-                np.count_nonzero(in_hand.any(axis=-1)) / rows
-            )
-            fields[f"policy/card_legal_frac/{int(card)}"] = float(
-                np.count_nonzero((in_hand & slot_legal).any(axis=-1)) / rows
-            )
-        return fields
-
-    def heatmap(self) -> dict[str, Any]:
-        """The per-card play counts over the tile grid, as the artifact a sink is handed."""
-        tiles_y, tiles_x = self.spec.tiles
-        return {
-            "tiles": [tiles_y, tiles_x],
-            "counts": {
-                f"{card}/{tile}": n for (card, tile), n in sorted(self.card_tile_plays.items())
-            },
-        }
 
 
 def _empty_policy_fields() -> dict[str, MetricValue]:
@@ -636,18 +505,6 @@ def _empty_policy_fields() -> dict[str, MetricValue]:
         "env/mean_elixir_at_decision": 0.0,
         "env/frac_elixir_above_99": 0.0,
     }
-
-
-def _max_mana() -> float:
-    """The full elixir bar, in elixir.
-
-    The observation carries the bar as a fraction of it, and the metric is in elixir, so the
-    number has to come from somewhere: it comes from the calibration the engine itself reads,
-    never from a constant in this repository.
-    """
-    from royalegym.protocol import default_calibration
-
-    return float(default_calibration().int("match.MAX_MANA"))
 
 
 # ---------------------------------------------------------------------------
@@ -1212,7 +1069,7 @@ class LearningCoordinator:
     def row_codec(self) -> Any:
         """This run's codec as a pack and a decode, for rows that did not come through the
         buffer: a probe set, a demonstration shard."""
-        from .imitation.rows import RowCodec
+        from .learn.rows import RowCodec
 
         assert self.report is not None
         return RowCodec(self.spec, self.codec, self.report.statics, self.device)
@@ -1222,7 +1079,7 @@ class LearningCoordinator:
         imitation = self.config.imitation
         if imitation is None or imitation.init is None or self.resume_from is not None:
             return
-        from .imitation.artifacts import read_actor_artifact
+        from .artifacts import read_actor_artifact
         from .imitation.init import initialise_actor, loaded_ratio_guard
         from .rollout.preflight import precision_name
 
@@ -1230,7 +1087,7 @@ class LearningCoordinator:
         self.init_self_test = initialise_actor(
             self.model,
             imitation.init,
-            current=self._artifact_spec(),
+            current=self.artifact_spec(),
             codec=codec,
             printer=self.printer,
         )
@@ -1256,15 +1113,15 @@ class LearningCoordinator:
         references = build_references(
             imitation,
             spec=self.spec,
-            current=self._artifact_spec(),
-            build_actor=self._build_actor,
+            current=self.artifact_spec(),
+            build_actor=self.build_actor,
             codec=self.row_codec(),
             device=self.device,
             printer=self.printer,
         )
         return ImitationTerms.from_config(imitation, references, self.spec)
 
-    def _artifact_spec(self) -> SnapshotSpec:
+    def artifact_spec(self) -> SnapshotSpec:
         """What an actor this run can load must agree with: section 11.6's compatibility fields
         and the action layout. The pool's template is this plus where the snapshot came from."""
         assert self.report is not None
@@ -1302,12 +1159,12 @@ class LearningCoordinator:
             self.report.build.build_digest or self.report.build.calibration_digest,
         )
         self.snapshot_template = msgspec.structs.replace(
-            self._artifact_spec(), context=self.context, run_id=self.run_id
+            self.artifact_spec(), context=self.context, run_id=self.run_id
         )
         self.snapshot_store = DiskSnapshotStore(
             self.run_dir / "snapshots",
             template=self.snapshot_template,
-            build=self._build_actor,
+            build=self.build_actor,
             max_resident=config.ladder.max_resident_opponents + 2,
         )
         self.results = ResultLog(ladder_dir / "games.jsonl")
@@ -1433,7 +1290,7 @@ class LearningCoordinator:
             )
             return self.player
 
-    def _build_actor(self, device: Any) -> Any:
+    def build_actor(self, device: Any) -> Any:
         """A bare actor of this run's architecture, for a snapshot to load into."""
         from .learn.actor_critic import ClashActor
         from .learn.nets import ClashTrunk, PointerPolicyHead, resolve_dtype

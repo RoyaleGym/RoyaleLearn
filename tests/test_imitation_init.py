@@ -25,8 +25,8 @@ import pytest
 from imitation_support import actor_state, seeded_artifact, with_imitation
 from royalelearn import config as cfg
 from royalelearn import identity as I
+from royalelearn.artifacts import artifact_digest, read_actor_artifact
 from royalelearn.errors import IdentityMismatch, PreflightError
-from royalelearn.imitation.artifacts import artifact_digest, read_actor_artifact
 from royalelearn.imitation.init import verify_imitation_files
 from royalelearn.rollout.envspec import canonical_json
 from test_coordinator import coordinator, tiny_config

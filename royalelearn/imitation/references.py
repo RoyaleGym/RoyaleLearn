@@ -15,16 +15,15 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from ..errors import PreflightError
-from ..obs_layout import field_slice
-from .artifacts import (
-    build_field_mlp,
+from ..artifacts import (
     check_actor_artifact,
     load_actor_state,
     read_actor_artifact,
-    read_field_model,
     self_test,
 )
+from ..errors import PreflightError
+from ..obs_layout import field_slice
+from .artifacts import build_field_mlp, read_field_model
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from torch import Tensor
@@ -33,7 +32,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.rollout import EnvSpec
     from ..config import ImitationConfig
     from ..ladder.snapshots import SnapshotSpec
-    from .rows import RowCodec
+    from ..learn.rows import RowCodec
 
 __all__ = ["FieldMLPReference", "SnapshotReference", "build_references"]
 

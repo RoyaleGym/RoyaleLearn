@@ -29,6 +29,7 @@ from royalelearn.api.rollout import EnvSpec
 from royalelearn.checkpoint import check_resume
 from royalelearn.errors import IdentityMismatch
 from royalelearn.rollout.envspec import ComponentSpec
+from royalelearn.testing import identity_facts
 
 _names = itertools.count()
 
@@ -70,23 +71,7 @@ def _config(name: str, *, via_kwargs: bool = False, listed: bool = True) -> C.Ru
 
 @pytest.fixture
 def facts(env_spec: EnvSpec) -> dict[str, Any]:
-    return {
-        "env_spec": env_spec,
-        "build": I.EngineBuild(
-            engine_class="royalegym.mock_engine.MockEngine",
-            calibration_digest="0" * 16,
-            build_digest="0" * 16,
-            catalogue_sha256="c" * 64,
-            path_search=None,
-            stale_build_differences=[],
-            binary_sha256=I.NOT_STATED,
-        ),
-        "arch_digest": "a" * 64,
-        "codec_version": 1,
-        "codec_table_digest": "b" * 64,
-        "torch_version_string": "2.11.0+cu128",
-        "device_kind": "cpu:x86_64",
-    }
+    return identity_facts(env_spec)
 
 
 def _identity(config: C.RunConfig, facts: dict[str, Any]) -> I.RunIdentity:

@@ -33,7 +33,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.policy import ObsBatch
     from ..api.rollout import EnvSpec
     from ..config import RunConfig
-    from .rows import RowCodec
+    from ..learn.rows import RowCodec
 
 __all__ = [
     "FLAG_OTHER_COMMAND",
@@ -137,10 +137,9 @@ class ShardContext(msgspec.Struct, frozen=True, kw_only=True):
     def of_config(cls, config: RunConfig) -> ShardContext:
         """The context of a run's own environment, built once and closed."""
         from ..identity import action_digest_of
-        from ..rollout.envspec import read_env_spec
-        from ..rollout.preflight import _construct
+        from ..rollout.envspec import build_env, read_env_spec
 
-        vec = _construct(config.env, tuple(config.extra_component_modules))
+        vec = build_env(config.env, tuple(config.extra_component_modules))
         try:
             spec = read_env_spec(vec, config.env, frame_stack=1, seed=0)
             env = vec.envs[0]

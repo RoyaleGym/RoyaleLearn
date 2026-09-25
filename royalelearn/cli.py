@@ -301,7 +301,7 @@ def _fit_field_reference(args: argparse.Namespace) -> int:
 
 def _artifact_digest(args: argparse.Namespace) -> int:
     """The digest section 19.2 defines: over every file in the folder, by relative path."""
-    from .imitation.artifacts import artifact_digest
+    from .artifacts import artifact_digest
 
     print(artifact_digest(args.folder))
     return 0

@@ -68,8 +68,10 @@ __all__ = [
     "env_spec_digest_of",
     "identity_differences",
     "imitation_digest_of",
+    "package_provenance",
     "royalegym_provenance",
     "run_id",
+    "section_digest",
     "torch_version",
     "unverified",
     "user_code",
@@ -205,15 +207,28 @@ def imitation_digest_of(config: RunConfig) -> str | None:
     """
     if config.imitation is None:
         return None
+    return section_digest(msgspec.to_builtins(config.imitation))
 
-    def without_paths(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {key: without_paths(item) for key, item in value.items() if key != "path"}
-        if isinstance(value, list):
-            return [without_paths(item) for item in value]
-        return value
 
-    return digest_of(without_paths(msgspec.to_builtins(config.imitation)))
+def section_digest(value: Any, *, drop: Sequence[str] = ("path",)) -> str:
+    """The digest of a config section by value, with every key named in ``drop`` left out at
+    every depth.
+
+    What the section's identity is when the section names files: each file is named beside its
+    path by a content digest, so dropping the paths keeps the content in the identity and keeps
+    a folder moved to another disk from being a new experiment. A section whose files are named
+    under another key passes that key in ``drop``.
+    """
+    dropped = frozenset(drop)
+
+    def keep(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {key: keep(inner) for key, inner in item.items() if key not in dropped}
+        if isinstance(item, list):
+            return [keep(inner) for inner in item]
+        return item
+
+    return digest_of(keep(value))
 
 
 def run_id(identity: RunIdentity) -> str:
@@ -525,6 +540,45 @@ def dirty_sources(
 
 
 @lru_cache(maxsize=1)
+def package_provenance(package: Any) -> str:
+    """``<commit sha>`` or ``<commit sha>-dirty`` of the repository ``package`` is tracked in, or
+    ``"unknown"``.
+
+    Stricter than ``git describe`` from the package's folder, which walks UP into any repository
+    that encloses it: from inside a checkout's virtual environment it names that checkout's own
+    commit for an installed copy that is in no repository at all. So a commit is recorded only
+    when the repository's top level IS the folder above the package and the package's
+    ``__init__.py`` is tracked there. The dirty flag is ``git status`` over the package's folder,
+    untracked files included, as ``dirty_sources`` reads it. A sha rather than a description,
+    because a description changes when a tag is added to the same commit.
+    """
+    try:
+        folder = Path(package.__file__).resolve().parent
+    except (AttributeError, TypeError):
+        return UNKNOWN
+    root = folder.parent
+
+    def git(*args: str) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(
+                ["git", *args], cwd=root, capture_output=True, text=True, timeout=15, check=False
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    top = git("rev-parse", "--show-toplevel")
+    if top is None or top.returncode != 0:
+        return UNKNOWN
+    if Path(top.stdout.strip()).resolve() != root:
+        return UNKNOWN
+    tracked = git("ls-files", "--error-unmatch", f"{folder.name}/__init__.py")
+    head = git("rev-parse", "HEAD")
+    if tracked is None or tracked.returncode != 0 or head is None or head.returncode != 0:
+        return UNKNOWN
+    sha = head.stdout.strip()
+    return f"{sha}-dirty" if _uncommitted(folder) else sha
+
+
 def royalegym_provenance() -> tuple[str, str]:
     """``(version, git description)`` of the royalegym this process imported.
 

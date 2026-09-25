@@ -6,10 +6,9 @@ the driver's input, belong to whoever owns them.
 
 What is here:
 
-- ``artifacts``: the folder formats a cloned actor and a field model are stored in, the digest a
-  config names them by, and the probe-logit self-test.
-- ``rows``: codec rows packed the way the rollout packs them and decoded the way the update
-  decodes them.
+- ``artifacts``: the folder format a field model is stored in. Actor artifacts, the folder
+  digest and the probe-logit self-test are generic and live in ``royalelearn.artifacts``, and
+  codec rows in ``royalelearn.learn.rows``.
 """
 
 from __future__ import annotations

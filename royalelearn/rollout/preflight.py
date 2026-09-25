@@ -28,11 +28,11 @@ import numpy as np
 
 from ..api.buffer import MIN_TABLE_STATES, CodecTable
 from ..config import Geometry, RunConfig, geometry
-from ..errors import PreflightError, StaleEngineBuild
+from ..errors import PreflightError
 from ..identity import EngineBuild, engine_build
 from ..obs_layout import hand_fields
 from ..seeding import PREFLIGHT_ENV, PREFLIGHT_SAMPLE, derive_generator, derive_int, stream_path
-from .envspec import ComponentSpec, EnvFactorySpec, read_env_spec
+from .envspec import ComponentSpec, EnvFactorySpec, build_env, read_env_spec
 from .inline import build_codec
 from .scripted import RANDOM_LEGAL_NOOP_PROB
 
@@ -53,7 +53,6 @@ DEFAULT_CODEC = "royalelearn.rollout.codec.SpatialObsCodec"
 #: What to do about a build that no longer matches the data it was compiled from. The engine
 #: reports which keys differ; the harness hashes no data file of its own, because a second
 #: opinion about what the engine is running on is exactly what a stale build looks like.
-REBUILD_COMMAND = "maturin develop --release, in the RoyaleSim checkout"
 
 #: The measured resident cost of the pieces of a run, from ``docs/harness-spec.md`` section
 #: 2.4. They are what ``doctor`` projects a run's footprint from; the buffer, which is the one
@@ -423,13 +422,7 @@ def _ladder_cost_line(config: RunConfig, geo: Geometry) -> str:
 
 def _construct(factory: EnvFactorySpec, extra_modules: tuple[str, ...]) -> Any:
     """Gate 1: one engine, constructed. A stale build dies here and not at cycle 0."""
-    try:
-        return factory.build_vec(1, extra_modules, viser=None)
-    except RuntimeError as exc:
-        text = str(exc)
-        if "calibration" not in text and "build" not in text:
-            raise
-        raise StaleEngineBuild(text, rebuild_command=REBUILD_COMMAND) from exc
+    return build_env(factory, extra_modules)
 
 
 def _sample(vec: Any, master_seed: int, count: int) -> list[dict[str, np.ndarray]]:

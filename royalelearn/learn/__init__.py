@@ -36,6 +36,7 @@ _EXPORTS: dict[str, str] = {
     "PointerPolicyHead": ".nets",
     "RectBuffer": ".buffer",
     "RectGather": ".inference",
+    "RowCodec": ".rows",
     "ResBlock": ".nets",
     "RoundStats": ".inference",
     "ScheduleSet": ".schedules",

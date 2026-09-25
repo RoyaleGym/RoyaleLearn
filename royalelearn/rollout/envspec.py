@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from ..errors import PreflightError
+from ..errors import PreflightError, StaleEngineBuild
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only; see the module docstring
     from royalegym.env import ClashSelfPlayVecEnv
@@ -347,6 +347,26 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         from royalegym.done_condition import AnyCondition
 
         return (AnyCondition, {"conditions": [s.build(extra_modules) for s in specs]})
+
+
+#: What to run when the engine's compiled data and its data files disagree.
+REBUILD_COMMAND = "maturin develop --release, in the RoyaleSim checkout"
+
+
+def build_env(factory: EnvFactorySpec, extra_modules: tuple[str, ...] = ()) -> Any:
+    """One environment of ``factory``, as a one-game vec env. A stale engine build dies here,
+    with the rebuild command named, and not at the first cycle of a run.
+
+    Public, so that anything reading an environment's facts -- its spec, its ``config()``, its
+    catalogue -- builds it the way preflight does.
+    """
+    try:
+        return factory.build_vec(1, extra_modules, viser=None)
+    except RuntimeError as exc:
+        text = str(exc)
+        if "calibration" not in text and "build" not in text:
+            raise
+        raise StaleEngineBuild(text, rebuild_command=REBUILD_COMMAND) from exc
 
 
 def _key_spec(space: Any) -> Any:

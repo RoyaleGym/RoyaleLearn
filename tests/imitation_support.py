@@ -15,21 +15,8 @@ import numpy as np
 import torch
 
 from royalelearn import config as cfg
-from royalelearn.imitation.artifacts import ProbeSet, probe_log_probs, write_actor_artifact
-
-
-def learner_rows(run: Any, count: int) -> np.ndarray:
-    """Up to ``count`` packed rows the run collected for its own seats, after an iteration."""
-    buffer = run.buffer
-    cycles, slots = np.nonzero(buffer.trainable())
-    take = min(count, int(cycles.size))
-    rows, _live = buffer._stack_rows(cycles[:take], slots[:take])
-    return np.ascontiguousarray(buffer.obs_view[rows[:, 0]])
-
-
-def actor_state(run: Any) -> dict[str, torch.Tensor]:
-    """A detached copy of the run's actor tensors, as they are right now."""
-    return {name: tensor.detach().clone() for name, tensor in run.model.actor.state_dict().items()}
+from royalelearn.artifacts import ProbeSet, probe_log_probs, write_actor_artifact
+from royalelearn.testing import actor_state, learner_rows
 
 
 def write_from_run(
@@ -47,7 +34,7 @@ def write_from_run(
     ``edit`` changes the tensors AFTER the probe was recorded, which is what a file that no
     longer matches its own probe looks like.
     """
-    actor = run._build_actor(run.device)
+    actor = run.build_actor(run.device)
     actor.load_state_dict(dict(state))
     actor.eval()
     log_probs, _mask = probe_log_probs(actor, run.row_codec(), rows)

@@ -8,7 +8,6 @@ iteration.
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Iterator
 from itertools import count
 from pathlib import Path
@@ -26,80 +25,9 @@ from royalelearn.metrics.records import unknown_keys
 pytest.importorskip("torch")
 pytest.importorskip("safetensors")
 
-#: What preflight is told for a test: every gate still runs, on a sample a test can afford.
-PREFLIGHT = {"table_samples": 32, "mask_samples": 32, "min_table_states": 0}
-
-
-def tiny_config(tmp_path: Path, **overrides: Any) -> cfg.RunConfig:
-    """The smallest run that is still a run: MockEngine, one worker, two battles, four cycles.
-
-    The mixture is mirror-only. That is not a simplification for its own sake: the learner-row
-    count of a mirror battle is exactly two, so the rectangle collects exactly what the config
-    asks for, and the per-iteration invariant that says so can be asserted rather than given a
-    tolerance that only means anything over thousands of battles.
-    """
-    settings: dict[str, Any] = {
-        "run_name": "test",
-        "runs_dir": str(tmp_path / "runs"),
-        "master_seed": 4242,
-        "env": cfg.default_env_spec(cfg.MOCK_ENGINE, max_steps=6),
-        "rollout": cfg.RolloutConfig(
-            source="inline",
-            workers=1,
-            games_per_worker=2,
-            shards_per_worker=1,
-            launch_delay_s=0.0,
-        ),
-        "net": cfg.NetConfig(
-            channels=8,
-            blocks=1,
-            norm_groups=4,
-            card_embed=8,
-            value_hidden=16,
-            autocast_dtype="float32",
-            device="cpu",
-        ),
-        # ``net.autocast_dtype`` is torch's spelling and ``ppo.ratio_atol``'s keys are the
-        # update's names for the same precisions, which agree on bfloat16 and not on float32.
-        # Naming both is what lets a CPU run assert the ratio invariant at fp32's tolerance.
-        "ppo": cfg.PPOConfig(
-            n_epochs=2,
-            timesteps_per_iteration=16,
-            batch_size=8,
-            minibatch_size=4,
-            ratio_atol={"fp32": 1e-4, "float32": 1e-4, "bfloat16": 2e-2},
-        ),
-        "ladder": cfg.LadderConfig(
-            mix=(1.0, 0.0, 0.0),
-            candidate_every_env_steps=1_000_000,
-            floor_admit_every_env_steps=1_000_000,
-            eval_seed_count=4,
-            refit_every_iterations=1_000_000,
-        ),
-        "checkpoint": cfg.CheckpointConfig(every_env_steps=1_000_000, keep=2),
-        "metrics": cfg.MetricsConfig(sinks=[cfg.SinkSpec("jsonl")]),
-        "determinism": cfg.DeterminismConfig(tier="throughput"),
-        # The exhaustive mask gate is four thousand engine queries and is what
-        # ``tests/test_env_contract.py`` and ``royalelearn doctor`` are for; a file that builds
-        # twenty coordinators pays for it twenty times and learns nothing new after the first.
-        "doctor": cfg.DoctorConfig(run_mask_disagreement_gate=False),
-    }
-    settings.update(overrides)
-    return cfg.RunConfig(**settings)
-
-
-@contextlib.contextmanager
-def coordinator(config: cfg.RunConfig, **kwargs: Any) -> Iterator[Any]:
-    """A coordinator, entered, with the entry point's own environment already applied."""
-    from royalelearn.coordinator import LearningCoordinator
-
-    apply_cublas_workspace_config()
-    kwargs.setdefault("preflight_kwargs", PREFLIGHT)
-    kwargs.setdefault("printer", None)
-    kwargs.setdefault("install_signal_handler", False)
-    run = LearningCoordinator(config, **kwargs)
-    with run:
-        yield run
+# The smallest run that is still a run, and an entered coordinator over it, are defined once in
+# ``royalelearn.testing`` and imported here, where the other test modules have always found them.
+from royalelearn.testing import PREFLIGHT, coordinator, tiny_config
 
 
 @pytest.fixture

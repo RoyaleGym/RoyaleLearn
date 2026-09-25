@@ -33,23 +33,13 @@ from royalelearn.seeding import ACT_CYCLE, derive_generator, stream_path
 
 torch = pytest.importorskip("torch")
 
-from royalelearn.config import NetConfig  # noqa: E402
 from royalelearn.learn.inference import BatchedInference, RectGather  # noqa: E402
-from royalelearn.learn.nets import DefaultNetworkFactory  # noqa: E402
+from royalelearn.learn.nets import DefaultNetworkFactory  # noqa: E402, F401
+from royalelearn.testing import ARCH, build_model  # noqa: E402, F401
 from test_buffer import CYCLES, SEED, SLOTS, Fixture, plan_for, round_for  # noqa: E402
 
 #: The smallest network the architecture allows: the card embedding is one side of the pointer
 #: head's inner product, so it is the channel count, and the norm groups have to divide it.
-ARCH = NetConfig(
-    channels=8,
-    blocks=1,
-    norm_groups=4,
-    vector_embed=4,
-    value_hidden=16,
-    card_embed=8,
-    device="cpu",
-    autocast_dtype="float32",
-)
 
 
 @pytest.fixture(scope="module")
@@ -78,9 +68,6 @@ def rect(env_spec: EnvSpec, observations: list[dict[str, np.ndarray]]) -> Any:
         built.close()
 
 
-def build_model(spec: EnvSpec, *, seed: int = SEED) -> Any:
-    """The shipped pair at the smallest size, on the CPU and in float32."""
-    return DefaultNetworkFactory(seed).build(spec, ARCH, "cpu")
 
 
 def inference_for(built: Fixture, **kwargs: Any) -> BatchedInference:
