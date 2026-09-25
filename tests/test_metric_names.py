@@ -33,6 +33,7 @@ PUBLISHED_KEYS = (
     "env/illegal_action_rate",
     "env/mean_elixir_at_decision",
     "env/reward_shaping_abs",
+    "env/reward_shaping_step_abs",
     "env/reward_terminal_abs",
     "env/ticks_mean",
     "env/tower_hp_frac_end_enemy",
@@ -171,6 +172,7 @@ PUBLISHED_KEYS = (
 PUBLISHED_PATTERNS = (
     "env/reward_terms/{term}",
     "env/reward_terms_abs/{term}",
+    "env/reward_terms_step_abs/{term}",
     "health/worker_failures/{kind}",
     "health/housekeeping/{kind}",
     "ladder/rating/{member}",

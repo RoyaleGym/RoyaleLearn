@@ -259,6 +259,26 @@ def episode_fields(
     fields["env/reward_shaping_abs"] = shaping
     if objective is not None:
         fields["env/reward_terminal_abs"] = terminal
+
+    # HOW LOUD EACH TERM WAS, which the pair above cannot say. Those are episode SUMS, and a
+    # potential term's sum telescopes to ``1 - gamma`` times its wander, so they measure the
+    # discount as much as the term: on train-hog26-10 the shaping share fell 45% over iterations
+    # 51-201 while that share divided by ``1 - gamma`` held within 3%. This is ``sum |F_t|`` per
+    # seat, the magnitude a policy gradient is actually handed. Absent when no record carries it,
+    # which is every record written before 2026-09-24: an old episode was never measured, and 0
+    # would say its shaping was silent.
+    loud: dict[str, list[float]] = {}
+    for record in records:
+        for name, value in record.reward_terms_step_abs.items():
+            loud.setdefault(name, []).append(float(value))
+    if loud:
+        shaping_loud = 0.0
+        for name, values in sorted(loud.items()):
+            magnitude = float(np.mean(values))
+            fields[f"env/reward_terms_step_abs/{name}"] = magnitude
+            if name != objective:
+                shaping_loud += magnitude
+        fields["env/reward_shaping_step_abs"] = shaping_loud
     return EpisodeAggregate(battles=len(battles), seats=len(records), fields=fields)
 
 

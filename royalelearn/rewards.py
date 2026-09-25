@@ -41,6 +41,7 @@ mirror -- harmless to a gradient, and enough to make the property uncheckable.
 
 from __future__ import annotations
 
+import math
 from abc import abstractmethod
 from collections.abc import Sequence
 from fractions import Fraction
@@ -293,24 +294,41 @@ def default_potential_reward(
 ) -> CombinedReward:
     """The shipped composition: the objective, and three potentials under it.
 
-    The weights are an order of magnitude apart on purpose. The terminal term is the objective
-    at 1.0; the crown potential anticipates it; the tower potential is the same scoreboard read
-    continuously; and the elixir potential is the fastest-moving of the three and therefore the
-    smallest, because its job is to make the first hour of a run legible rather than to be
-    optimised. The ``shaping_dominates`` alarm watches the sum of the shaping terms against the
-    terminal one for exactly this reason.
+    The terminal term is the objective at 1.0; the crown potential anticipates it; the tower
+    potential is the same scoreboard read continuously; and the elixir potential is the
+    fastest-moving of the three.
 
-    The three weights are keyword arguments so a config can raise them. Every term is a potential,
-    so a larger weight changes how fast the signal arrives, not which policy is optimal. The
-    defaults are the shipped weights. train-hog26-10 ran with them, and after 610 iterations the
-    shaping was about 1% of the terminal reward: Cannon, Fireball and Log dropped to zero plays and
-    stayed there.
+    The three shaping weights are keyword arguments, so a config can set them::
+
+        "reward_fn": {"cls": "royalelearn.rewards.default_potential_reward",
+                      "kwargs": {"crown": 0.2, "tower_hp": 0.1, "elixir": 0.05}}
+
+    Every term is a potential difference, so a weight changes how the signal is spread over a
+    battle and not which policy is optimal. It does change how loud each term is step to step, and
+    that is what to read before changing one: ``env/reward_terms_step_abs/<term>``, the mean of
+    each seat's ``sum |F_t|`` over an episode. NOT ``env/reward_terms_abs/<term>``, which is the
+    episode's SUM: for a potential it telescopes to ``1 - gamma`` times how far the potential
+    wandered, so it falls as the discount schedule rises whatever the weights are.
+
+    How loud the shipped weights are, measured 2026-09-24 on train-hog26-10's environment, ten
+    random-legal battles at gamma 0.999, per seat per episode **[M]**: elixir 0.80, tower 0.15,
+    crown 0.15, against a terminal of 0.80. The elixir term alone is already about as loud as the
+    objective. Each magnitude is linear in its weight.
+
+    A weight must be finite and not negative. A negative potential weight pays a seat for losing
+    ground, and a NaN reaches every return it touches; both would train, silently.
     """
+    for name, weight in (("crown", crown), ("tower_hp", tower_hp), ("elixir", elixir)):
+        if not math.isfinite(weight) or weight < 0:
+            raise ValueError(
+                f"default_potential_reward({name}={weight!r}): a shaping weight must be a finite "
+                "number, zero or more. Zero turns the term off and keeps its row."
+            )
     return PotentialCombinedReward(
         [
             (WinLossReward(draw=0.0), 1.0),
-            (PotentialCrownReward(), crown),
-            (PotentialTowerHPReward(), tower_hp),
-            (CommittedElixirPotential(scale=10.0), elixir),
+            (PotentialCrownReward(), float(crown)),
+            (PotentialTowerHPReward(), float(tower_hp)),
+            (CommittedElixirPotential(scale=10.0), float(elixir)),
         ]
     )

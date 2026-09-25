@@ -2234,14 +2234,36 @@ therefore reports `terminal`, `PotentialCrownReward`, `PotentialTowerHPReward` a
 the sum of the absolute shaping terms stays below the terminal term's magnitude.
 
 **What that alarm means under a POTENTIAL reward, which is not what it meant under the other one.**
-A potential term pays `gamma * Phi(s') - Phi(s)` every step, so over an episode it telescopes to
-`gamma^T * Phi(s_T) - Phi(s_0)`, and with the terminal potential taken as zero (2ba3895) only
-`-Phi(s_0)` survives. The shares are per-episode sums, so a potential term that is behaving
-contributes a small number however loud it is step to step. Measured in production on 2026-09-22 by
-the train session, over the last twenty iterations of a real run on this composition: terminal
-0.9762, `PotentialTowerHPReward` 0.0151, `PotentialCrownReward` 0.0075, `CommittedElixirPotential`
-0.0055 **[M]**. All the shaping together is 2.9% of the objective, and the elixir term -- the one a
-reader reaches for when a policy looks like it is dumping cards -- is 0.56%.
+A potential term pays `gamma * Phi(s') - Phi(s)` every step. DISCOUNTED over an episode that
+telescopes to `gamma^T * Phi(s_T) - Phi(s_0)`, and with the terminal potential taken as zero
+(2ba3895) only `-Phi(s_0)` survives. The shares are UNDISCOUNTED sums, though, because that is what
+the recorder adds up, and for those the telescoping leaves one more piece:
+
+    sum_t F_t = -Phi(s_0) - (1 - gamma) * sum_{t=1}^{T-1} Phi(s_t)
+
+At a level start `Phi(s_0)` is zero, so a share is `1 - gamma` times how far the potential wandered.
+`test_shaping_strength.py` holds both forms exactly. That makes the shares the right instrument for
+what this alarm checks, and the wrong one for how loud the shaping is. They fall as the discount
+schedule rises, whatever the weights are. On train-hog26-10's own rows the shaping share fell 45%
+between iterations 51 and 201 while the share divided by `1 - gamma` held at 14.1 to 14.5 **[M]**.
+On identical random-legal battles, moving gamma from 0.997 to 0.999 cut it from 0.0462 to 0.0185
+**[M]**.
+
+Measured in production on 2026-09-22 by the train session, over the last twenty iterations of a real
+run on this composition: terminal 0.9762, `PotentialTowerHPReward` 0.0151, `PotentialCrownReward`
+0.0075, `CommittedElixirPotential` 0.0055 **[M]**. Those figures say every term still telescoped.
+They do NOT say the shaping was 2.9% of the objective, and a config that read them that way raised
+the weights 1.5x to 6x to make it louder. How loud a term is lives in
+`env/reward_terms_step_abs/<term>`, each seat's `sum |F_t|` over an episode. At the shipped weights,
+on train-hog26-10's environment, over ten random-legal battles at gamma 0.999, per seat per episode
+**[M]**: `CommittedElixirPotential` 0.80, `PotentialTowerHPReward` 0.15, `PotentialCrownReward`
+0.15, terminal 0.80. The shaping together is about 1.4 times as loud as the objective, and the elixir
+term alone is about as loud. No threshold is claimed for that ratio. It is published so a weight is
+changed against the number that describes it.
+
+The three shaping weights are keyword arguments of `default_potential_reward` (`crown`, `tower_hp`,
+`elixir`), finite and not negative, with the shipped values as defaults. Each term's
+`reward_terms_step_abs` is linear in its weight.
 
 So the alarm is not a weight check any more, and reading it as one would make it look vestigial. It
 now says: a shaping term has stopped telescoping. That is the defect 2ba3895 fixed, where a finished
@@ -2257,15 +2279,13 @@ and was summed with the shaping. On every metric row the development machine rec
 (161 rows) both shares read exactly 0.0 **[M]**, so the alarm compared two structural zeros. It has
 not yet been seen on a real run since.
 
-**Open: the potential on the terminating step.** `PotentialReward` pays `gamma * Phi(s') - Phi(s)`
-when `s'` ends the game too. The policy-invariance result above needs `Phi = 0` at an absorbing state,
-and the learner bootstraps 0 after a termination, so the terminating step pays `gamma * Phi(s')` more
-than a potential-based shaping would: up to about 0.2 from the crowns and 0.1 from the towers at their
-weights, plus 0.005 per elixir of difference. That bonus depends on how the game ended, so it can move
-the optimum, which is what choosing potentials was meant to rule out. The candidate is `Phi(s') = 0`
-when `state.game_over`, kept as it is on a truncation, where the learner bootstraps from the final
-observation's value. It changes the objective and the run identity, so it is a decision rather than
-a fix, and it has not been made.
+**Closed 2026-09-22 (2ba3895): the potential on the terminating step.** `PotentialReward` takes
+`Phi(s') = 0` when `state.game_over` and keeps the position's potential on a truncation, where the
+learner bootstraps from the final observation's value. Before that commit the terminating step paid
+`gamma * Phi(s')` more than potential-based shaping would, a bonus that depended on how the game
+ended and could move the optimum. `test_a_potential_is_zero_once_the_battle_is_over` and
+`test_a_truncated_battle_keeps_the_potential_of_the_position` hold the two cases. This entry said
+"open" for two days after the fix landed, two paragraphs below a sentence citing the fix.
 
 ---
 

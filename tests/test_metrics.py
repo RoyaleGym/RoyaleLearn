@@ -146,6 +146,8 @@ def _record(battle: int, seat: int, outcome: int, steps: int = 400) -> EpisodeRe
         illegal_commands=0,
         undiscounted_return=1.0,
         reward_terms={"terminal": 1.0, "tower_damage": 0.25, "elixir": -0.1},
+        # louder than the sums, as a potential term is: its steps cancel in the sum
+        reward_terms_step_abs={"terminal": 1.0, "tower_damage": 0.9, "elixir": 1.3},
     )
 
 

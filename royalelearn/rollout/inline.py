@@ -279,7 +279,9 @@ class _TermRecorder:
     function's.
     """
 
-    def __init__(self, inner: Any, sink: dict[int, dict[str, float]], slot_of_team: dict[int, int]):
+    def __init__(
+        self, inner: Any, sink: dict[int, dict[str, list[float]]], slot_of_team: dict[int, int]
+    ):
         self._inner = inner
         self._sink = sink
         self._slot_of_team = slot_of_team
@@ -290,7 +292,12 @@ class _TermRecorder:
         if terms is not None:
             totals = self._sink[self._slot_of_team[team]]
             for name, amount in terms(team).items():
-                totals[name] = totals.get(name, 0.0) + float(amount)
+                # The sum and the magnitude, kept in ONE entry so every place that resets a row
+                # resets both. A potential term's steps cancel in the sum, and the magnitude is the
+                # only record of how loud it was.
+                pair = totals.setdefault(name, [0.0, 0.0])
+                pair[0] += float(amount)
+                pair[1] += abs(float(amount))
         return value
 
     def reset(self, state: Any) -> None:
@@ -304,6 +311,14 @@ class _TermRecorder:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
+
+
+def _term_totals(entry: dict[str, list[float]]) -> tuple[dict[str, float], dict[str, float]]:
+    """``(sum, magnitude)`` per term, from one row of the recorder's sink."""
+    return (
+        {name: pair[0] for name, pair in entry.items()},
+        {name: pair[1] for name, pair in entry.items()},
+    )
 
 
 class ShardRunner:
@@ -362,7 +377,7 @@ class ShardRunner:
         self.cards_played = np.zeros(self.n_slots, dtype=np.int32)
         self.illegal_commands = np.zeros(self.n_slots, dtype=np.int32)
         self.undiscounted_return = np.zeros(self.n_slots, dtype=np.float64)
-        self.reward_terms: dict[int, dict[str, float]] = {i: {} for i in range(self.n_slots)}
+        self.reward_terms: dict[int, dict[str, list[float]]] = {i: {} for i in range(self.n_slots)}
         self.episodes: list[EpisodeRecord] = []
         self.pending_snapshots: tuple[bytes | None, ...] = ()
 
@@ -662,7 +677,8 @@ class ShardRunner:
                     cards_played=int(self.cards_played[row]),
                     illegal_commands=int(self.illegal_commands[row]),
                     undiscounted_return=float(self.undiscounted_return[row]),
-                    reward_terms=dict(self.reward_terms[row]),
+                    reward_terms=_term_totals(self.reward_terms[row])[0],
+                    reward_terms_step_abs=_term_totals(self.reward_terms[row])[1],
                 )
             )
             if self.truncated[row]:

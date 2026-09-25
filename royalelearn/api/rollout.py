@@ -268,7 +268,13 @@ class EpisodeRecord(msgspec.Struct, frozen=True):
     cards_played: int
     illegal_commands: int
     undiscounted_return: float
+    #: Each weighted term's per-episode SUM. For a potential term this telescopes; see
+    #: ``reward_terms_step_abs`` for how loud the term actually was.
     reward_terms: dict[str, float]
+    #: Each weighted term's per-episode ``sum |F_t|``: the magnitude a policy gradient is handed,
+    #: which the sum above cannot show because a potential's steps cancel. Empty on a record
+    #: written before 2026-09-24, and the row then leaves the metric out rather than writing 0.
+    reward_terms_step_abs: dict[str, float] = {}
 
 
 class WorkerCommand(msgspec.Struct, tag_field="kind", tag=str.upper):

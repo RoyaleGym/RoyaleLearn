@@ -467,8 +467,17 @@ METRICS: dict[str, MetricSpec] = {
     ),
     "env/reward_shaping_abs": _m(
         "units",
-        "Sum over the shaping terms of each one's mean magnitude per episode, for the "
-        "shaping_dominates alarm.",
+        "Sum over the shaping terms of the mean magnitude of each one's per-episode SUM, for the "
+        "shaping_dominates alarm. For a potential term that sum telescopes to 1 - gamma times how "
+        "far the potential wandered, so this checks that a term still telescopes and says nothing "
+        "about how loud the shaping is: read env/reward_shaping_step_abs for that.",
+    ),
+    "env/reward_shaping_step_abs": _m(
+        "units",
+        "Sum over the shaping terms of each one's mean per-episode sum of |F_t|: how loud the "
+        "shaping was, step by step, which is what a policy gradient is handed. Compare it with "
+        "env/reward_terms_step_abs/terminal. Measured at the shipped weights 2026-09-24: already "
+        "about 1.4x the terminal term under random-legal play.",
     ),
     "env/reward_terminal_abs": _m(
         "units", "The terminal reward term's mean magnitude per episode."
@@ -675,7 +684,20 @@ PATTERNS: tuple[MetricPattern, ...] = (
     ),
     _pattern(
         "env/reward_terms_abs/{term}",
-        _m("units", "One weighted reward term's mean magnitude per episode."),
+        _m(
+            "units",
+            "One weighted reward term's per-episode SUM, as a mean magnitude over seats. A "
+            "potential term's sum telescopes; see env/reward_terms_step_abs/{term}.",
+        ),
+    ),
+    _pattern(
+        "env/reward_terms_step_abs/{term}",
+        _m(
+            "units",
+            "One weighted reward term's per-episode sum of |F_t|, as a mean over seats: how loud "
+            "the term was. Linear in the term's weight. Absent for episodes recorded before "
+            "2026-09-24.",
+        ),
     ),
     _pattern(
         "ladder/score_vs/{opponent}",
@@ -792,6 +814,11 @@ CONDITIONAL: dict[str, str] = {
         "a probe measured the live policy against this anchor this iteration"
     ),
     "ladder/probe_seconds_frac": "a probe has run in this run",
+    # An episode written before the recorder kept per-step magnitudes was never measured, and a
+    # zero would say its shaping was silent.
+    "env/reward_shaping_step_abs": (
+        "a learner episode finished this iteration and its record carries per-step magnitudes"
+    ),
     # The same rule for the rest of the ladder group. Every one of these had a neutral value that
     # reads as a measurement: an Elo of zero, uncorrelated seats, a gate that cost nothing, a
     # perfectly transitive rating, and a learner exactly as good as the first snapshot.

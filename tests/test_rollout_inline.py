@@ -250,6 +250,23 @@ def test_reward_terms_sum_to_the_return(ran: Ran) -> None:
     assert scored, "every episode scored exactly zero in every term, so nothing was recorded"
 
 
+def test_each_term_s_magnitude_is_recorded_beside_its_sum(ran: Ran) -> None:
+    """How loud a term was reaches the record from a real rollout, not only from a unit test.
+
+    The magnitude is ``sum |F_t|``, so it can never be below the size of the sum, and on a term
+    whose steps go both ways it is strictly above it. Both are checked on every term of every
+    episode, so a record built from the wrong half of the recorder's pair fails here.
+    """
+    louder = 0
+    for record in ran.out.episodes:
+        assert set(record.reward_terms_step_abs) == set(record.reward_terms)
+        for name, total in record.reward_terms.items():
+            loud = record.reward_terms_step_abs[name]
+            assert loud >= abs(total) - 1e-9, (name, loud, total)
+            louder += loud > abs(total) + 1e-9
+    assert louder, "no term was ever louder than its sum, so the magnitude is the sum again"
+
+
 def test_a_battle_changes_hands_only_where_an_episode_ended(ran: Ran) -> None:
     """The assignment invariant, over the whole rectangle.
 

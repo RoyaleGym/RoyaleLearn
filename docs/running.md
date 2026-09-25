@@ -275,7 +275,7 @@ These are about what the policy is actually doing in battles. Six warn; one stop
 | `tile_spam` | `policy/tile_top1_share` | above `alarms.tile_top1_share` (0.25) | warn, 5 |
 | `artefact_exploit` | `policy/card_tile_top10_share` | above `alarms.card_tile_top10_share` (0.5) | warn, 5 |
 | `draw_equilibrium` | `env/draw_rate`, `env/episode_steps_at_cap_frac` | draws above 0.5 **and** episodes ending at the cap above 0.8 | warn, 5 |
-| `shaping_dominates` | `env/reward_shaping_abs`, `env/reward_terminal_abs` | shaping magnitude exceeds terminal magnitude | warn, 5 |
+| `shaping_dominates` | `env/reward_shaping_abs`, `env/reward_terminal_abs` | the shaping terms' per-episode sums exceed the terminal term's: a term has stopped telescoping | warn, 5 |
 
 **`noop_collapse` and `noop_collapse_severe`.** Cards played per finished battle, not the no-op
 rate, is the collapse metric. A healthy policy is about 94% no-op simply because most ticks you
@@ -302,8 +302,12 @@ strategy. This is the only warn-severity alarm that writes a diagnostic bundle a
 game. It needs both conditions, which is what distinguishes it from a run that happens to be
 drawing. Usually a reward shaping problem: there is no gradient pushing anyone to commit.
 
-**`shaping_dominates`.** Your shaping terms have taken over the objective from actually winning.
-Reduce the shaping weights. Note from [metrics.md](metrics.md) that `env/reward_terminal_abs`
+**`shaping_dominates`.** One of your shaping terms has stopped telescoping. Under a potential
+reward each term's per-episode sum is small by construction, whatever its weight: the steps cancel.
+A sum that climbs towards the terminal term means something in the reward is not a difference of a
+potential, for example a term that pays on the final step or reads something other than the state.
+Changing a weight will not fix it; find the term. To see how loud each term actually is, read
+`env/reward_terms_step_abs/<term>` beside `env/reward_terms_step_abs/terminal`. Note from [metrics.md](metrics.md) that `env/reward_terminal_abs`
 read 0.0 in every row on disk before a fix on 2026-09-22, so on older runs this alarm could not
 fire for a reason that had nothing to do with the policy.
 
