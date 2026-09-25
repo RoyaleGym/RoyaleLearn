@@ -56,8 +56,14 @@ def test_the_binary_the_engine_reports_is_recorded() -> None:
     assert _build(BINARY_A).binary_sha256 == BINARY_A
 
 
+@pytest.mark.engine
 def test_the_real_env_reports_its_binary_and_it_is_recorded() -> None:
-    """Not a hand-built dict: the shape ``engine_build`` reads is the one the env produces."""
+    """Not a hand-built dict: the key RustEngine states is the one ``engine_build`` reads.
+
+    It needs the compiled extension, so it is marked ``engine``: it went red on both CI runners,
+    which have no ``royalesim`` build, while it passed on the one machine that has one. The
+    default suite still holds the SHAPE without the extension, in the test below it.
+    """
     env = C.default_env_spec(C.RUST_ENGINE).factory()()
     try:
         config = env.config()
@@ -67,6 +73,25 @@ def test_the_real_env_reports_its_binary_and_it_is_recorded() -> None:
     stated = config["engine"]["params"]["engine_binary_sha256"]
     assert build.binary_sha256 == stated
     assert build.binary_sha256 not in (I.NOT_STATED, I.NOT_RECORDED, "")
+
+
+def test_a_real_env_nests_the_engine_s_statement_where_it_is_read() -> None:
+    """The shape, without the compiled extension: a real env, on an engine that states a binary.
+
+    The ``engine``-marked test above checks RustEngine's own key and runs only where the
+    extension is built. This one runs everywhere and holds the other half: that
+    ``ClashParallelEnv.config()`` puts the engine's config under ``engine.params``, which is the
+    one place ``engine_binary`` looks.
+    """
+    from rollout_support import STAMPED_BINARY, rollout_config
+
+    config = rollout_config(engine="rollout_support.StampedMockEngine")
+    env = config.env.factory(tuple(config.extra_component_modules))()
+    try:
+        build = I.engine_build(env.config(), env.engine.cards())
+    finally:
+        env.close()
+    assert build.binary_sha256 == STAMPED_BINARY
 
 
 def test_an_engine_that_states_no_binary_says_so() -> None:
