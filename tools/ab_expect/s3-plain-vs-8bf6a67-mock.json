@@ -1,0 +1,89 @@
+{
+ "format": 2,
+ "why": "S3 as of 3ff1f22 against 8bf6a67 (pre-IL), plain arm on MockEngine. The plan's S3 requirement: config.json bytes, config_hash, identity, run_id and the alarm table (24 names) are identical to 8bf6a67, because c7639d5 removes RunConfig.imitation and the six AlarmConfig.imitation_* fields and S2 dropped the imitation alarms from a plain run's table. Weights, moments, state digests, every metric value and the alarm firings are identical too. The only differences allowed are the permanent S0 ones (owner ruling: the play-rate-by-elixir family and the freeze's actor_lr_scale schedule record stay in core): the play-rate members this config plays on mock, schedules/state.json's last.actor_lr_scale and that file's sha in the manifest. Nothing else, and in particular nothing in the manifest's component_versions.",
+ "may_differ": {
+  "commit": {
+   "why": "side A is 8bf6a67 (pre-IL, parent of 0ab7a29), side B is 3ff1f22 (S3 plus both review rounds' fixes); pinned so the file holds only this pair of commits",
+   "values": [
+    "8bf6a67fa1ee0472ceb46d38b3f6135cbe335e04",
+    "3ff1f2232d0e9979ba7e1346884407469154baf5"
+   ]
+  }
+ },
+ "allow": {
+  "metric_keys": {
+   "only_b": {
+    "env/play_rate_by_elixir/2": "permanent S0 difference (7e40c8e, between 8bf6a67 and 490c74c): the play-rate-by-elixir family is published on every run; on mock this config plays elixir costs [2, 3, 4, 6] deterministically, so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/3": "permanent S0 difference (7e40c8e), as env/play_rate_by_elixir/2",
+    "env/play_rate_by_elixir/4": "permanent S0 difference (7e40c8e), as env/play_rate_by_elixir/2",
+    "env/play_rate_by_elixir/6": "permanent S0 difference (7e40c8e), as env/play_rate_by_elixir/2"
+   }
+  },
+  "checkpoint": {
+   "only_b": {
+    "fresh:schedules/state.json:last.actor_lr_scale": {
+     "why": "permanent S0 difference (7e40c8e): ScheduleState keeps actor_lr_scale (default 1.0) in core, serialised into schedules/state.json 'last'; a record, not hashed into state_digest (owner ruling: the freeze schedule stays in core); pinned to 1.0: a plain run never scales the actor's rate",
+     "value": "1.0"
+    },
+    "resumed:schedules/state.json:last.actor_lr_scale": {
+     "why": "the same in the resumed checkpoint; pinned to 1.0: a plain run never scales the actor's rate",
+     "value": "1.0"
+    }
+   },
+   "changed": {
+    "fresh:manifest:files.schedules/state.json": {
+     "why": "the bytes of schedules/state.json, which carry last.actor_lr_scale; pinned: the file's other leaves are compared one by one, this holds its bytes",
+     "value": [
+      "\"169d87e21e3ed290372e808434913c3aa82899c59cec358ecf8294877bcac958\"",
+      "\"30a3a181f6679ad2d12c8c8e45ecf55a3e92d7771a5f394398ca7467b73d4e57\""
+     ]
+    },
+    "resumed:manifest:files.schedules/state.json": {
+     "why": "the bytes of schedules/state.json, which carry last.actor_lr_scale; pinned: the file's other leaves are compared one by one, this holds its bytes",
+     "value": [
+      "\"5ae14a396dbf9780ca5875023ac623ef009ed54ed738f3fa3f5e7a4bdbccd10b\"",
+      "\"ccb1770031156c192f848933f056101488dba2949b335997ccb530585be05621\""
+     ]
+    }
+   }
+  }
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits"
+  },
+  "metric_keys": {
+   "only_b": {
+    "env/play_rate_by_elixir/2": "the S0 difference must still be there (it is permanent, not something S3 undoes)",
+    "env/play_rate_by_elixir/3": "the S0 difference must still be there",
+    "env/play_rate_by_elixir/4": "the S0 difference must still be there",
+    "env/play_rate_by_elixir/6": "the S0 difference must still be there"
+   }
+  },
+  "checkpoint": {
+   "only_b": {
+    "fresh:schedules/state.json:last.actor_lr_scale": "the S0 difference must still be there",
+    "resumed:schedules/state.json:last.actor_lr_scale": "the S0 difference must still be there"
+   },
+   "changed": {
+    "fresh:manifest:files.schedules/state.json": "moves with last.actor_lr_scale",
+    "resumed:manifest:files.schedules/state.json": "moves with last.actor_lr_scale"
+   }
+  }
+ },
+ "count": {
+  "metric_keys.only_b": {
+   "n": 4,
+   "why": "exactly the play-rate members [2, 3, 4, 6] on mock"
+  },
+  "checkpoint.only_b": {
+   "n": 2,
+   "why": "actor_lr_scale in the fresh and the resumed checkpoint only"
+  },
+  "checkpoint.changed": {
+   "n": 2,
+   "why": "the schedules file sha in both checkpoints, nothing else: config_hash, run_id, state_digest and component_versions equal"
+  }
+ },
+ "note": "Pinned 2026-09-25: commit, last.actor_lr_scale (1.0) and the schedules file sha carry their measured values. The play-rate members' values cannot be compared here (8bf6a67 has none); they are compared by value in s3-plain-vs-490c74c-mock.json. The plain S3 pairs still fail on manifest component_versions.optimizers 1 -> 2 (3ff1f22 learn/ppo.py:268 FORMAT_VERSION = 2, recorded unconditionally by checkpoint.py:210 while a plain run's misc.json stays format_version 1). That is a finding in 3ff1f22, not allowed here."
+}

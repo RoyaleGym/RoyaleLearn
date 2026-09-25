@@ -1,0 +1,215 @@
+{
+ "format": 2,
+ "why": "S2 (6f463d3 against 490c74c), IL arm on MockEngine: --il-shape legacy on both sides (S2 leaves the config unchanged), artifacts made at 490c74c (init at half the seeded actor, a snapshot reference, reference_kl 'bc' at coef.start 2.5, actor frozen for iteration 0). S2 renames the four freeze metrics to ppo/* and the two freeze alarms to actor_handoff/critic_unready, and moves the update state from 'imitation' to 'freeze' plus 'extensions', hashing it into state_digest by name. After the rename map is applied to side A: weights, moments, every other metric value (the renamed ones compared by value), the alarm table, its parameters and its firings, config and identity are identical. The only differences are the state digests and the update-state layout; misc.json's format_version is still 1 at 6f463d3 (a change to it is not allowed here). Measured 2026-09-25 02:44 with RoyaleGym e09b1bd pinned, RoyaleSim 5ec2b6e.",
+ "rename": {
+  "why": "6f463d3 metrics/schema.py:842 RENAMED maps the four imitation/* freeze keys to ppo/* (learn/freeze.py:76 writes them); metrics/alarms.py:57 RENAMED_ALARMS and learn/freeze.py freeze_alarms name the two freeze alarms actor_handoff and critic_unready",
+  "metric_keys": {
+   "imitation/actor_lr_scale": "ppo/actor_lr_scale",
+   "imitation/actor_frozen": "ppo/actor_frozen",
+   "imitation/ev_at_unfreeze": "ppo/ev_at_unfreeze",
+   "imitation/iterations_since_unfreeze": "ppo/iterations_since_unfreeze"
+  },
+  "alarms": {
+   "imitation_handoff": "actor_handoff",
+   "imitation_critic_unready": "critic_unready"
+  }
+ },
+ "may_differ": {
+  "commit": {
+   "why": "side A is 490c74c, side B is 6f463d3 (S2); pinned so the file holds only this pair of commits",
+   "values": [
+    "490c74caeb2e697f625da7ca103bfcbf88794767",
+    "6f463d36be705a79b5892f59f23274312ce254ce"
+   ]
+  },
+  "state_digest": {
+   "why": "6f463d3 coordinator.py:2258 hashes each update.extra_state() entry as its name then its state ('freeze', then 'imitation/bc'), where 490c74c coordinator.py:2367 hashed update.imitation.state() alone; pinned, so the digest may move to this value and no other",
+   "values": [
+    "7f8b84e5734d81fc63036f49bca37375a4ad10796b85bc867fbeaf3760b420be",
+    "ac533f31c13fb5ff629248e3945292054341fcd6d3b5fc591d83c22f9c318ca4"
+   ]
+  },
+  "resumed_state_digest": {
+   "why": "the same digest after the resume (6f463d3 coordinator.py:2258); pinned, as state_digest",
+   "values": [
+    "7efedec659d3b18ae8ea082ddefb74d0d6be0dbd67eaa2f3a56cbd6fe5ab2915",
+    "96e6dd3f364733ac487bfb000f53682e9ca3cd5a3d1b7a22f5041714b1bde2e0"
+   ]
+  }
+ },
+ "allow": {
+  "metric_values": {
+   "changed": {
+    "run/state_digest": {
+     "why": "the per-row copy of state_digest (6f463d3 coordinator.py:2258); it differs on every row, since the freeze state exists from iteration 0; pinned with rows_sha, so every one of the 5 rows is held, not only row 1",
+     "value": [
+      1,
+      "\"3d0add0c5f99bbf5e4f64d9e5d1698c592e751235babad9395a6897952b6a9b8\"",
+      "\"de6280b30b40a49a918baae2e2abf64f635c1332e4bf2d6df0cda6f924ac998d\"",
+      5,
+      "d6be0c4a58d9d24d"
+     ]
+    }
+   }
+  },
+  "checkpoint": {
+   "only_a": {
+    "fresh:optimizers/misc.json:imitation.lambda.bc": {
+     "why": "490c74c learn/ppo.py:1088 writes the IL update state under 'imitation'; 6f463d3 learn/ppo.py:1138-1152 writes 'freeze' and 'extensions' instead",
+     "value": "5.625"
+    },
+    "fresh:optimizers/misc.json:imitation.last_frozen": {
+     "why": "490c74c learn/ppo.py:1088, moved by 6f463d3 learn/ppo.py:1138-1142 to freeze.state.last_frozen",
+     "value": "false"
+    },
+    "fresh:optimizers/misc.json:imitation.unfrozen_at": {
+     "why": "490c74c learn/ppo.py:1088, moved by 6f463d3 learn/ppo.py:1138-1142 to freeze.state.unfrozen_at",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:imitation.lambda.bc": {
+     "why": "the same in the resumed checkpoint",
+     "value": "10.0"
+    },
+    "resumed:optimizers/misc.json:imitation.last_frozen": {
+     "why": "the same in the resumed checkpoint",
+     "value": "false"
+    },
+    "resumed:optimizers/misc.json:imitation.unfrozen_at": {
+     "why": "the same in the resumed checkpoint",
+     "value": "1"
+    }
+   },
+   "only_b": {
+    "fresh:optimizers/misc.json:freeze.format_version": {
+     "why": "6f463d3 learn/ppo.py:1140 writes FreezeTracker.FORMAT_VERSION (learn/freeze.py:58, 1)",
+     "value": "1"
+    },
+    "fresh:optimizers/misc.json:freeze.state.last_frozen": {
+     "why": "6f463d3 learn/ppo.py:1141 FreezeTracker.state(); value equal to side A's imitation.last_frozen (false)",
+     "value": "false"
+    },
+    "fresh:optimizers/misc.json:freeze.state.unfrozen_at": {
+     "why": "6f463d3 learn/ppo.py:1141 FreezeTracker.state(); value equal to side A's imitation.unfrozen_at (1)",
+     "value": "1"
+    },
+    "fresh:optimizers/misc.json:extensions.imitation.bc.format_version": {
+     "why": "6f463d3 learn/ppo.py:1147-1149 writes the term's format_version (imitation/regularisers.py:192, 1) under extensions.<extension>.<name>",
+     "value": "1"
+    },
+    "fresh:optimizers/misc.json:extensions.imitation.bc.state.lambda": {
+     "why": "6f463d3 learn/ppo.py:1149 the term's state (imitation/regularisers.py:344 {'lambda': ...}); value equal to side A's imitation.lambda.bc (5.625)",
+     "value": "5.625"
+    },
+    "resumed:optimizers/misc.json:freeze.format_version": {
+     "why": "the same in the resumed checkpoint",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:freeze.state.last_frozen": {
+     "why": "the same in the resumed checkpoint (false)",
+     "value": "false"
+    },
+    "resumed:optimizers/misc.json:freeze.state.unfrozen_at": {
+     "why": "the same in the resumed checkpoint (1)",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:extensions.imitation.bc.format_version": {
+     "why": "the same in the resumed checkpoint",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:extensions.imitation.bc.state.lambda": {
+     "why": "the same in the resumed checkpoint; value equal to side A's (10.0)",
+     "value": "10.0"
+    }
+   },
+   "changed": {
+    "fresh:manifest:files.optimizers/misc.json": {
+     "why": "the bytes of misc.json, whose layout 6f463d3 learn/ppo.py:1134-1153 changes",
+     "value": [
+      "\"cb8daa37c9cdbe3fbca03f88ba67a923e56e5f1b0c7bad7346ea70138e782680\"",
+      "\"c9c5a532631fe61a355c870b116e438394999930ebf9216a3fdc3910bac0125a\""
+     ]
+    },
+    "resumed:manifest:files.optimizers/misc.json": {
+     "why": "the bytes of misc.json, whose layout 6f463d3 learn/ppo.py:1134-1153 changes",
+     "value": [
+      "\"11f60f18ac39c1295e20f29db368881aae50a1b8077973fb8c6057cc7f1d2c29\"",
+      "\"69641e8c205478b1479f905c35911646b806cb8f6f098df7d3609e44ddc8375d\""
+     ]
+    },
+    "fresh:manifest:state_digest": {
+     "why": "the manifest's copy of state_digest (6f463d3 coordinator.py:2258)",
+     "value": [
+      "\"7f8b84e5734d81fc63036f49bca37375a4ad10796b85bc867fbeaf3760b420be\"",
+      "\"ac533f31c13fb5ff629248e3945292054341fcd6d3b5fc591d83c22f9c318ca4\""
+     ]
+    },
+    "resumed:manifest:state_digest": {
+     "why": "the manifest's copy of state_digest (6f463d3 coordinator.py:2258)",
+     "value": [
+      "\"7efedec659d3b18ae8ea082ddefb74d0d6be0dbd67eaa2f3a56cbd6fe5ab2915\"",
+      "\"96e6dd3f364733ac487bfb000f53682e9ca3cd5a3d1b7a22f5041714b1bde2e0\""
+     ]
+    }
+   }
+  }
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits",
+   "state_digest": "S2 must hash the freeze and term state by name",
+   "resumed_state_digest": "and after the resume"
+  },
+  "metric_values": {
+   "changed": {
+    "run/state_digest": "the per-row copy moves with it"
+   }
+  },
+  "checkpoint": {
+   "only_a": {
+    "fresh:optimizers/misc.json:imitation.lambda.bc": "the old layout must be gone",
+    "fresh:optimizers/misc.json:imitation.last_frozen": "the old layout must be gone",
+    "fresh:optimizers/misc.json:imitation.unfrozen_at": "the old layout must be gone",
+    "resumed:optimizers/misc.json:imitation.lambda.bc": "the old layout must be gone",
+    "resumed:optimizers/misc.json:imitation.last_frozen": "the old layout must be gone",
+    "resumed:optimizers/misc.json:imitation.unfrozen_at": "the old layout must be gone"
+   },
+   "only_b": {
+    "fresh:optimizers/misc.json:freeze.format_version": "the new layout must be written",
+    "fresh:optimizers/misc.json:freeze.state.last_frozen": "the new layout must be written",
+    "fresh:optimizers/misc.json:freeze.state.unfrozen_at": "the new layout must be written",
+    "fresh:optimizers/misc.json:extensions.imitation.bc.format_version": "the new layout must be written",
+    "fresh:optimizers/misc.json:extensions.imitation.bc.state.lambda": "the new layout must be written",
+    "resumed:optimizers/misc.json:freeze.format_version": "the new layout must be written",
+    "resumed:optimizers/misc.json:freeze.state.last_frozen": "the new layout must be written",
+    "resumed:optimizers/misc.json:freeze.state.unfrozen_at": "the new layout must be written",
+    "resumed:optimizers/misc.json:extensions.imitation.bc.format_version": "the new layout must be written",
+    "resumed:optimizers/misc.json:extensions.imitation.bc.state.lambda": "the new layout must be written"
+   },
+   "changed": {
+    "fresh:manifest:files.optimizers/misc.json": "the file's bytes must change with the layout",
+    "resumed:manifest:files.optimizers/misc.json": "the file's bytes must change with the layout",
+    "fresh:manifest:state_digest": "the manifest's copy moves with state_digest",
+    "resumed:manifest:state_digest": "the manifest's copy moves with state_digest"
+   }
+  }
+ },
+ "count": {
+  "metric_values.changed": {
+   "n": 1,
+   "why": "run/state_digest only: every other metric value, the renamed four included, is equal"
+  },
+  "checkpoint.only_a": {
+   "n": 6,
+   "why": "exactly the three 490c74c leaves, in the fresh and the resumed checkpoint"
+  },
+  "checkpoint.only_b": {
+   "n": 10,
+   "why": "exactly freeze.{format_version,state.last_frozen,state.unfrozen_at} and extensions.imitation.bc.{format_version,state.lambda}, in both checkpoints"
+  },
+  "checkpoint.changed": {
+   "n": 4,
+   "why": "misc.json's file sha and the manifest's state_digest, in both checkpoints; misc.json's format_version stays 1"
+  }
+ },
+ "note": "Pinned 2026-09-25: every allowance carries the value measured in the 02:41-02:44 sitting (ab_digest value pins), so an allowance admits that difference only, not any value at that name. The pins tie this file to this config, these artifacts and RoyaleGym e09b1bd; re-measuring with another pin means re-deriving them, not deleting them. Asserted before the pins were written: each moved misc.json leaf equals side A's (lambda 5.625 fresh and 10.0 resumed, last_frozen false, unfrozen_at 1), the new format_version leaves are 1, the manifest's state_digest copies equal the state_digest columns, and on each side the last run/state_digest row equals resumed_state_digest."
+}

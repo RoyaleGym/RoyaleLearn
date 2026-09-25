@@ -1,0 +1,90 @@
+{
+ "format": 2,
+ "why": "S2 (6f463d3 against 490c74c), plain arm on RustEngine (episodes and iterations sized past the opening lockout, so cards are played and the actor trains). S2 builds each run's alarm table from the 24 core alarms plus what the run's optional parts contribute; a run without the imitation block contributes nothing, so its table goes back from 28 to 24 names. The config is unchanged at S2 (config.json bytes, config_hash, the seven imitation keys still written), and so are the identity, run_id, weights, moments, both state digests, every metric key and value, the alarm firings, the checkpoint (optimizers/misc.json still format_version 1 with no 'freeze' or 'extensions' key) and the engine binary. Measured 2026-09-25 02:42-02:43 with RoyaleGym e09b1bd pinned, RoyaleSim 5ec2b6e.",
+ "may_differ": {
+  "commit": {
+   "why": "side A is 490c74c, side B is 6f463d3 (S2); pinned so the file holds only this pair of commits",
+   "values": [
+    "490c74caeb2e697f625da7ca103bfcbf88794767",
+    "6f463d36be705a79b5892f59f23274312ce254ce"
+   ]
+  }
+ },
+ "allow": {
+  "alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "6f463d3 metrics/alarms.py:467 default_alarms appends only `extra` (the unconditional alarms.extend(_imitation_alarms(config)) is deleted); contributions.py:29 returns no alarms when config.imitation is None",
+    "imitation_lambda_saturated": "6f463d3 metrics/alarms.py:467 and contributions.py:29, as imitation_ref_kl_high",
+    "imitation_handoff": "6f463d3 metrics/alarms.py:467 and contributions.py:29; the freeze alarm is contributed only with imitation.actor_lr_scale",
+    "imitation_critic_unready": "6f463d3 metrics/alarms.py:467 and contributions.py:29, as imitation_handoff"
+   }
+  },
+  "resumed_alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "the resumed process builds the same per-run table (6f463d3 metrics/alarms.py:467, contributions.py:29)",
+    "imitation_lambda_saturated": "the resumed process builds the same per-run table (6f463d3 metrics/alarms.py:467, contributions.py:29)",
+    "imitation_handoff": "the resumed process builds the same per-run table (6f463d3 metrics/alarms.py:467, contributions.py:29)",
+    "imitation_critic_unready": "the resumed process builds the same per-run table (6f463d3 metrics/alarms.py:467, contributions.py:29)"
+   }
+  },
+  "alarm_params": {
+   "only_a": {
+    "fresh:imitation_ref_kl_high": "the parameters of an alarm 6f463d3 no longer builds for a plain run",
+    "fresh:imitation_lambda_saturated": "the parameters of an alarm 6f463d3 no longer builds for a plain run",
+    "fresh:imitation_handoff": "the parameters of an alarm 6f463d3 no longer builds for a plain run",
+    "fresh:imitation_critic_unready": "the parameters of an alarm 6f463d3 no longer builds for a plain run",
+    "resumed:imitation_ref_kl_high": "the parameters of an alarm 6f463d3 no longer builds for a plain run",
+    "resumed:imitation_lambda_saturated": "the parameters of an alarm 6f463d3 no longer builds for a plain run",
+    "resumed:imitation_handoff": "the parameters of an alarm 6f463d3 no longer builds for a plain run",
+    "resumed:imitation_critic_unready": "the parameters of an alarm 6f463d3 no longer builds for a plain run"
+   }
+  }
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits; equal commits would mean the step was never run"
+  },
+  "alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "S2's per-run alarm table must drop it from a plain run",
+    "imitation_lambda_saturated": "S2's per-run alarm table must drop it from a plain run",
+    "imitation_handoff": "S2's per-run alarm table must drop it from a plain run",
+    "imitation_critic_unready": "S2's per-run alarm table must drop it from a plain run"
+   }
+  },
+  "resumed_alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "the same in the resumed process",
+    "imitation_lambda_saturated": "the same in the resumed process",
+    "imitation_handoff": "the same in the resumed process",
+    "imitation_critic_unready": "the same in the resumed process"
+   }
+  },
+  "alarm_params": {
+   "only_a": {
+    "fresh:imitation_ref_kl_high": "the parameters go with the alarm",
+    "fresh:imitation_lambda_saturated": "the parameters go with the alarm",
+    "fresh:imitation_handoff": "the parameters go with the alarm",
+    "fresh:imitation_critic_unready": "the parameters go with the alarm",
+    "resumed:imitation_ref_kl_high": "the parameters go with the alarm",
+    "resumed:imitation_lambda_saturated": "the parameters go with the alarm",
+    "resumed:imitation_handoff": "the parameters go with the alarm",
+    "resumed:imitation_critic_unready": "the parameters go with the alarm"
+   }
+  }
+ },
+ "count": {
+  "alarms.only_a": {
+   "n": 4,
+   "why": "exactly the four imitation_* alarms, 28 against 24"
+  },
+  "resumed_alarms.only_a": {
+   "n": 4,
+   "why": "exactly the four, in the resumed process too"
+  },
+  "alarm_params.only_a": {
+   "n": 8,
+   "why": "the four alarms' parameters in both processes"
+  }
+ }
+}

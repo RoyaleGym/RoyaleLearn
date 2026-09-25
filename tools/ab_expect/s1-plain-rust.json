@@ -1,0 +1,12 @@
+{
+ "format": 2,
+ "why": "S1 (d74c4b4 against 490c74c) is a pure refactor. A plain run on RustEngine (episodes and iterations sized past the opening lockout, so cards are played and the actor trains) must be identical on every column except the commit that ran; the engine binary is never allowed to differ.",
+ "may_differ": {
+  "commit": "side A is 490c74c, side B is the S1 commit"
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits; equal commits would mean the step was never run"
+  }
+ }
+}

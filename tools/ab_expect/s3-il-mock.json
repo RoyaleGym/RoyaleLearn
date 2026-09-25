@@ -1,0 +1,378 @@
+{
+ "format": 2,
+ "why": "S3 as of 3ff1f22 against 490c74c, IL arm on MockEngine: side A runs --il-shape legacy (490c74c's imitation block, alarm thresholds at AlarmConfig.imitation_* defaults), side B --il-shape sections (3ff1f22's warm_start and imitation sections with the same values), artifacts made at 490c74c. The config keys move under the prefix renames below with every value equal and no key added or lost; the identity's imitation_digest becomes extensions.{imitation,warm_start}.digest, so run_id moves; the freeze metrics and alarms are renamed as in S2; the update state moves to 'freeze' plus 'extensions' as in S2 and misc.json is written at format_version 2 because it keeps a freeze and a term state (3ff1f22); the state digests move as in S2 (side B's equal 6f463d3's). Weights, moments, every other metric value, the alarm table, its parameters and its firings are identical. Measured 2026-09-25 02:44 with RoyaleGym e09b1bd pinned, RoyaleSim 5ec2b6e.",
+ "rename": {
+  "why": "metric and alarm renames: 6f463d3 metrics/schema.py:842 RENAMED and metrics/alarms.py:57 RENAMED_ALARMS. config prefixes: c7639d5 moves init and actor_lr_scale into WarmStartSection (imitation/config.py:62), the four freeze thresholds into WarmStartAlarms (imitation/config.py:53) and the two regulariser thresholds into ImitationAlarms (imitation/config.py:145), removing AlarmConfig.imitation_* (490c74c config.py:481-486)",
+  "metric_keys": {
+   "imitation/actor_lr_scale": "ppo/actor_lr_scale",
+   "imitation/actor_frozen": "ppo/actor_frozen",
+   "imitation/ev_at_unfreeze": "ppo/ev_at_unfreeze",
+   "imitation/iterations_since_unfreeze": "ppo/iterations_since_unfreeze"
+  },
+  "alarms": {
+   "imitation_handoff": "actor_handoff",
+   "imitation_critic_unready": "critic_unready"
+  },
+  "config_prefix": {
+   "imitation.init": "warm_start.init",
+   "imitation.actor_lr_scale": "warm_start.actor_lr_scale",
+   "alarms.imitation_ref_kl_warn": "imitation.alarms.ref_kl_warn",
+   "alarms.imitation_lambda_saturated_patience": "imitation.alarms.lambda_saturated_patience",
+   "alarms.imitation_handoff_window": "warm_start.alarms.handoff_window",
+   "alarms.imitation_handoff_kl": "warm_start.alarms.handoff_kl",
+   "alarms.imitation_handoff_clip": "warm_start.alarms.handoff_clip",
+   "alarms.imitation_ev_at_unfreeze": "warm_start.alarms.ev_at_unfreeze"
+  }
+ },
+ "may_differ": {
+  "commit": {
+   "why": "side A is 490c74c, side B is 3ff1f22 (S3 plus both review rounds' fixes); pinned so the file holds only this pair of commits",
+   "values": [
+    "490c74caeb2e697f625da7ca103bfcbf88794767",
+    "3ff1f2232d0e9979ba7e1346884407469154baf5"
+   ]
+  },
+  "il_shape": {
+   "why": "the two sides run the config shape their commit reads: legacy at 490c74c, sections at 3ff1f22; pinned to the two IL_SHAPES fragments this was measured with (sha256 of each)",
+   "values": [
+    {
+     "name": "legacy",
+     "sha256": "44fd2a30be39f8ce3e3b75595d7a993da09f9f0bf03216bbc4b9ea8cd4c45071"
+    },
+    {
+     "name": "sections",
+     "sha256": "b1b8388a17af3dfbb84c3de36e44a98b8c93378fe1bab5359e4464c1495544b9"
+    }
+   ]
+  },
+  "config_json_sha256": {
+   "why": "the same values under the new section layout (the renamed keys), so the bytes differ; pinned; every config leaf is also compared by value under the renames",
+   "values": [
+    "e4e2f64a3d85aacf09c98dccc33dcfbfddd8c254ee6a109ddc60595e41c6350a",
+    "7200372a6c1c5f2d98abc248008baeb9799faad72ad9043937b218352974d52d"
+   ]
+  },
+  "config_hash": {
+   "why": "the canonical config of the new layout; pinned; every config leaf is also compared by value under the renames",
+   "values": [
+    "9080723ed58e9c98f6b3f24b310b06c17b4d0be4ded45e3133f21e074b789b3e",
+    "c7bcbedfdf79aaf0fd05517db8d221a0a5e56b90d34f68ee3c74cc94519dbd3a"
+   ]
+  },
+  "resumed_config_hash": {
+   "why": "the reloaded config of the new layout; pinned; every config leaf is also compared by value under the renames",
+   "values": [
+    "9080723ed58e9c98f6b3f24b310b06c17b4d0be4ded45e3133f21e074b789b3e",
+    "c7bcbedfdf79aaf0fd05517db8d221a0a5e56b90d34f68ee3c74cc94519dbd3a"
+   ]
+  },
+  "run_id": {
+   "why": "the identity's imitation_digest (490c74c identity.py:642) is replaced by extensions (c7639d5 identity.py:771), so the identity hash moves; pinned; resumed_run_id equals run_id on each side",
+   "values": [
+    "15f2eccc02176300",
+    "a9c6a296d4d8b1a0"
+   ]
+  },
+  "resumed_run_id": {
+   "why": "the same identity after the resume; pinned; resumed_run_id equals run_id on each side",
+   "values": [
+    "15f2eccc02176300",
+    "a9c6a296d4d8b1a0"
+   ]
+  },
+  "state_digest": {
+   "why": "6f463d3 coordinator.py:2258 hashes each update.extra_state() entry by name, where 490c74c coordinator.py:2367 hashed update.imitation.state(); side B's digest equals 6f463d3's; pinned: side B's value is 6f463d3's (checked when this pin was written), so S3 moved nothing in the state",
+   "values": [
+    "7f8b84e5734d81fc63036f49bca37375a4ad10796b85bc867fbeaf3760b420be",
+    "ac533f31c13fb5ff629248e3945292054341fcd6d3b5fc591d83c22f9c318ca4"
+   ]
+  },
+  "resumed_state_digest": {
+   "why": "the same digest after the resume; pinned: side B's value is 6f463d3's",
+   "values": [
+    "7efedec659d3b18ae8ea082ddefb74d0d6be0dbd67eaa2f3a56cbd6fe5ab2915",
+    "96e6dd3f364733ac487bfb000f53682e9ca3cd5a3d1b7a22f5041714b1bde2e0"
+   ]
+  }
+ },
+ "allow": {
+  "identity_fields": {
+   "only_a": {
+    "imitation_digest": {
+     "why": "490c74c identity.py:642 imitation_digest_of(config); c7639d5 removes the field",
+     "value": "\"aafde51e601ecd2c7e72ed47d16ffd00420d0fb02641fbed8f0a582758e098ab\""
+    }
+   },
+   "only_b": {
+    "extensions.imitation.digest": {
+     "why": "c7639d5 identity.py:771 extension_records: a built-in section records its digest only (distribution, version and git are None and omitted)",
+     "value": "\"b92325f50bd6d92be864238d8f6ddef39ba111ba7f3f3c43f984d1276eefddb2\""
+    },
+    "extensions.warm_start.digest": {
+     "why": "c7639d5 identity.py:771 extension_records, as extensions.imitation.digest",
+     "value": "\"2d8da3fa0a006a033fa44999d65354d54c992fc397670308ff464cc3ff6bec62\""
+    }
+   }
+  },
+  "metric_values": {
+   "changed": {
+    "run/state_digest": {
+     "why": "the per-row copy of state_digest (6f463d3 coordinator.py:2258); every row; pinned with rows_sha: all 5 rows, and side B's rows are 6f463d3's",
+     "value": [
+      1,
+      "\"3d0add0c5f99bbf5e4f64d9e5d1698c592e751235babad9395a6897952b6a9b8\"",
+      "\"de6280b30b40a49a918baae2e2abf64f635c1332e4bf2d6df0cda6f924ac998d\"",
+      5,
+      "d6be0c4a58d9d24d"
+     ]
+    }
+   }
+  },
+  "checkpoint": {
+   "only_a": {
+    "fresh:optimizers/misc.json:imitation.lambda.bc": {
+     "why": "490c74c learn/ppo.py:1088 writes the IL update state under 'imitation'; S2 (6f463d3 learn/ppo.py:1138-1152) writes 'freeze' and 'extensions'",
+     "value": "5.625"
+    },
+    "fresh:optimizers/misc.json:imitation.last_frozen": {
+     "why": "490c74c learn/ppo.py:1088, moved to freeze.state.last_frozen",
+     "value": "false"
+    },
+    "fresh:optimizers/misc.json:imitation.unfrozen_at": {
+     "why": "490c74c learn/ppo.py:1088, moved to freeze.state.unfrozen_at",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:imitation.lambda.bc": {
+     "why": "the same in the resumed checkpoint",
+     "value": "10.0"
+    },
+    "resumed:optimizers/misc.json:imitation.last_frozen": {
+     "why": "the same in the resumed checkpoint",
+     "value": "false"
+    },
+    "resumed:optimizers/misc.json:imitation.unfrozen_at": {
+     "why": "the same in the resumed checkpoint",
+     "value": "1"
+    }
+   },
+   "only_b": {
+    "fresh:optimizers/misc.json:freeze.format_version": {
+     "why": "S2 layout: FreezeTracker.FORMAT_VERSION (learn/freeze.py:58, 1)",
+     "value": "1"
+    },
+    "fresh:optimizers/misc.json:freeze.state.last_frozen": {
+     "why": "S2 layout: FreezeTracker.state(); value equal to side A's imitation.last_frozen (false)",
+     "value": "false"
+    },
+    "fresh:optimizers/misc.json:freeze.state.unfrozen_at": {
+     "why": "S2 layout: FreezeTracker.state(); value equal to side A's imitation.unfrozen_at (1)",
+     "value": "1"
+    },
+    "fresh:optimizers/misc.json:extensions.imitation.bc.format_version": {
+     "why": "S2 layout: the term's format_version (imitation/regularisers.py ReferenceKL.format_version, 1)",
+     "value": "1"
+    },
+    "fresh:optimizers/misc.json:extensions.imitation.bc.state.lambda": {
+     "why": "S2 layout: the term's state; value equal to side A's imitation.lambda.bc (5.625)",
+     "value": "5.625"
+    },
+    "resumed:optimizers/misc.json:freeze.format_version": {
+     "why": "the same in the resumed checkpoint",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:freeze.state.last_frozen": {
+     "why": "the same in the resumed checkpoint (false)",
+     "value": "false"
+    },
+    "resumed:optimizers/misc.json:freeze.state.unfrozen_at": {
+     "why": "the same in the resumed checkpoint (1)",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:extensions.imitation.bc.format_version": {
+     "why": "the same in the resumed checkpoint",
+     "value": "1"
+    },
+    "resumed:optimizers/misc.json:extensions.imitation.bc.state.lambda": {
+     "why": "the same in the resumed checkpoint; value equal to side A's (10.0)",
+     "value": "10.0"
+    }
+   },
+   "changed": {
+    "fresh:optimizers/misc.json:format_version": {
+     "why": "3ff1f22 learn/ppo.py PPOUpdate.FORMAT_VERSION is 2 when a freeze or a term state is held, and save_checkpoint writes it",
+     "value": [
+      "1",
+      "2"
+     ]
+    },
+    "resumed:optimizers/misc.json:format_version": {
+     "why": "the same in the resumed checkpoint",
+     "value": [
+      "1",
+      "2"
+     ]
+    },
+    "fresh:manifest:component_versions.optimizers": {
+     "why": "3ff1f22: the checkpoint store records PPOUpdate.FORMAT_VERSION, the format the update wrote; 2 here because this run holds a freeze and a term state",
+     "value": [
+      "1",
+      "2"
+     ]
+    },
+    "resumed:manifest:component_versions.optimizers": {
+     "why": "the same in the resumed checkpoint",
+     "value": [
+      "1",
+      "2"
+     ]
+    },
+    "fresh:manifest:files.optimizers/misc.json": {
+     "why": "the bytes of misc.json, whose layout and format_version change",
+     "value": [
+      "\"cb8daa37c9cdbe3fbca03f88ba67a923e56e5f1b0c7bad7346ea70138e782680\"",
+      "\"5eb62d82eff178e703928a80cf222aab35a485e20aecdce558944bf0eb4e0575\""
+     ]
+    },
+    "resumed:manifest:files.optimizers/misc.json": {
+     "why": "the bytes of misc.json, whose layout and format_version change",
+     "value": [
+      "\"11f60f18ac39c1295e20f29db368881aae50a1b8077973fb8c6057cc7f1d2c29\"",
+      "\"c1b700a6f7a01e0db42e1a46ea71cbcfb4e0fdc549fcfba09a36b614090c5a85\""
+     ]
+    },
+    "fresh:manifest:state_digest": {
+     "why": "the manifest's copy of state_digest",
+     "value": [
+      "\"7f8b84e5734d81fc63036f49bca37375a4ad10796b85bc867fbeaf3760b420be\"",
+      "\"ac533f31c13fb5ff629248e3945292054341fcd6d3b5fc591d83c22f9c318ca4\""
+     ]
+    },
+    "resumed:manifest:state_digest": {
+     "why": "the manifest's copy of state_digest",
+     "value": [
+      "\"7efedec659d3b18ae8ea082ddefb74d0d6be0dbd67eaa2f3a56cbd6fe5ab2915\"",
+      "\"96e6dd3f364733ac487bfb000f53682e9ca3cd5a3d1b7a22f5041714b1bde2e0\""
+     ]
+    },
+    "fresh:manifest:config_hash": {
+     "why": "the manifest's copy of config_hash",
+     "value": [
+      "\"9080723ed58e9c98f6b3f24b310b06c17b4d0be4ded45e3133f21e074b789b3e\"",
+      "\"c7bcbedfdf79aaf0fd05517db8d221a0a5e56b90d34f68ee3c74cc94519dbd3a\""
+     ]
+    },
+    "resumed:manifest:config_hash": {
+     "why": "the manifest's copy of config_hash",
+     "value": [
+      "\"9080723ed58e9c98f6b3f24b310b06c17b4d0be4ded45e3133f21e074b789b3e\"",
+      "\"c7bcbedfdf79aaf0fd05517db8d221a0a5e56b90d34f68ee3c74cc94519dbd3a\""
+     ]
+    },
+    "fresh:manifest:run_id": {
+     "why": "the manifest's copy of run_id",
+     "value": [
+      "\"15f2eccc02176300\"",
+      "\"a9c6a296d4d8b1a0\""
+     ]
+    },
+    "resumed:manifest:run_id": {
+     "why": "the manifest's copy of run_id",
+     "value": [
+      "\"15f2eccc02176300\"",
+      "\"a9c6a296d4d8b1a0\""
+     ]
+    }
+   }
+  }
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits",
+   "il_shape": "each side must run its own commit's shape",
+   "config_json_sha256": "the layout must have moved",
+   "config_hash": "the layout must have moved",
+   "resumed_config_hash": "the layout must have moved",
+   "run_id": "the identity record must have changed",
+   "resumed_run_id": "the identity record must have changed",
+   "state_digest": "the digest must hash the state by name",
+   "resumed_state_digest": "and after the resume"
+  },
+  "identity_fields": {
+   "only_a": {
+    "imitation_digest": "the old identity field must be gone"
+   },
+   "only_b": {
+    "extensions.imitation.digest": "each active section must be recorded",
+    "extensions.warm_start.digest": "each active section must be recorded"
+   }
+  },
+  "metric_values": {
+   "changed": {
+    "run/state_digest": "the per-row copy moves with it"
+   }
+  },
+  "checkpoint": {
+   "only_a": {
+    "fresh:optimizers/misc.json:imitation.lambda.bc": "the old layout must be gone",
+    "fresh:optimizers/misc.json:imitation.last_frozen": "the old layout must be gone",
+    "fresh:optimizers/misc.json:imitation.unfrozen_at": "the old layout must be gone",
+    "resumed:optimizers/misc.json:imitation.lambda.bc": "the old layout must be gone",
+    "resumed:optimizers/misc.json:imitation.last_frozen": "the old layout must be gone",
+    "resumed:optimizers/misc.json:imitation.unfrozen_at": "the old layout must be gone"
+   },
+   "only_b": {
+    "fresh:optimizers/misc.json:freeze.format_version": "the new layout must be written",
+    "fresh:optimizers/misc.json:freeze.state.last_frozen": "the new layout must be written",
+    "fresh:optimizers/misc.json:freeze.state.unfrozen_at": "the new layout must be written",
+    "fresh:optimizers/misc.json:extensions.imitation.bc.format_version": "the new layout must be written",
+    "fresh:optimizers/misc.json:extensions.imitation.bc.state.lambda": "the new layout must be written",
+    "resumed:optimizers/misc.json:freeze.format_version": "the new layout must be written",
+    "resumed:optimizers/misc.json:freeze.state.last_frozen": "the new layout must be written",
+    "resumed:optimizers/misc.json:freeze.state.unfrozen_at": "the new layout must be written",
+    "resumed:optimizers/misc.json:extensions.imitation.bc.format_version": "the new layout must be written",
+    "resumed:optimizers/misc.json:extensions.imitation.bc.state.lambda": "the new layout must be written"
+   },
+   "changed": {
+    "fresh:optimizers/misc.json:format_version": "a state with freeze or term entries must be written at 2",
+    "resumed:optimizers/misc.json:format_version": "a state with freeze or term entries must be written at 2",
+    "fresh:manifest:component_versions.optimizers": "the manifest records the update's format",
+    "resumed:manifest:component_versions.optimizers": "the manifest records the update's format",
+    "fresh:manifest:files.optimizers/misc.json": "the file's bytes must change",
+    "resumed:manifest:files.optimizers/misc.json": "the file's bytes must change",
+    "fresh:manifest:state_digest": "moves with state_digest",
+    "resumed:manifest:state_digest": "moves with state_digest",
+    "fresh:manifest:config_hash": "moves with config_hash",
+    "resumed:manifest:config_hash": "moves with config_hash",
+    "fresh:manifest:run_id": "moves with run_id",
+    "resumed:manifest:run_id": "moves with run_id"
+   }
+  }
+ },
+ "count": {
+  "identity_fields.only_a": {
+   "n": 1,
+   "why": "imitation_digest only"
+  },
+  "identity_fields.only_b": {
+   "n": 2,
+   "why": "one digest per active section, built-in so no distribution, version or git leaf"
+  },
+  "metric_values.changed": {
+   "n": 1,
+   "why": "run/state_digest only: every other metric value, the renamed four included, is equal"
+  },
+  "checkpoint.only_a": {
+   "n": 6,
+   "why": "exactly the three 490c74c leaves, in both checkpoints"
+  },
+  "checkpoint.only_b": {
+   "n": 10,
+   "why": "exactly the five S2 leaves, in both checkpoints"
+  },
+  "checkpoint.changed": {
+   "n": 12,
+   "why": "format_version, component_versions.optimizers, the misc.json sha and the manifest's state_digest, config_hash and run_id copies, in both checkpoints"
+  }
+ },
+ "note": "Pinned 2026-09-25: every allowance carries the value measured in the 02:41-02:44 sitting (ab_digest value pins), so an allowance admits that difference only, not any value at that name. The pins tie this file to this config, these artifacts and RoyaleGym e09b1bd; re-measuring with another pin means re-deriving them, not deleting them. Asserted before the pins were written: side B's state_digest, resumed_state_digest and all five run/state_digest rows equal 6f463d3's (s2-il-mock.json's side B), and side B's checkpoint leaves equal 6f463d3's except misc.json format_version, component_versions.optimizers, the misc.json sha and the manifest's config_hash and run_id; each moved misc.json leaf equals side A's; the manifest copies of state_digest, config_hash and run_id equal their columns; resumed_config_hash equals config_hash and resumed_run_id equals run_id on each side; the identity's extensions hold exactly the two digests."
+}

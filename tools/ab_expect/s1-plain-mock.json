@@ -1,0 +1,12 @@
+{
+ "format": 2,
+ "why": "S1 (d74c4b4 against 490c74c) is a pure refactor: generic pieces move to generic homes and private accessors become public. A plain run on MockEngine must be identical on every column except the commit that ran.",
+ "may_differ": {
+  "commit": "side A is 490c74c, side B is the S1 commit"
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits; equal commits would mean the step was never run"
+  }
+ }
+}

@@ -1,0 +1,190 @@
+{
+ "format": 2,
+ "why": "S3 as of 3ff1f22 against 490c74c (the published baseline), plain arm on RustEngine (past the opening lockout). c7639d5 removes RunConfig.imitation and the six AlarmConfig.imitation_* fields, so config.json loses those seven keys and the config hashes move; S2 (6f463d3) dropped the four imitation alarms from a plain run's table. run_id and every identity field (a plain 490c74c identity omits imitation_digest, a plain 3ff1f22 identity omits extensions), weights, moments, state digests, every metric key and value, the alarm firings and the rest of the checkpoint are identical. Nothing else, and in particular nothing in the manifest's component_versions. Split from the mock file so the config hashes can be pinned per engine.",
+ "may_differ": {
+  "commit": {
+   "why": "side A is 490c74c, side B is 3ff1f22 (S3 plus both review rounds' fixes); pinned so the file holds only this pair of commits",
+   "values": [
+    "490c74caeb2e697f625da7ca103bfcbf88794767",
+    "3ff1f2232d0e9979ba7e1346884407469154baf5"
+   ]
+  },
+  "config_json_sha256": {
+   "why": "config.json loses the seven keys (c7639d5 config.py: RunConfig.imitation, 490c74c config.py:769, and AlarmConfig.imitation_*, 490c74c config.py:481-486, are removed); pinned: side B's is 8bf6a67's rust value (checked when this pin was written)",
+   "values": [
+    "cd4065bafb4df12b6f1711ef428ca40c0104ef13e1d45e8efcf4468427eaa602",
+    "25c2043a4ca682985f4837b8e43316cf95db6b3c86ec6a6367dc360dca5e0ac1"
+   ]
+  },
+  "config_hash": {
+   "why": "the canonical config loses the same seven keys; pinned: side B's is 8bf6a67's rust value (checked when this pin was written)",
+   "values": [
+    "157a3f0758d281800e4ac8816fcdaf45ed30ab4a5ff0a5f04766440f5c6858ad",
+    "259089cb65915551d1cfd0811ba861abafe03abb6ce443b8ad0fb5c29a3eebb3"
+   ]
+  },
+  "resumed_config_hash": {
+   "why": "the reloaded <run>/config.json lacks the same seven keys; pinned: side B's is 8bf6a67's rust value (checked when this pin was written)",
+   "values": [
+    "157a3f0758d281800e4ac8816fcdaf45ed30ab4a5ff0a5f04766440f5c6858ad",
+    "259089cb65915551d1cfd0811ba861abafe03abb6ce443b8ad0fb5c29a3eebb3"
+   ]
+  }
+ },
+ "allow": {
+  "config_keys": {
+   "only_a": {
+    "imitation": {
+     "why": "c7639d5 removes RunConfig.imitation (490c74c config.py:769), which 490c74c writes as null on a run without the block",
+     "value": "null"
+    },
+    "alarms.imitation_ref_kl_warn": {
+     "why": "c7639d5 removes AlarmConfig.imitation_ref_kl_warn (490c74c config.py:481); now imitation.alarms.ref_kl_warn (imitation/config.py:145), present only with the section",
+     "value": "1.0"
+    },
+    "alarms.imitation_lambda_saturated_patience": {
+     "why": "c7639d5 removes it (490c74c config.py:482); now imitation.alarms.lambda_saturated_patience",
+     "value": "10"
+    },
+    "alarms.imitation_handoff_window": {
+     "why": "c7639d5 removes it (490c74c config.py:483); now warm_start.alarms.handoff_window (imitation/config.py:53)",
+     "value": "20"
+    },
+    "alarms.imitation_handoff_kl": {
+     "why": "c7639d5 removes it (490c74c config.py:484); now warm_start.alarms.handoff_kl",
+     "value": "0.05"
+    },
+    "alarms.imitation_handoff_clip": {
+     "why": "c7639d5 removes it (490c74c config.py:485); now warm_start.alarms.handoff_clip",
+     "value": "0.3"
+    },
+    "alarms.imitation_ev_at_unfreeze": {
+     "why": "c7639d5 removes it (490c74c config.py:486); now warm_start.alarms.ev_at_unfreeze",
+     "value": "0.3"
+    }
+   }
+  },
+  "alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "6f463d3 metrics/alarms.py:467: a plain run's table is the 24 core alarms (S2); still so at 3ff1f22",
+    "imitation_lambda_saturated": "6f463d3 metrics/alarms.py:467, as imitation_ref_kl_high",
+    "imitation_handoff": "6f463d3 metrics/alarms.py:467, as imitation_ref_kl_high",
+    "imitation_critic_unready": "6f463d3 metrics/alarms.py:467, as imitation_ref_kl_high"
+   }
+  },
+  "resumed_alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "the same in the resumed process",
+    "imitation_lambda_saturated": "the same in the resumed process",
+    "imitation_handoff": "the same in the resumed process",
+    "imitation_critic_unready": "the same in the resumed process"
+   }
+  },
+  "alarm_params": {
+   "only_a": {
+    "fresh:imitation_ref_kl_high": "the parameters go with the alarm",
+    "fresh:imitation_lambda_saturated": "the parameters go with the alarm",
+    "fresh:imitation_handoff": "the parameters go with the alarm",
+    "fresh:imitation_critic_unready": "the parameters go with the alarm",
+    "resumed:imitation_ref_kl_high": "the parameters go with the alarm",
+    "resumed:imitation_lambda_saturated": "the parameters go with the alarm",
+    "resumed:imitation_handoff": "the parameters go with the alarm",
+    "resumed:imitation_critic_unready": "the parameters go with the alarm"
+   }
+  },
+  "checkpoint": {
+   "changed": {
+    "fresh:manifest:config_hash": {
+     "why": "the manifest's copy of config_hash; moves with the seven keys; pinned: equals the config_hash column",
+     "value": [
+      "\"157a3f0758d281800e4ac8816fcdaf45ed30ab4a5ff0a5f04766440f5c6858ad\"",
+      "\"259089cb65915551d1cfd0811ba861abafe03abb6ce443b8ad0fb5c29a3eebb3\""
+     ]
+    },
+    "resumed:manifest:config_hash": {
+     "why": "the manifest's copy of config_hash; moves with the seven keys; pinned: equals the config_hash column",
+     "value": [
+      "\"157a3f0758d281800e4ac8816fcdaf45ed30ab4a5ff0a5f04766440f5c6858ad\"",
+      "\"259089cb65915551d1cfd0811ba861abafe03abb6ce443b8ad0fb5c29a3eebb3\""
+     ]
+    }
+   }
+  }
+ },
+ "require": {
+  "columns": {
+   "commit": "the comparison is between two commits",
+   "config_json_sha256": "S3 must remove the seven keys from every plain run's config.json",
+   "config_hash": "and from its canonical config",
+   "resumed_config_hash": "and from the reloaded one"
+  },
+  "config_keys": {
+   "only_a": {
+    "imitation": "must be gone from a plain run's config",
+    "alarms.imitation_ref_kl_warn": "must be gone from a plain run's config",
+    "alarms.imitation_lambda_saturated_patience": "must be gone from a plain run's config",
+    "alarms.imitation_handoff_window": "must be gone from a plain run's config",
+    "alarms.imitation_handoff_kl": "must be gone from a plain run's config",
+    "alarms.imitation_handoff_clip": "must be gone from a plain run's config",
+    "alarms.imitation_ev_at_unfreeze": "must be gone from a plain run's config"
+   }
+  },
+  "alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "a plain run's table is back to 24",
+    "imitation_lambda_saturated": "a plain run's table is back to 24",
+    "imitation_handoff": "a plain run's table is back to 24",
+    "imitation_critic_unready": "a plain run's table is back to 24"
+   }
+  },
+  "resumed_alarms": {
+   "only_a": {
+    "imitation_ref_kl_high": "the same in the resumed process",
+    "imitation_lambda_saturated": "the same in the resumed process",
+    "imitation_handoff": "the same in the resumed process",
+    "imitation_critic_unready": "the same in the resumed process"
+   }
+  },
+  "alarm_params": {
+   "only_a": {
+    "fresh:imitation_ref_kl_high": "the parameters go with the alarm",
+    "fresh:imitation_lambda_saturated": "the parameters go with the alarm",
+    "fresh:imitation_handoff": "the parameters go with the alarm",
+    "fresh:imitation_critic_unready": "the parameters go with the alarm",
+    "resumed:imitation_ref_kl_high": "the parameters go with the alarm",
+    "resumed:imitation_lambda_saturated": "the parameters go with the alarm",
+    "resumed:imitation_handoff": "the parameters go with the alarm",
+    "resumed:imitation_critic_unready": "the parameters go with the alarm"
+   }
+  },
+  "checkpoint": {
+   "changed": {
+    "fresh:manifest:config_hash": "moves with config_hash",
+    "resumed:manifest:config_hash": "moves with config_hash"
+   }
+  }
+ },
+ "count": {
+  "config_keys.only_a": {
+   "n": 7,
+   "why": "exactly imitation plus the six alarms.imitation_* keys"
+  },
+  "alarms.only_a": {
+   "n": 4,
+   "why": "exactly the four imitation_* alarms, 28 against 24"
+  },
+  "resumed_alarms.only_a": {
+   "n": 4,
+   "why": "the same four in the resumed process"
+  },
+  "alarm_params.only_a": {
+   "n": 8,
+   "why": "the four alarms' parameters in both processes"
+  },
+  "checkpoint.changed": {
+   "n": 2,
+   "why": "the manifest's config_hash copy in both checkpoints, nothing else: run_id, state_digest, every file sha and component_versions equal"
+  }
+ },
+ "note": "Pinned 2026-09-25 from the 02:41-02:44 sitting (ab_digest value pins): the commits, the three config hashes, the seven removed keys' side-A values and the manifest's config_hash copies. The four alarm names and their parameters are not pinned: they are side A's own (490c74c's table), and side B has no entry for them. The pins tie this file to this engine's config and RoyaleGym e09b1bd; re-measuring with another pin means re-deriving them, not deleting them. Asserted before the pins were written: side B's config_json_sha256 and config_hash equal 8bf6a67's on rust (the S3 claim, so this file holds it too), resumed_config_hash equals config_hash, and the manifest's config_hash copies equal the column. The plain S3 pairs still fail on manifest component_versions.optimizers 1 -> 2 (3ff1f22 learn/ppo.py:268 FORMAT_VERSION = 2, recorded unconditionally by checkpoint.py:210 while a plain run's misc.json stays format_version 1). That is a finding in 3ff1f22, not allowed here."
+}
