@@ -306,6 +306,13 @@ into an issue. The full run id needs a built environment and is printed by
 
 Note the `-dirty` suffix. It means the checkout had uncommitted changes, and it is in the
 identity, so a run from a dirty tree is honestly marked as not reproducible from any commit.
+`train` and `resume` refuse to start from one unless you pass `--allow-dirty`.
+
+Your own code is in the identity too. If a component in your config comes from your own package
+(a reward in `mybot.rewards`, say), the run records a hash of that package's Python source. Edit
+the reward, or a helper it imports, and the next run is a different run with a different id, even
+if you committed the edit. A resume of the old run is then refused by name, because it would carry
+on training against an objective the checkpoint never saw.
 
 ### Do my two runs match
 

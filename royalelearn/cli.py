@@ -101,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--checkpoint", type=Path, default=None)
     resume.add_argument("--until-timesteps", type=int, default=None)
     resume.add_argument("--allow-identity-drift", action="store_true")
+    resume.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="resume although code the run executes has uncommitted changes",
+    )
     resume.set_defaults(handler=_resume)
 
     verify = commands.add_parser("verify-resume", help="prove a resume on this machine")
@@ -342,10 +347,10 @@ def refuse_dirty_sources(allow: bool, sources: Sequence[str]) -> None:
 
 def _train(args: argparse.Namespace) -> int:
     """A new run."""
-    from .identity import dirty_sources
+    from . import identity
 
-    refuse_dirty_sources(args.allow_dirty, dirty_sources(args.config))
     config = _config_of(args)
+    refuse_dirty_sources(args.allow_dirty, identity.dirty_sources(args.config, config=config))
     if args.run_name:
         config.run_name = args.run_name
     if args.inline:
@@ -358,7 +363,12 @@ def _train(args: argparse.Namespace) -> int:
 
 def _resume(args: argparse.Namespace) -> int:
     """Continue a run; refuse on an identity mismatch and name every differing field."""
+    from . import identity
+
     config = _run_config(args.run)
+    # The run's own copy of its config is a record, not a source, so it is not watched. What is
+    # watched is what the resumed run would execute, including the user's own packages.
+    refuse_dirty_sources(args.allow_dirty, identity.dirty_sources(None, config=config))
     checkpoint = Path(args.checkpoint) if args.checkpoint else _latest_checkpoint(args.run)
     with _coordinator(
         config,

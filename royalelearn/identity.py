@@ -66,6 +66,7 @@ __all__ = [
     "run_id",
     "torch_version",
     "unverified",
+    "user_code",
 ]
 
 IDENTITY_FORMAT_VERSION = 1
@@ -149,6 +150,11 @@ class RunIdentity(msgspec.Struct, frozen=True):
     determinism_tier: str
     torch_version: str
     device_kind: str
+    #: The source of every user package a component comes from, by content: ``{top-level
+    #: package: sha256}``. Empty for a run built only from royalelearn, royalegym and
+    #: royaleviser, which their commits already name. None -- only a decode reaches it -- for an
+    #: identity written before this field existed. See ``user_code``.
+    user_code: dict[str, str] | None = None
 
 
 def run_id(identity: RunIdentity) -> str:
@@ -172,6 +178,8 @@ def identity_differences(
         if name == "engine_build" and NOT_RECORDED in (left.binary_sha256, right.binary_sha256):
             compare_left = msgspec.structs.replace(left, binary_sha256=NOT_RECORDED)
             compare_right = msgspec.structs.replace(right, binary_sha256=NOT_RECORDED)
+        if name == "user_code" and None in (left, right):
+            continue
         if compare_left != compare_right:
             out[name] = (left, right)
     return out
@@ -186,6 +194,14 @@ def unverified(a: RunIdentity, b: RunIdentity) -> list[str]:
             "whether this process runs the same engine cannot be checked. The data digests and "
             "the catalogue still matched. Now running binary "
             f"{b.engine_build.binary_sha256}."
+        )
+    if None in (a.user_code, b.user_code):
+        said.append(
+            "your code: the checkpoint was written before runs recorded the source of their own "
+            "components, so whether your reward, observation or other modules changed since "
+            "cannot be checked. Now recording "
+            + (", ".join(sorted(b.user_code or {})) or "none")
+            + "."
         )
     return said
 
@@ -220,6 +236,97 @@ def engine_build(
         stale_build_differences=list(stale_build_differences),
         binary_sha256=engine_binary(env_config),
     )
+
+
+#: Recorded by their own commit (``royalelearn_git``, ``royalegym_git``), not by content here.
+PACKAGES_WITH_COMMITS: tuple[str, ...] = ("royalelearn", "royalegym", "royaleviser")
+
+
+def _strings(value: Any) -> list[str]:
+    """Every string anywhere inside a JSON value."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in _strings(item)]
+    if isinstance(value, list | tuple):
+        return [s for item in value for s in _strings(item)]
+    return []
+
+
+def user_packages(config: RunConfig) -> dict[str, Path]:
+    """``{top-level package: where its source is}`` for the user code this run's env comes from.
+
+    A component counts when its class lives outside the three packages, and so does any string in
+    a component's kwargs that names a module under ``extra_component_modules`` -- which is how a
+    composition refers to its parts, and the only place such a reference can be. A module that is
+    merely LISTED is not counted: listing cannot move a number, and the identity table excludes
+    ``extra_component_modules`` for exactly that reason.
+
+    The whole top-level package, not the one file, because a reward reads its helpers: an edit to
+    ``mybot/util.py`` moves ``mybot.rewards.MyReward`` as surely as an edit to the reward itself.
+    """
+    env = config.env
+    extra = tuple(config.extra_component_modules)
+    modules: set[str] = set()
+    for spec in (
+        env.engine,
+        env.obs_builder,
+        env.action_parser,
+        env.reward_fn,
+        env.state_mutator,
+        *env.termination,
+        *env.truncation,
+    ):
+        modules.add(spec.cls.rpartition(".")[0])
+        for text in _strings(spec.kwargs):
+            if any(text == name or text.startswith(name + ".") for name in extra):
+                modules.add(text)
+    found: dict[str, Path] = {}
+    for top in sorted({module.split(".")[0] for module in modules if module}):
+        if top in PACKAGES_WITH_COMMITS:
+            continue
+        try:
+            located = importlib.util.find_spec(top)
+        except (ImportError, ValueError):
+            located = None
+        if located is None:
+            continue
+        if located.submodule_search_locations:
+            found[top] = Path(next(iter(located.submodule_search_locations))).resolve()
+        elif located.origin:
+            found[top] = Path(located.origin).resolve()
+    return found
+
+
+def _source_digest(root: Path) -> str:
+    """sha256 over every ``.py`` file under ``root``, by relative path, line endings normalised.
+
+    Python source only: bytecode is derived from it and a note cannot run. Line endings are
+    normalised because the same commit checked out on Windows and on Linux is one piece of code,
+    and two identities for it would be two runs that are not.
+    """
+    digest = hashlib.sha256()
+    files = (
+        [root]
+        if root.is_file()
+        else sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
+    )
+    for path in files:
+        relative = path.name if root.is_file() else path.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8") + b"\0")
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return digest.hexdigest()
+
+
+def user_code(config: RunConfig) -> dict[str, str]:
+    """The identity's record of the user's own code: ``{package: sha256 of its source}``.
+
+    What this closes: the identity named every component by its dotted path, so a different
+    body of ``mybot.rewards.MyReward`` was the same run, and the ladder pooled two objectives.
+    What it does not: data files a component reads, and code reached by anything other than a
+    component's class path or a string in its kwargs.
+    """
+    return {name: _source_digest(path) for name, path in user_packages(config).items()}
 
 
 @lru_cache(maxsize=8)
@@ -275,7 +382,9 @@ def _uncommitted(path: Path) -> tuple[str, ...]:
     return tuple(line[3:].strip() for line in done.stdout.splitlines() if line.strip())
 
 
-def _watched_paths(config_path: Path | None = None) -> list[tuple[str, Path]]:
+def _watched_paths(
+    config_path: Path | None = None, config: RunConfig | None = None
+) -> list[tuple[str, Path]]:
     """What a run's behaviour is actually read from, each labelled for a message.
 
     The PACKAGES rather than their repositories: a docs edit in one of these checkouts cannot
@@ -302,10 +411,17 @@ def _watched_paths(config_path: Path | None = None) -> list[tuple[str, Path]]:
         pass
     if config_path is not None:
         watched.append((f"the run's config ({config_path.name})", config_path.resolve()))
+    if config is not None:
+        # The user's own code, found the way the identity finds it. Without this the guard
+        # watched every package but the one a user is most likely to be editing.
+        for name, path in user_packages(config).items():
+            watched.append((f"your code ({name})", path))
     return watched
 
 
-def dirty_sources(config_path: Path | None = None) -> tuple[str, ...]:
+def dirty_sources(
+    config_path: Path | None = None, config: RunConfig | None = None
+) -> tuple[str, ...]:
     """What this run would read that is not in any commit, each named with what changed.
 
     A run's identity records each repository by commit and everything else about the environment
@@ -316,10 +432,12 @@ def dirty_sources(config_path: Path | None = None) -> tuple[str, ...]:
     run for twenty minutes and nothing in the identity could have said so.
 
     What this covers, stated rather than implied: the python packages this process resolved, the
-    engine's data directory, and the config file the run was started from. What it does not: any
-    other file in those checkouts, a package installed from a wheel rather than a checkout, and
-    anything a component reads at call time from somewhere else. Hashing each resolved component's
-    source would be the thorough answer and it is a much larger one.
+    engine's data directory, the config file the run was started from, and -- given the config --
+    the user's own packages the env's components come from. What it does not: any other file in
+    those checkouts, a package installed from a wheel rather than a checkout, and anything a
+    component reads at call time from somewhere else. The identity records the user's packages
+    by content as well (``user_code``), so an edit this cannot see because it was committed still
+    makes a different run.
 
     THE ENGINE'S COMPILED CODE is outside this function, and since 2026-09-24 it is inside the
     identity instead. The extension is installed rather than imported from a checkout, so there is
@@ -336,7 +454,7 @@ def dirty_sources(config_path: Path | None = None) -> tuple[str, ...]:
     who measured all three rather than arguing them.
     """
     dirty: list[str] = []
-    for label, path in _watched_paths(config_path):
+    for label, path in _watched_paths(config_path, config):
         changed = _uncommitted(path)
         if not changed:
             continue
@@ -470,4 +588,5 @@ def compute_identity(
         determinism_tier=config.determinism.tier,
         torch_version=torch_version() if torch_version_string is None else torch_version_string,
         device_kind=describe_device(config.net.device) if device_kind is None else device_kind,
+        user_code=user_code(config),
     )

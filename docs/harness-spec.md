@@ -973,6 +973,7 @@ class RunIdentity(msgspec.Struct, frozen=True):
     determinism_tier: str
     torch_version: str
     device_kind: str                  # "cuda:NVIDIA GeForce RTX 3050 Laptop GPU:sm_86" | "cpu:x86_64"
+    user_code: dict[str, str] | None = None  # {user package: sha256 of its .py source}
 
 run_id = sha256(msgspec.json.encode(identity, order="deterministic")).hexdigest()[:16]
 ```
@@ -1011,6 +1012,20 @@ Three things follow from recording it.
 - **Every rollout worker states the binary it loaded** in its startup report, by the same rule, and
   the farm refuses a worker whose binary is not the identity's. That covers the window between the
   parent measuring the engine and the workers loading it.
+- **The user's own code is recorded by content.** Every component is named by its dotted path
+  and the path is hashed as a string, so for code outside the three packages nothing backed the
+  name: a different body of `mybot.rewards.MyReward` was the same run, and the ladder pooled the two
+  objectives. `user_code` is `{top-level package: sha256}` over every `.py` file of each user
+  package a component comes from, with line endings normalised. A package counts when a
+  component's class lives in it, or when a string in a component's kwargs names a module under
+  `extra_component_modules`, which is how a composition refers to its parts. A module that is only
+  LISTED does not count, which keeps `extra_component_modules` out of the identity as the table
+  above says. The whole top-level package is hashed, not the one file, because a reward reads its
+  helpers. Content rather than commit, because a user's module is often in no repository at all.
+  An identity from before the field decodes as `None` and is handled like an unrecorded binary.
+  `train` and `resume` also refuse uncommitted edits to those packages, the way they refuse one to
+  a sibling repo; `--allow-dirty` runs anyway. Until 2026-09-24 `resume` had neither the check nor
+  the flag, although the refusal's own docstring said it lived on both.
 - **A restarted worker is checked again**, which is the case that matters. The parent measured the
   file at start, and a worker restarted after somebody rebuilt the engine loads the new one. It
   comes up healthy on another game. It is refused in those words, not as a replacement that failed
