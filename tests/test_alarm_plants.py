@@ -93,17 +93,13 @@ PLANTS: dict[str, dict[str, Any] | list[dict[str, Any]]] = {
     "gate_starved": {"ladder/consecutive_gate_failures": 99},
     "capacity_ratio": {"throughput/rollout_capacity_ratio": 0.01},
     "artefact_exploit": {"policy/card_tile_top10_share": 0.99},
-    # The imitation alarms read families named by the run's own regularisers; "bc" is one. The
-    # real baseline row has no imitation keys at all, which is also what makes them quiet on it.
-    "imitation_ref_kl_high": {"imitation/bc/kl": 2.0},
-    "imitation_lambda_saturated": {"imitation/bc/lambda_at_max": 1.0},
     # Early after an unfreeze, with a clip fraction the handoff bound catches and clip_pinned
     # does not.
     "actor_handoff": {"ppo/iterations_since_unfreeze": 2.0, "ppo/clip_fraction": 0.4},
     "critic_unready": {"ppo/ev_at_unfreeze": 0.05},
 }
 
-#: The table of a run with every optional part: the core's alarms and the contributed ones.
+#: The table of a run whose section schedules the actor's rate: the core's and the freeze's.
 ALARMS = {alarm.name: alarm for alarm in full_alarms()}
 
 
@@ -179,7 +175,7 @@ def test_a_plant_only_touches_keys_the_alarm_declares(name: str) -> None:
 
 
 def _member(template: str, key: str) -> bool:
-    """A declared key, or a member of a declared family such as ``imitation/{name}/kl``."""
+    """A declared key, or a member of a declared family such as ``ladder/rating/{member}``."""
     import re
 
     return re.fullmatch(re.escape(template).replace(r"\{name\}", "[^/]+"), key) is not None

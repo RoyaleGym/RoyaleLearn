@@ -52,9 +52,7 @@ HEALTHY: dict[str, float | int | str] = {
     "ladder/transitivity_residual": 0.02,
     "ladder/consecutive_gate_failures": 0,
     "throughput/rollout_capacity_ratio": 2.4,
-    # One imitation regulariser named "bc", well inside its budget, long after the unfreeze.
-    "imitation/bc/kl": 0.1,
-    "imitation/bc/lambda_at_max": 0.0,
+    # Long after the actor was let go.
     "ppo/iterations_since_unfreeze": 50.0,
     "ppo/ev_at_unfreeze": 0.6,
 }
@@ -86,8 +84,6 @@ TRIPS: dict[str, dict[str, float]] = {
     "transitivity": {"ladder/transitivity_residual": 0.4},
     "gate_starved": {"ladder/consecutive_gate_failures": 6},
     "capacity_ratio": {"throughput/rollout_capacity_ratio": 0.8},
-    "imitation_ref_kl_high": {"imitation/bc/kl": 1.5},
-    "imitation_lambda_saturated": {"imitation/bc/lambda_at_max": 1.0},
     # Inside the handoff window with a clip fraction the handoff bound catches and clip_pinned
     # does not: it is the early-unfreeze reading this alarm exists for.
     "actor_handoff": {"ppo/iterations_since_unfreeze": 3.0, "ppo/clip_fraction": 0.35},
@@ -134,12 +130,7 @@ def test_a_run_without_the_optional_parts_has_none_of_their_alarms() -> None:
     """The regularisers' and the freeze's alarms belong to the runs that have them."""
     plain = set(names(default_alarms(AlarmConfig())))
     contributed = set(names(contributed_alarms()))
-    assert contributed == {
-        "imitation_ref_kl_high",
-        "imitation_lambda_saturated",
-        "actor_handoff",
-        "critic_unready",
-    }
+    assert contributed == {"actor_handoff", "critic_unready"}
     assert not plain & contributed
     assert len(plain) == 24
 
@@ -152,13 +143,15 @@ def test_an_override_naming_no_alarm_of_the_run_is_refused() -> None:
     with pytest.raises(PreflightError, match="patience_overrides names 'critic_unreadyy'"):
         _set(patience_overrides={"critic_unreadyy": 3})
     # A contributed alarm is a name only on a run that has its part.
-    with pytest.raises(PreflightError, match="imitation_ref_kl_high"):
-        AlarmSet(AlarmConfig(severity_overrides={"imitation_ref_kl_high": HALT}), printer=None)
-    kept = _set(disabled=["imitation_ref_kl_high"]).alarms
-    assert "imitation_ref_kl_high" not in {alarm.name for alarm in kept}
+    with pytest.raises(PreflightError, match="actor_handoff"):
+        AlarmSet(AlarmConfig(severity_overrides={"actor_handoff": HALT}), printer=None)
+    kept = _set(disabled=["actor_handoff"]).alarms
+    assert "actor_handoff" not in {alarm.name for alarm in kept}
 
 
-def test_the_config_check_refuses_the_same_names_before_anything_is_built() -> None:
+def test_the_config_check_refuses_the_same_names_before_anything_is_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The coordinator builds its alarm set after the rollout buffer's shared memory exists, so
     the refusal that matters is the config check's, which runs first."""
     renamed = msgspec.structs.replace(
@@ -167,7 +160,9 @@ def test_the_config_check_refuses_the_same_names_before_anything_is_built() -> N
     assert any("renamed to 'critic_unready'" in p for p in check_consistency(renamed))
     assert not any(
         "alarm table" in p
-        for p in check_consistency(full_config(AlarmConfig(disabled=["critic_unready"])))
+        for p in check_consistency(
+            full_config(monkeypatch, AlarmConfig(disabled=["critic_unready"]))
+        )
     )
 
 
@@ -207,13 +202,14 @@ def _carries(template: str, key: str) -> bool:
 def test_a_family_alarm_names_only_the_members_that_hold() -> None:
     """Two regularisers, one over its bound: the message names that one and not the other, and
     a row carrying no member at all is not a firing."""
-    alarm = _alarm("imitation_ref_kl_high")
-    row = _row(**{"imitation/bc/kl": 1.5, "imitation/timing/kl": 0.2})
+    from royalelearn.metrics.alarms import FamilyAlarm
+
+    alarm = FamilyAlarm("family_high", lambda _member, kl: kl > 1.0, keys=("fam/{name}/kl",))
+    row = _row(**{"fam/bc/kl": 1.5, "fam/timing/kl": 0.2})
     assert alarm.holds(row)
-    assert "imitation/bc/kl" in alarm.message(row)
-    assert "imitation/timing/kl" not in alarm.message(row)
-    bare = {key: value for key, value in HEALTHY.items() if not key.startswith("imitation/")}
-    assert not alarm.holds(bare)
+    assert "fam/bc/kl" in alarm.message(row)
+    assert "fam/timing/kl" not in alarm.message(row)
+    assert not alarm.holds(dict(HEALTHY))
 
 
 def _spill_rows(alarms, seconds, free_mb, *, count=1, start=1):
@@ -488,7 +484,7 @@ def test_a_quiet_iteration_hands_over_nothing() -> None:
 
 def test_a_plain_run_builds_the_core_table_and_nothing_else() -> None:
     """What a run without sections holds, from its config the way the coordinator gets it."""
-    from royalelearn.extensions import extension_alarms, schema_contributions, with_sections
+    from royalelearn.extensions import extension_alarms, schema_contributions
     from royalelearn.metrics.schema import for_run
 
     plain = RunConfig()
@@ -496,12 +492,9 @@ def test_a_plain_run_builds_the_core_table_and_nothing_else() -> None:
     assert schema_contributions(plain) == ()
     built = AlarmSet(plain.alarms, extra=extension_alarms(plain), printer=None)
     assert {alarm.name for alarm in built.alarms} == set(schema.ALARM_METRICS)
-    assert not for_run(schema_contributions(plain)).is_known("imitation/bc/kl")
+    assert set(for_run(schema_contributions(plain)).alarm_metrics) == set(schema.ALARM_METRICS)
     refused = msgspec.structs.replace(plain, alarms=AlarmConfig(disabled=["critic_unready"]))
     assert any("critic_unready" in problem for problem in check_consistency(refused))
-    # a section that only loads weights schedules no freeze and anchors nothing
-    init_only = with_sections(plain, warm_start={"init": {"path": "x", "sha256": "y"}})
-    assert extension_alarms(init_only) == ()
 
 
 @pytest.mark.parametrize(
@@ -529,22 +522,23 @@ def test_a_plain_run_builds_the_core_table_and_nothing_else() -> None:
     ],
 )
 def test_each_freeze_threshold_is_the_one_its_section_names(
-    alarm: str, keys: tuple[str, ...], over: tuple[float, ...], under: tuple[float, ...]
+    alarm: str,
+    keys: tuple[str, ...],
+    over: tuple[float, ...],
+    under: tuple[float, ...],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Four thresholds set to four distinct values, each probed either side of its own number:
     swapping two of them in the wiring would move a boundary here."""
-    from royalelearn.extensions import extension_alarms, with_sections
+    from royalelearn.extensions import extension_alarms
 
-    config = with_sections(
-        RunConfig(),
-        warm_start={
-            "actor_lr_scale": {"kind": "constant", "value": 1.0},
-            "alarms": {
-                "handoff_window": 5,
-                "handoff_kl": 0.07,
-                "handoff_clip": 0.4,
-                "ev_at_unfreeze": 0.2,
-            },
+    config = full_config(
+        monkeypatch,
+        alarms={
+            "handoff_window": 5,
+            "handoff_kl": 0.07,
+            "handoff_clip": 0.4,
+            "ev_at_unfreeze": 0.2,
         },
     )
     (built,) = [a for a in extension_alarms(config) if a.name == alarm]

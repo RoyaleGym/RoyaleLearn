@@ -32,6 +32,7 @@ __all__ = [
     "ARCH",
     "CYCLES",
     "FORCED_CELLS",
+    "FREEZE_THRESHOLDS",
     "PPO_CONFIG",
     "PPO_SCHEDULE",
     "PREFLIGHT",
@@ -259,11 +260,15 @@ class StubTerm:
 
 
 class StubSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
-    """The section of ``StubExtension``: one ``StubTerm`` at this coefficient, or none."""
+    """The section of ``StubExtension``: one ``StubTerm`` at this coefficient, or none; and a
+    schedule of the actor's learning-rate scale, which turns the core's freeze on."""
 
     coefficient: float | None = None
     keep_state: bool = False
-    #: A threshold that belongs in no identity, as every section's alarms.
+    actor_lr_scale: cfg.ScheduleSpec | None = None
+    #: Thresholds, which belong in no identity, as every section's alarms: the freeze alarms'
+    #: ``handoff_window``, ``handoff_kl``, ``handoff_clip`` and ``ev_at_unfreeze`` when the
+    #: section schedules the actor's rate.
     alarms: dict[str, float] = {}
 
 
@@ -292,7 +297,26 @@ class StubExtension(ExtensionBase):
             StubTerm(section.coefficient, keep_state=section.keep_state, extension=self.name),
         )
 
+    def actor_lr_scale(self, section: StubSection) -> Any:
+        return section.actor_lr_scale
+
+    def alarms(self, section: StubSection) -> tuple[Any, ...]:
+        if section.actor_lr_scale is None:
+            return ()
+        from .learn.freeze import freeze_alarms
+
+        thresholds = {**FREEZE_THRESHOLDS, **section.alarms}
+        return tuple(
+            freeze_alarms(
+                handoff_window=int(thresholds["handoff_window"]),
+                handoff_kl=thresholds["handoff_kl"],
+                handoff_clip=thresholds["handoff_clip"],
+                ev_at_unfreeze=thresholds["ev_at_unfreeze"],
+            )
+        )
+
     def metric_schema(self, section: StubSection) -> Any:
+        from .learn.freeze import FREEZE_ALARM_KEYS
         from .metrics.schema import MetricSpec, SchemaContribution, pattern
 
         spec = MetricSpec(unit="count", description="A stub term's calls or gradient ratio.")
@@ -300,8 +324,18 @@ class StubExtension(ExtensionBase):
             patterns=(
                 pattern(f"{self.name}/{{term}}/calls", spec),
                 pattern(f"{self.name}/{{term}}/grad_ratio", spec),
-            )
+            ),
+            alarm_metrics=FREEZE_ALARM_KEYS if section.actor_lr_scale is not None else {},
         )
+
+
+#: The freeze alarms' thresholds a stub section uses unless its ``alarms`` says otherwise.
+FREEZE_THRESHOLDS: dict[str, float] = {
+    "handoff_window": 20,
+    "handoff_kl": 0.05,
+    "handoff_clip": 0.3,
+    "ev_at_unfreeze": 0.3,
+}
 
 
 def use_extensions(monkeypatch: Any, extensions: dict[str, Any]) -> None:
@@ -328,7 +362,13 @@ def use_extensions(monkeypatch: Any, extensions: dict[str, Any]) -> None:
         found, problems = real(names - set(extensions))
         return {**found, **mine}, problems
 
+    real_claimed = registry._claimed
+
+    def claimed(names: set[str]) -> set[str]:
+        return (names & set(extensions)) | real_claimed(names - set(extensions))
+
     monkeypatch.setattr(registry, "_discover", discover)
+    monkeypatch.setattr(registry, "_claimed", claimed)
 
 
 # --------------------------------------------------------------------------

@@ -85,13 +85,17 @@ def test_a_section_no_provider_claims_is_refused_by_name_at_load() -> None:
         cfg.load_config({"nosuch": {"a": 1}})
 
 
-def test_a_misspelt_key_inside_a_section_is_refused() -> None:
-    with pytest.raises(msgspec.ValidationError, match="inits"):
-        cfg.load_config({"warm_start": {"inits": {}}})
+def test_a_misspelt_key_inside_a_section_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_extensions(monkeypatch, {"stubsec": StubExtension("stubsec")})
+    with pytest.raises(msgspec.ValidationError, match="coefficent"):
+        cfg.load_config({"stubsec": {"coefficent": 1.0}})
 
 
-def test_a_null_section_loads_as_absent() -> None:
-    loaded = cfg.load_config({"imitation": None, "warm_start": None}, say=None)
+def test_a_null_section_loads_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A claimed key that is null is an absent section; so is the ``"imitation": null`` every
+    config of 0ab7a29..S2 carries, dropped by the shim with nothing installed to claim it."""
+    use_extensions(monkeypatch, {"stubsec": StubExtension("stubsec")})
+    loaded = cfg.load_config({"imitation": None, "stubsec": None}, say=None)
     assert type(loaded) is cfg.RunConfig
     assert loaded == cfg.laptop()
     assert active_extensions(loaded) == ()
@@ -387,11 +391,10 @@ def test_an_extension_need_not_be_hashable(monkeypatch: pytest.MonkeyPatch) -> N
     assert [a.name for a in active_extensions(loaded)] == ["plain_eq"]
 
 
-def test_a_section_set_to_none_encodes_as_absent() -> None:
-    sectioned = with_sections(
-        cfg.laptop(), warm_start={"actor_lr_scale": {"kind": "constant", "value": 1.0}}
-    )
-    cleared = msgspec.structs.replace(sectioned, warm_start=None)
+def test_a_section_set_to_none_encodes_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_extensions(monkeypatch, {"stubsec": StubExtension("stubsec")})
+    sectioned = with_sections(cfg.laptop(), stubsec={"coefficient": 0.5})
+    cleared = msgspec.structs.replace(sectioned, stubsec=None)
     assert cfg.dump_config(cleared) == cfg.dump_config(cfg.laptop())
     assert cfg.config_hash(cleared) == cfg.config_hash(cfg.laptop())
     assert type(with_sections(cleared)) is cfg.RunConfig
@@ -404,18 +407,19 @@ def test_a_section_set_to_none_encodes_as_absent() -> None:
     [
         ("identity", "imitation_digest"),
         ("identity", "engine_build", "built_by"),
-        ("identity", "extensions", "warm_start", "signed_by"),
+        ("identity", "extensions", "stubsec", "signed_by"),
     ],
     ids=["identity", "engine_build", "extension_record"],
 )
 def test_a_resume_refuses_an_unknown_field_at_every_level_of_the_identity(
-    tmp_path: Path, path: tuple[str, ...]
+    tmp_path: Path, path: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Seen failing: without forbid_unknown_fields on EngineBuild or ExtensionRecord, the nested
     cases resume."""
+    use_extensions(monkeypatch, {"stubsec": StubExtension("stubsec")})
     config = with_sections(
         tiny_config(tmp_path / "run"),
-        warm_start={"actor_lr_scale": {"kind": "constant", "value": 1.0}},
+        stubsec={"actor_lr_scale": {"kind": "constant", "value": 1.0}},
     )
     with coordinator(config) as run:
         run.iterate()
@@ -471,97 +475,3 @@ def test_a_resume_does_not_report_keys_the_shim_dropped(
         pass
     printed = capsys.readouterr().out
     assert "config differs" not in printed, printed
-
-
-def test_an_old_il_config_with_null_init_and_scale_loads_without_a_warm_start() -> None:
-    """Every IL config.json of that time wrote both keys, null when unset."""
-    said: list[str] = []
-    loaded = cfg.load_config(
-        {"imitation": {"init": None, "actor_lr_scale": None, "references": {}, "regularisers": []}},
-        say=said.append,
-    )
-    assert [a.name for a in active_extensions(loaded)] == ["imitation"]
-    assert said and "imitation.init" in said[0] and "imitation.actor_lr_scale" in said[0]
-
-
-def test_two_copies_of_one_distribution_that_disagree_are_refused(
-    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A stale in-tree egg-info earlier on the path: the first-copy-wins walk of
-    ``importlib.metadata.entry_points`` would silently take it. Seen failing with that walk."""
-    code = tmp_path / "code"
-    _package(code, "split_ext")
-    monkeypatch.syspath_prepend(str(code))
-    _install(site, "split-ext", {"split_ext": "split_ext:EXTENSION"}, code=code)
-    _install(site / "stale", "split-ext", {"split_ext": "split_ext.old:EXTENSION"}, code=code)
-    monkeypatch.syspath_prepend(str(site / "stale"))
-    with pytest.raises(PreflightError, match="'split_ext' is provided by more than one"):
-        cfg.load_config({"split_ext": {}})
-
-
-def test_an_installed_extension_stays_unimported_while_another_is_used(
-    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The walk over installed declarations runs for the section that is named; it must read
-    the others' metadata only. Seen failing: a walk that loads every entry point it passes."""
-    marker = tmp_path / "imported"
-    code = tmp_path / "code"
-    _package(code, "used_ext")
-    _package(code, "idle_ext", marker=marker)
-    monkeypatch.syspath_prepend(str(code))
-    _install(site, "used-ext", {"used_ext": "used_ext:EXTENSION"}, code=code)
-    _install(site, "idle-ext", {"idle_ext": "idle_ext:EXTENSION"}, code=code)
-    try:
-        loaded = cfg.load_config({"used_ext": {}})
-        assert [a.name for a in active_extensions(loaded)] == ["used_ext"]
-        assert "idle_ext" not in sys.modules
-        assert not marker.exists()
-    finally:
-        _forget("used_ext", "idle_ext")
-
-
-def test_two_sections_scheduling_the_actor_s_rate_are_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Only one schedule can drive the freeze; the second would be silently ignored."""
-
-    class Scheduler(StubExtension):
-        def actor_lr_scale(self, section: Any) -> Any:
-            return cfg.ConstantSpec(1.0)
-
-    use_extensions(monkeypatch, {"first": Scheduler("first"), "second": Scheduler("second")})
-    config = with_sections(cfg.RunConfig(), first={}, second={})
-    assert any(
-        "more than one section schedules the actor's learning-rate scale: ['first', 'second']"
-        in problem
-        for problem in cfg.check_consistency(config)
-    )
-
-
-def test_the_recorded_version_is_the_package_s_own_not_the_metadata_s(
-    site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, facts: Any  # noqa: F811
-) -> None:
-    """Install metadata can be stale; the package's ``__version__`` is what was imported."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "test@example.invalid")
-    _git(repo, "config", "user.name", "test")
-    _package(repo, "versioned_ext")
-    (repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "c")
-    monkeypatch.syspath_prepend(str(repo))
-    _install(site, "versioned-ext", {"versioned_ext": "versioned_ext:EXTENSION"}, code=repo)
-    info = next(site.glob("versioned-ext-*.dist-info"))
-    (info / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: versioned-ext\nVersion: 9.9\n", encoding="utf-8"
-    )
-    try:
-        used = with_sections(
-            cfg.RunConfig(env=cfg.default_env_spec(cfg.MOCK_ENGINE)), versioned_ext={}
-        )
-        record = I.compute_identity(used, **facts).extensions["versioned_ext"]
-        assert record.version == "0.1"
-    finally:
-        _forget("versioned_ext")

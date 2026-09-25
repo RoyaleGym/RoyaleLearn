@@ -222,9 +222,14 @@ def _freeze_state(folder: Path, freeze: Any) -> Path:
     return folder
 
 
-def test_a_freeze_state_is_refused_without_a_freeze_or_at_another_format(tmp_path: Path) -> None:
+def test_a_freeze_state_is_refused_without_a_freeze_or_at_another_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The freeze half of the refusals: a run with no schedule has nothing to restore it into,
     and one at another format would be read as this one."""
+    from royalelearn.testing import StubExtension, use_extensions
+
+    use_extensions(monkeypatch, {"freezer": StubExtension("freezer")})
     state = {"unfrozen_at": 3, "last_frozen": False}
     stray = _freeze_state(tmp_path / "stray", {"format_version": 1, "state": state})
     with (
@@ -235,7 +240,7 @@ def test_a_freeze_state_is_refused_without_a_freeze_or_at_another_format(tmp_pat
     future = _freeze_state(tmp_path / "future", {"format_version": 9, "state": state})
     scheduled = with_sections(
         tiny_config(tmp_path / "frozen"),
-        warm_start={"actor_lr_scale": {"kind": "constant", "value": 1.0}},
+        freezer={"actor_lr_scale": {"kind": "constant", "value": 1.0}},
     )
     with (
         coordinator(scheduled) as run,
@@ -440,12 +445,12 @@ def test_a_section_s_term_must_report_under_the_section_s_name(
 
     class _Lender(StubExtension):
         def actor_terms(self, section: Any, ctx: Any) -> tuple[StubTerm, ...]:
-            return (StubTerm(0.0, extension="imitation"),)
+            return (StubTerm(0.0, extension="borrowed"),)
 
     use_extensions(monkeypatch, {"lender": _Lender("lender")})
     config = with_sections(tiny_config(tmp_path / "run"), lender={})
     with (
-        pytest.raises(PreflightError, match="lender: imitation/inert"),
+        pytest.raises(PreflightError, match="lender: borrowed/inert"),
         coordinator(config),
     ):
         pass

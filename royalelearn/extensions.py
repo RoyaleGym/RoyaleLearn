@@ -180,14 +180,9 @@ class Active(NamedTuple):
 
 #: Sections RoyaleLearn provides in code rather than through an entry point, as
 #: ``module:attribute``. Install metadata can be stale -- an in-tree egg-info with no entry points
-#: at all -- so what the core itself provides does not depend on it.
-#:
-#: TRANSITIONAL: both live in ``royalelearn.imitation`` until it becomes its own package, when
-#: they leave this table for that package's entry points.
-_BUILTINS: dict[str, str] = {
-    "imitation": "royalelearn.imitation.extension:EXTENSION",
-    "warm_start": "royalelearn.imitation.warm_start:EXTENSION",
-}
+#: at all -- so what the core itself provides does not depend on it. None today: every section
+#: comes from an installed package.
+_BUILTINS: dict[str, str] = {}
 
 
 def _load(reference: str) -> Any:
@@ -256,11 +251,17 @@ def _owns(copies: Sequence[Any], module: ModuleType | None) -> bool:
     return False
 
 
-def _unclaimed(names: set[str]) -> list[str]:
-    """The keys among ``names`` that no built-in and no installed declaration claims."""
+def _claimed(names: set[str]) -> set[str]:
+    """The keys among ``names`` a built-in or an installed declaration claims. Metadata only:
+    nothing is imported."""
     rest = names - set(_BUILTINS)
     declared = _declared(rest) if rest else {}
-    return sorted(name for name in rest if name not in declared)
+    return (names & set(_BUILTINS)) | set(declared)
+
+
+def _unclaimed(names: set[str]) -> list[str]:
+    """The keys among ``names`` that nothing claims."""
+    return sorted(names - _claimed(names))
 
 
 def _refusal(key: str) -> str:
@@ -489,19 +490,6 @@ def schema_contributions(config: Any) -> tuple[SchemaContribution, ...]:
 # --------------------------------------------------------------------------
 
 _SURFACE: dict[str, str] = {
-    # artifacts: actor weights with a digest and probe rows
-    "PROBE_CHUNK": "royalelearn.artifacts",
-    "PROBE_NAME": "royalelearn.artifacts",
-    "ActorArtifact": "royalelearn.artifacts",
-    "ProbeSet": "royalelearn.artifacts",
-    "artifact_digest": "royalelearn.artifacts",
-    "check_actor_artifact": "royalelearn.artifacts",
-    "load_actor_state": "royalelearn.artifacts",
-    "probe_log_probs": "royalelearn.artifacts",
-    "read_actor_artifact": "royalelearn.artifacts",
-    "self_test": "royalelearn.artifacts",
-    "verify_artifact": "royalelearn.artifacts",
-    "write_actor_artifact": "royalelearn.artifacts",
     # the update's hook and the freeze
     "ActorLossTerm": "royalelearn.api.update",
     "ActorTermInputs": "royalelearn.api.update",
@@ -514,6 +502,8 @@ _SURFACE: dict[str, str] = {
     "empty_obs": "royalelearn.learn.buffer",
     "field_slice": "royalelearn.obs_layout",
     "build_env": "royalelearn.rollout.envspec",
+    "digest_of": "royalelearn.rollout.envspec",
+    "read_env_spec": "royalelearn.rollout.envspec",
     "behaviour_fields": "royalelearn.metrics.behaviour",
     # schedules and config
     "RunConfig": "royalelearn.config",
@@ -524,13 +514,19 @@ _SURFACE: dict[str, str] = {
     "load_config": "royalelearn.config",
     # identity and provenance
     "action_digest_of": "royalelearn.identity",
+    "engine_build": "royalelearn.identity",
+    "git_describe": "royalelearn.version",
     "package_provenance": "royalelearn.identity",
+    "royalegym_provenance": "royalelearn.identity",
     "section_digest": "royalelearn.identity",
     # precision
     "judge_ratio_precision": "royalelearn.rollout.preflight",
     "precision_bound": "royalelearn.rollout.preflight",
-    # snapshots
+    # snapshots: the folder layout an actor's weights are stored in
+    "SPEC_NAME": "royalelearn.ladder.snapshots",
+    "WEIGHTS_NAME": "royalelearn.ladder.snapshots",
     "SnapshotSpec": "royalelearn.ladder.snapshots",
+    "check_compatible": "royalelearn.ladder.snapshots",
     # alarms and metrics
     "Alarm": "royalelearn.api.metrics",
     "FamilyAlarm": "royalelearn.metrics.alarms",
@@ -559,11 +555,19 @@ __all__ = sorted(
         "extension_problems",
         "normalised",
         "providers_for",
+        "royalelearn_version",
         "schema_contributions",
         "with_sections",
         *_SURFACE,
     ]
 )
+
+
+def royalelearn_version() -> str:
+    """RoyaleLearn's own version string, for a record of the code that wrote a file."""
+    from .version import __version__
+
+    return __version__
 
 
 def __getattr__(name: str) -> Any:

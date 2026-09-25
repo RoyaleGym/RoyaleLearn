@@ -1066,6 +1066,9 @@ def _retire(raw: dict[str, Any], say: Callable[[str], None] | None) -> dict[str,
         raw["alarms"] = alarms
     imitation = raw.get("imitation", {})
     if "imitation" in raw and imitation is None:
+        # Every config.json of that time carries it, and a run without the imitation package
+        # has no provider for the key: it is dropped here, before the providers are asked.
+        del raw["imitation"]
         dropped.append('"imitation": null')
     if "imitation" in raw and isinstance(imitation, dict):
         # Every IL config.json of that time wrote both keys, null when unset. A null one is

@@ -42,9 +42,9 @@ class ScheduleState(msgspec.Struct, frozen=True):
     lr_actor: float
     lr_critic: float
     lr_backoff_events: int = 0
-    #: The scheduled actor learning-rate scale at this clock (``warm_start.actor_lr_scale``):
-    #: multiplies ``lr_actor``, and zero freezes the actor for the iteration (section 19.5). One
-    #: on every run whose sections schedule none.
+    #: The scheduled actor learning-rate scale at this clock, from the section that schedules it
+    #: (``Extension.actor_lr_scale``): multiplies ``lr_actor``, and zero freezes the actor for the
+    #: iteration (section 19.5). One on every run whose sections schedule none.
     actor_lr_scale: float = 1.0
 
     def credit_horizon_seconds(self, decision_ms: int) -> float:

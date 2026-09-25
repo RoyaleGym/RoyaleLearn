@@ -60,7 +60,7 @@ rather than a traceback (`errors.py`, `cli.py`).
 
 | Refusal | Where | What it means |
 | --- | --- | --- |
-| Inconsistent config | `config.validate` | A number contradicts another one, a component in the `env` block is given a setting it does not take, a shaping weight is not a finite number of zero or more, or a section such as `warm_start` or `imitation` is malformed. A top-level key that is not RoyaleLearn's own and that no installed package provides as a section is refused by name, null or not. The message names every problem at once, not just the first. `ppo.batch_size` not being a multiple of `ppo.minibatch_size` is the common one. |
+| Inconsistent config | `config.validate` | A number contradicts another one, a component in the `env` block is given a setting it does not take, a shaping weight is not a finite number of zero or more, or a section an installed package provides is malformed. A top-level key that is not RoyaleLearn's own and that no installed package provides as a section is refused by name, null or not. The message names every problem at once, not just the first. `ppo.batch_size` not being a multiple of `ppo.minibatch_size` is the common one. |
 | Stale engine build | `preflight._construct` | One environment is constructed first. A calibration or build mismatch dies here rather than at cycle 0, and the message names the fix: `maturin develop --release, in the RoyaleSim checkout` (`preflight.REBUILD_COMMAND`). |
 | Mask disagreement | `preflight._mask_disagreement_gate` | For both teams, exhaustively, the action mask and the engine are asked about every action. A bot trained against a wrong mask is worthless, so this refuses rather than warns. Off with `doctor.run_mask_disagreement_gate = false`. |
 | No legal no-op | `preflight._noop_gate` | Checked on 1000 sampled states and on a finished battle. A state with no legal action is a distribution over nothing, and what that produces is a NaN in the first backward pass. |
@@ -72,7 +72,7 @@ rather than a traceback (`errors.py`, `cli.py`).
 | A run is already in that folder | `coordinator._refuse_an_occupied_run_dir` | The same config on the same code always gets the same `runs/<run_name>-<run_id>/`. A fresh start refuses that folder once it holds metric rows or checkpoints, before writing anything. `resume` the run that is there, or give the new one another `--run-name`. There is no flag to overwrite it. |
 | Uncommitted code | `cli.refuse_dirty_sources` | `train` refuses when the royalelearn, royalegym or royaleviser package, the engine's data, the config file, or a package your own components come from has uncommitted or untracked files. `resume` and `verify-resume` check the same, apart from the config file. `--allow-dirty` runs anyway. |
 | A worker on another engine build | `rollout/farm.py`, `check_worker_binaries` | Every worker reports the compiled engine file it loaded, and it must be the one the run's identity names. At start this means the engine changed while the run was starting. A worker restarted after a rebuild is refused the same way, so do not rebuild RoyaleSim under a running job. |
-| A file a section names is not the one the config names | each section's `verify`, called by `coordinator._enter` before preflight | A `warm_start` or `imitation` section names each folder it reads (`warm_start.init`, `imitation.references`) by path and digest. At every start, fresh or resumed, each folder is hashed again, and one whose content has changed is refused before preflight runs. `royalelearn artifact-digest <folder>` prints a folder's digest. |
+| A file a section names is not the one the config names | each section's `verify`, called by `coordinator._enter` before preflight | A section that reads files names each by path and digest (RoyaleImitate's `warm_start.init` and `imitation.references`, say). At every start, fresh or resumed, each folder is hashed again, and one whose content has changed is refused before preflight runs. `royalelearn artifact-digest <folder>` prints a folder's digest. |
 
 One thing is a warning and not a refusal: if the projection exceeds what is free on the machine
 *right now*, preflight says so and continues (`preflight.run_preflight`, around line 204). The
@@ -336,27 +336,18 @@ rating you read while this is firing is not measuring what you think it is.
 the plateau signal stated as an event rather than as a curve. It is a warning because a plateau
 is information, not a fault. See [ladder.md](ladder.md).
 
-### 3.6 Learning from demonstrations (four alarms)
+### 3.6 The freeze (two alarms)
 
-These fire only on a run with a `warm_start` or `imitation` section: a run that started from a
-cloned policy, or that is held near a reference policy while it learns. Section 19 of
-[harness-spec.md](harness-spec.md) describes the sections. All four warn and none stops the run,
-because a run stopped early would drop out of any comparison it is part of.
+These exist only on a run whose config has a section that schedules the actor's learning-rate
+scale -- a run that holds its bot still at first while the critic catches up. The section brings
+them, with their thresholds (RoyaleImitate's `warm_start` is one; its other alarms are in its own
+docs). Section 19.5 of [harness-spec.md](harness-spec.md) describes the freeze. Both warn and
+neither stops the run, because a run stopped early would drop out of any comparison it is part of.
 
 | Alarm | Reads | Fires when | Severity, patience |
 | --- | --- | --- | --- |
-| `imitation_ref_kl_high` | `imitation/<name>/kl` | a regulariser's KL above `imitation.alarms.ref_kl_warn` (1.0 nats) | warn, 1 |
-| `imitation_lambda_saturated` | `imitation/<name>/lambda_at_max` | the anchor's coefficient sat at its ceiling | warn, `imitation.alarms.lambda_saturated_patience` (10) |
-| `actor_handoff` | `ppo/kl`, `ppo/clip_fraction`, `ppo/iterations_since_unfreeze` | in the first `warm_start.alarms.handoff_window` (20) iterations after a frozen actor starts to move, KL above 0.05 or clip fraction above 0.3 | warn, 1 |
+| `actor_handoff` | `ppo/kl`, `ppo/clip_fraction`, `ppo/iterations_since_unfreeze` | in the first `handoff_window` (20) iterations after a frozen actor starts to move, KL above 0.05 or clip fraction above 0.3 | warn, 1 |
 | `critic_unready` | `ppo/ev_at_unfreeze` | the critic's explained variance when the actor was unfrozen, below 0.3 | warn, 1 |
-
-**`imitation_ref_kl_high`.** The policy has moved far from the reference it is anchored to. That
-can be the anchor letting go on schedule, or the reward pulling the policy somewhere the reference
-never goes. Read `imitation/<name>/kl_noop`, `kl_card` and `kl_tile` to see which part moved.
-
-**`imitation_lambda_saturated`.** The coefficient has been at `coef.max` for ten iterations and
-the KL is still above its budget. The anchor is pulling as hard as it is allowed to and losing.
-That is a statement about the reward, not about the anchor.
 
 **`actor_handoff`.** The first iterations after the freeze moved the policy fast. The
 learning-rate backoff acts on its own; this says why it acted.

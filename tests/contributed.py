@@ -1,9 +1,8 @@
-"""A run with every section the core provides today, for the tests of the whole alarm table.
+"""The alarm table of a run whose section schedules the actor's learning-rate scale.
 
-One reference-KL regulariser named ``bc`` under ``imitation`` and a scheduled actor learning-rate
-scale under ``warm_start``: the run whose alarm table is the core's plus the regularisers' family
-alarms plus the freeze's two. The alarm tests check every alarm such a run can hold, not only the
-core's, and they get the table the way a run does, through its active sections.
+The core's table, and the freeze's two alarms after it: a section that schedules the actor's rate
+turns the core's freeze on and brings them. The core tests check every alarm such a run can hold.
+The regularisers' family alarms belong to the package that provides them and are tested there.
 """
 
 from __future__ import annotations
@@ -11,40 +10,43 @@ from __future__ import annotations
 from typing import Any
 
 from royalelearn import config as cfg
-from royalelearn.extensions import extension_alarms, schema_contributions, with_sections
+from royalelearn.extensions import with_sections
+from royalelearn.learn.freeze import FREEZE_ALARM_KEYS, freeze_alarms
 from royalelearn.metrics.alarms import default_alarms
-from royalelearn.metrics.schema import RunSchema, for_run
+from royalelearn.metrics.schema import RunSchema, SchemaContribution, for_run
+from royalelearn.testing import FREEZE_THRESHOLDS, StubExtension, use_extensions
 
-IMITATION: dict[str, Any] = {
-    "references": {"ref": {"kind": "snapshot", "path": "ref", "sha256": "0" * 64}},
-    "regularisers": [
-        {
-            "kind": "reference_kl",
-            "name": "bc",
-            "reference": "ref",
-            "budget": {"kind": "constant", "value": 0.1},
-            "coef": {"start": 1.0},
-        }
-    ],
-}
-WARM_START: dict[str, Any] = {"actor_lr_scale": {"kind": "constant", "value": 1.0}}
-
-
-def full_config(alarms: cfg.AlarmConfig | None = None) -> cfg.RunConfig:
-    core = cfg.RunConfig(alarms=alarms if alarms is not None else cfg.AlarmConfig())
-    return with_sections(core, imitation=IMITATION, warm_start=WARM_START)
-
-
-def full_alarms(alarms: cfg.AlarmConfig | None = None) -> tuple[Any, ...]:
-    """The core table at ``alarms``' thresholds, with the sections' alarms after it."""
-    config = full_config(alarms)
-    return default_alarms(config.alarms, extra=extension_alarms(config))
+#: The stub section a test schedules the actor's rate with.
+SCHEDULE: dict[str, Any] = {"actor_lr_scale": {"kind": "constant", "value": 1.0}}
 
 
 def contributed_alarms(alarms: cfg.AlarmConfig | None = None) -> tuple[Any, ...]:
-    """The sections' alarms, at the sections' default thresholds."""
-    return extension_alarms(full_config(alarms))
+    """The freeze's alarms, at the thresholds a section uses by default."""
+    return tuple(
+        freeze_alarms(
+            handoff_window=int(FREEZE_THRESHOLDS["handoff_window"]),
+            handoff_kl=FREEZE_THRESHOLDS["handoff_kl"],
+            handoff_clip=FREEZE_THRESHOLDS["handoff_clip"],
+            ev_at_unfreeze=FREEZE_THRESHOLDS["ev_at_unfreeze"],
+        )
+    )
+
+
+def full_alarms(alarms: cfg.AlarmConfig | None = None) -> tuple[Any, ...]:
+    """The core table at ``alarms``' thresholds, with the freeze's alarms after it."""
+    return default_alarms(alarms or cfg.AlarmConfig(), extra=contributed_alarms())
 
 
 def full_schema() -> RunSchema:
-    return for_run(schema_contributions(full_config()))
+    return for_run([SchemaContribution(alarm_metrics=FREEZE_ALARM_KEYS)])
+
+
+def full_config(
+    monkeypatch: Any, alarm_config: cfg.AlarmConfig | None = None, **section: Any
+) -> Any:
+    """A config whose ``freezer`` section schedules the actor's rate, the way a real section
+    would: registered as an installed extension for this one test. ``section`` adds to the
+    section, its own ``alarms`` thresholds included; ``alarm_config`` is the core's."""
+    use_extensions(monkeypatch, {"freezer": StubExtension("freezer")})
+    core = cfg.RunConfig(alarms=alarm_config if alarm_config is not None else cfg.AlarmConfig())
+    return with_sections(core, freezer={**SCHEDULE, **section})

@@ -337,9 +337,9 @@ It refuses rather than continuing something subtly different. Seven ways:
   royaleviser packages, the engine's data, any package your own components come from, such as
   a reward in `mybot`, and the package that provides a config section the run uses. Commit or
   stash, or pass `--allow-dirty` to resume anyway.
-- **A file a `warm_start` or `imitation` section names has changed.** A run that learns from
-  demonstrations names each folder it reads by path and digest, and each is hashed again on every
-  start. A folder whose content differs is refused by name before anything is built.
+- **A file a section names has changed.** A section that reads files, such as RoyaleImitate's
+  `warm_start` or `imitation`, names each folder it reads by path and digest, and each is hashed
+  again on every start. A folder whose content differs is refused by name before anything is built.
 - **The checkpoint was written by a build that knows fields this one does not.** Its identity, or
   its update's kept state, carries a field this build cannot read: one a later build added, or one
   an earlier build had that has since been removed. Reading it without that field would resume a

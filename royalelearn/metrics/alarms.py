@@ -188,7 +188,7 @@ class FamilyAlarm(Alarm):
     """An alarm over a family of keys, one per member: it holds when any member's value does.
 
     For keys named by the run's own config -- one per regulariser, say -- which cannot be
-    listed ahead of time. ``keys`` are templates such as ``imitation/{name}/kl``, and this reads
+    listed ahead of time. ``keys`` are templates such as ``myext/{name}/kl``, and this reads
     every key of the row that a template matches. ``predicate`` gets the member's name and its
     value, so a bound can differ per member. A row without any member is not a firing.
     """
