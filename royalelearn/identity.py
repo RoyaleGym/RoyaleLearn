@@ -59,6 +59,7 @@ __all__ = [
     "NOT_STATED",
     "EngineBuild",
     "RunIdentity",
+    "action_digest_of",
     "catalogue_digest",
     "compute_identity",
     "describe_device",
@@ -174,6 +175,24 @@ class RunIdentity(msgspec.Struct, frozen=True, omit_defaults=True):
 def env_spec_digest_of(config: RunConfig) -> str:
     """The environment's identity: what it will be built as, not how its config was spelled."""
     return env_value_digest(config.env, tuple(config.extra_component_modules))
+
+
+def action_digest_of(env: Any, env_spec: EnvSpec) -> str:
+    """What the policy can do: the parser, the space it lays out and the decision clock.
+
+    One function for the identity and for anything else that must agree with a run about its
+    action space -- a demonstration shard, an artifact -- so the two cannot compute it apart.
+    """
+    return digest_of(
+        {
+            "action_parser": env.action_parser,
+            "n_actions": env_spec.n_actions,
+            "hand_size": env_spec.hand_size,
+            "tiles": env_spec.tiles,
+            "decision_ms": env_spec.decision_ms,
+            "decision_ticks": env_spec.decision_ticks,
+        }
+    )
 
 
 def imitation_digest_of(config: RunConfig) -> str | None:
@@ -593,16 +612,7 @@ def compute_identity(
         engine_build=build,
         env_spec_digest=env_spec_digest_of(config),
         obs_digest=env_spec.obs_digest,
-        action_digest=digest_of(
-            {
-                "action_parser": config.env.action_parser,
-                "n_actions": env_spec.n_actions,
-                "hand_size": env_spec.hand_size,
-                "tiles": env_spec.tiles,
-                "decision_ms": env_spec.decision_ms,
-                "decision_ticks": env_spec.decision_ticks,
-            }
-        ),
+        action_digest=action_digest_of(config.env, env_spec),
         frame_stack=config.obs.frame_stack,
         arch_digest=arch_digest,
         codec_version=codec_version,

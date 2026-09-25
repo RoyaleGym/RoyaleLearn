@@ -4287,8 +4287,9 @@ cloned actor's no-op probability is its own.
 
 ### 19.10 Demonstration shards (L4)
 
-`royalelearn.imitation.shards`. A shard directory holds `manifest.json` and part files of about
-50,000 rows, one compressed array per column:
+`royalelearn.imitation.shards`. A shard directory holds `manifest.json` and part files of
+`rows_per_part` rows (4,096 by default: a part is decompressed whole when it is read, and its
+spatial column is the size of the planes times two bytes a row), one compressed array per column:
 
 | Column | Type | What |
 | --- | --- | --- |
@@ -4304,17 +4305,29 @@ cloned actor's no-op probability is its own.
 | `reward` | float32 | the env's reward for the row |
 
 **Stored exact, quantised at load.** The writer refuses a spatial value that is negative, above
-65.535, or not reproduced bit for bit by `float32(q) / 1000`, naming the channel. The reader puts
-every batch through the target run's codec, pack then unpack, so a cloned actor sees bit-identical
-inputs to the ones PPO's rollout and update see, and the shards survive a change of codec table.
+65.535, or not reproduced bit for bit by `float32(q) / 1000`, naming the plane, the tile and the
+tick. The reader puts every batch through the target run's codec, pack then unpack, so a cloned
+actor sees bit-identical inputs to the ones PPO's rollout and update see, and the shards survive a
+change of codec table. A packed row carries no static plane (the codec supplies the run's own on
+decode), so the reader checks each part's static planes against the run's and refuses a part from
+another arena rather than show it the run's.
+
+**Flags.** Bits 0 and 1 are the driver's (`projected`, `other_command`). A producer names its own
+from bit 8 up; the writer refuses a row carrying an unnamed bit.
 
 **The manifest** records the environment's `config()` without its truncation, `card_names`, the
-obs and action digests, `n_actions`, the engine block of 5.3, the package versions and commits,
-the producer's own parameters (free-form), every part file's sha256 and row count, the flag names,
-and counts per flag and per split.
+obs and action digests, `n_actions`, the engine's digests and parameters, the package versions and
+commits, the producer's own parameters (free-form), every part file's sha256 and row count, the
+flag names, and counts per flag and per split. It is written last, so a directory without one is a
+write that did not finish, and the reader refuses it. A part whose bytes no longer match the
+manifest is refused when it is read.
 
 **The engine key** is the first sixteen hex of the sha256 over `{binary_sha256, build_digest,
-calibration_digest, calibration overrides, catalogue_sha256, obs_digest}`, and names the directory.
+calibration_digest, catalogue_sha256, obs_digest, engine_params}`, and names the directory.
+`engine_params` is the engine's own constructor state as its `config()` states it, minus the card
+list the catalogue already covers: what the calibration digest does not see, a card level or a
+path search. `ShardContext.of_config(run_config)` builds a run's environment once and reads all of
+it, so the writer and the reader compute the key with one function.
 The reader refuses a catalogue, observation or action-space mismatch by name, always. It refuses an
 engine-key mismatch unless the caller passes `allow_engine_mismatch` with a reason; the reason is
 carried into anything trained from the rows. Rows replayed on another engine are a different
