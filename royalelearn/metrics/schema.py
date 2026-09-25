@@ -12,12 +12,18 @@ decides.
 ``ALARM_METRICS`` names, for each alarm of section 13.3, the keys its predicate reads. The
 alarms themselves live in ``metrics/alarms.py``; this table is what keeps one of them from
 watching a key nobody emits any more.
+
+The tables here are the core's: what every run can emit. An optional part of a run -- an
+add-on's actor-loss term, the freeze's alarms -- brings its own keys as a ``SchemaContribution``,
+and ``for_run`` merges them into the schema that one run is checked against. There is no global
+registry: a run that does not have the part does not know its keys.
 """
 
 from __future__ import annotations
 
 import re
-from typing import NamedTuple
+from collections.abc import Iterable, Mapping
+from typing import Any, NamedTuple
 
 import msgspec
 
@@ -29,10 +35,14 @@ __all__ = [
     "RENAMED",
     "MetricPattern",
     "MetricSpec",
+    "RunSchema",
+    "SchemaContribution",
     "current_name",
+    "for_run",
     "groups",
     "is_known",
     "lookup",
+    "pattern",
 ]
 
 
@@ -55,7 +65,7 @@ class MetricPattern(NamedTuple):
     regex: re.Pattern[str]
 
 
-def _pattern(template: str, spec: MetricSpec) -> MetricPattern:
+def pattern(template: str, spec: MetricSpec) -> MetricPattern:
     """A template with ``{placeholders}`` becomes a regex whose holes match one key segment."""
     escaped = re.escape(template).replace(r"\{", "{").replace(r"\}", "}")
     regex = re.compile("^" + re.sub(r"\{[a-z_]+\}", "[^/]+", escaped) + "$")
@@ -640,33 +650,33 @@ METRICS: dict[str, MetricSpec] = {
     "health/buffer_fill_frac": _m(
         "fraction", "Share of the rectangle's cells written this iteration.", high=0.98
     ),
-    # -- imitation (section 19; only with the imitation block) -------------------------
-    "imitation/actor_lr_scale": _m(
+    # -- the freeze (section 19.5; only on a run that schedules the actor's rate) ----------
+    "ppo/actor_lr_scale": _m(
         "multiplier",
-        "imitation.actor_lr_scale at this iteration's clock. It multiplies the backoff's actor "
-        "learning rate, and zero freezes the actor.",
+        "The scheduled actor learning-rate scale at this iteration's clock. It multiplies the "
+        "backoff's actor learning rate, and zero freezes the actor.",
         low=0.0,
     ),
-    "imitation/actor_frozen": _m(
+    "ppo/actor_frozen": _m(
         "flag",
         "1 on an iteration the actor was frozen: no actor loss, no actor step, and the ppo/ keys "
         "computed from the actor's forward are left out of the row.",
     ),
-    "imitation/ev_at_unfreeze": _m(
+    "ppo/ev_at_unfreeze": _m(
         "fraction",
         "ppo/explained_variance on the first iteration after a frozen stretch: how ready the "
         "critic was when the actor started to move. Published on that row only.",
         low=0.3,
     ),
-    "imitation/iterations_since_unfreeze": _m(
+    "ppo/iterations_since_unfreeze": _m(
         "count",
-        "Unfrozen iterations since the last frozen stretch, this one included. The handoff "
-        "alarm watches the first imitation_handoff_window of them.",
+        "Unfrozen iterations since the last frozen stretch, this one included. The "
+        "actor_handoff alarm watches the first handoff window of them.",
     ),
 }
 
 PATTERNS: tuple[MetricPattern, ...] = (
-    _pattern(
+    pattern(
         "ppo/kl_epoch{epoch}",
         _m(
             "nats",
@@ -674,7 +684,7 @@ PATTERNS: tuple[MetricPattern, ...] = (
             "n_epochs is read off the spread between the first and the last.",
         ),
     ),
-    _pattern(
+    pattern(
         "ppo/clip_fraction_epoch{epoch}",
         _m(
             "fraction",
@@ -682,22 +692,22 @@ PATTERNS: tuple[MetricPattern, ...] = (
             "first's, lower n_epochs.",
         ),
     ),
-    _pattern(
+    pattern(
         "policy/card_play_frac/{card}",
         _m("fraction", "Share of plays that were this card."),
     ),
-    _pattern(
+    pattern(
         "policy/card_in_hand_frac/{card}",
         _m("fraction", "Share of sampled decisions where this card was in the hand."),
     ),
-    _pattern(
+    pattern(
         "policy/card_legal_frac/{card}",
         _m(
             "fraction",
             "Share of sampled decisions where this card was in the hand AND affordable.",
         ),
     ),
-    _pattern(
+    pattern(
         "policy/card_play_rate/{card}",
         _m(
             "fraction",
@@ -707,11 +717,11 @@ PATTERNS: tuple[MetricPattern, ...] = (
             "one. Absent for a card that was never affordable in the sample.",
         ),
     ),
-    _pattern(
+    pattern(
         "env/reward_terms/{term}",
         _m("units", "One weighted reward term's mean per episode, signed."),
     ),
-    _pattern(
+    pattern(
         "env/reward_terms_abs/{term}",
         _m(
             "units",
@@ -719,7 +729,7 @@ PATTERNS: tuple[MetricPattern, ...] = (
             "potential term's sum telescopes; see env/reward_terms_step_abs/{term}.",
         ),
     ),
-    _pattern(
+    pattern(
         "env/reward_terms_step_abs/{term}",
         _m(
             "units",
@@ -728,7 +738,7 @@ PATTERNS: tuple[MetricPattern, ...] = (
             "2026-09-24.",
         ),
     ),
-    _pattern(
+    pattern(
         "env/play_rate_by_elixir/{elixir}",
         _m(
             "fraction",
@@ -737,72 +747,11 @@ PATTERNS: tuple[MetricPattern, ...] = (
             "Absent for an elixir level with no choice row in the sample.",
         ),
     ),
-    _pattern(
-        "imitation/{name}/kl",
-        _m(
-            "nats",
-            "KL(reference || policy), the mean over the choice rows the regulariser covered "
-            "in epoch 1. The number lambda is moved by. Absent when no row was covered.",
-        ),
-    ),
-    _pattern(
-        "imitation/{name}/kl_noop",
-        _m("nats", "The play/wait part of kl, by the chain rule."),
-    ),
-    _pattern(
-        "imitation/{name}/kl_card",
-        _m("nats", "p_ref(play) times the KL of the card given a play. Joint factor only."),
-    ),
-    _pattern(
-        "imitation/{name}/kl_tile",
-        _m("nats", "The reference-weighted KL of the tile given the card. Joint factor only."),
-    ),
-    _pattern(
-        "imitation/{name}/lambda",
-        _m("coefficient", "The coefficient this iteration's loss used.", low=0.0),
-    ),
-    _pattern(
-        "imitation/{name}/lambda_at_max",
-        _m(
-            "flag",
-            "1 when the coefficient this iteration used was coef.max: the anchor is pulling as "
-            "hard as it is allowed to.",
-        ),
-    ),
-    _pattern(
-        "imitation/{name}/budget",
-        _m("nats", "The budget kl is held to this iteration.", low=0.0),
-    ),
-    _pattern(
-        "imitation/{name}/grad_ratio",
-        _m(
-            "ratio",
-            "||grad of the unscaled KL|| / ||grad of the policy term|| on the first minibatch "
-            "with a choice row. Zero while the policy equals the reference. For setting "
-            "coef.start.",
-        ),
-    ),
-    _pattern(
-        "imitation/{name}/rows_frac",
-        _m("fraction", "Share of epoch-1 choice rows the regulariser covered (exclude_when)."),
-    ),
-    _pattern(
-        "imitation/{name}/top1_agree",
-        _m(
-            "fraction",
-            "Share of covered rows where the reference's and the policy's most likely actions "
-            "agree; under noop_marginal, whether both would play.",
-        ),
-    ),
-    _pattern(
-        "imitation/{name}/ref_p_noop",
-        _m("probability", "The reference's mean p(no-op) over the covered rows."),
-    ),
-    _pattern(
+    pattern(
         "ladder/score_vs/{opponent}",
         _m("fraction", "The live policy's score rate against one scripted rung."),
     ),
-    _pattern(
+    pattern(
         "ladder/score_vs_n/{opponent}",
         _m(
             "count",
@@ -812,25 +761,25 @@ PATTERNS: tuple[MetricPattern, ...] = (
             dtype="int",
         ),
     ),
-    _pattern(
+    pattern(
         "ladder/score_vs_ci95_lo/{opponent}",
         _m("fraction", "Lower end of that score rate's 95% bootstrap interval over seeds."),
     ),
-    _pattern(
+    pattern(
         "ladder/score_vs_ci95_hi/{opponent}",
         _m("fraction", "Upper end of that score rate's 95% bootstrap interval over seeds."),
     ),
-    _pattern("ladder/rating/{member}", _m("Elo", "One pool member's fitted rating.")),
-    _pattern("ladder/rating_se/{member}", _m("Elo", "The standard error of that rating.")),
-    _pattern(
+    pattern("ladder/rating/{member}", _m("Elo", "One pool member's fitted rating.")),
+    pattern("ladder/rating_se/{member}", _m("Elo", "The standard error of that rating.")),
+    pattern(
         "ladder/rating_ci95_lo/{member}",
         _m("Elo", "Lower end of that rating's 95% interval."),
     ),
-    _pattern(
+    pattern(
         "ladder/rating_ci95_hi/{member}",
         _m("Elo", "Upper end of that rating's 95% interval."),
     ),
-    _pattern(
+    pattern(
         "health/housekeeping/{kind}",
         _m(
             "count",
@@ -839,7 +788,7 @@ PATTERNS: tuple[MetricPattern, ...] = (
             dtype="int",
         ),
     ),
-    _pattern(
+    pattern(
         "health/worker_failures/{kind}",
         _m(
             "count",
@@ -852,15 +801,6 @@ PATTERNS: tuple[MetricPattern, ...] = (
 #: Which keys each alarm of section 13.3 reads. ``metrics/alarms.py`` implements the predicates;
 #: the suite checks that every key named here exists above.
 ALARM_METRICS: dict[str, tuple[str, ...]] = {
-    # Section 19.9. A template names a family: the alarm reads every key of it the row carries.
-    "imitation_ref_kl_high": ("imitation/{name}/kl",),
-    "imitation_lambda_saturated": ("imitation/{name}/lambda_at_max",),
-    "imitation_handoff": (
-        "ppo/kl",
-        "ppo/clip_fraction",
-        "imitation/iterations_since_unfreeze",
-    ),
-    "imitation_critic_unready": ("imitation/ev_at_unfreeze",),
     "illegal_actions": ("env/illegal_action_rate",),
     "ratio_invariant": ("ppo/ratio_max_abs_dev",),
     "nonfinite": ("health/nan_guard_trips",),
@@ -903,6 +843,12 @@ RENAMED: dict[str, str] = {
     # It measured the parent blocked on workers that had not published, and rose when the
     # workers could not keep up -- the opposite of what a reader would do about a worker idling.
     "throughput/worker_idle_frac": "throughput/parent_wait_frac",
+    # The freeze is the core's, whoever schedules it, so its keys moved out of the imitation
+    # group when the imitation code became an add-on (2026-09-25).
+    "imitation/actor_lr_scale": "ppo/actor_lr_scale",
+    "imitation/actor_frozen": "ppo/actor_frozen",
+    "imitation/ev_at_unfreeze": "ppo/ev_at_unfreeze",
+    "imitation/iterations_since_unfreeze": "ppo/iterations_since_unfreeze",
 }
 
 
@@ -933,13 +879,13 @@ ACTOR_UPDATE_KEYS: tuple[str, ...] = (
 CONDITIONAL: dict[str, str] = {
     **dict.fromkeys(
         ACTOR_UPDATE_KEYS,
-        "the actor trained this iteration: imitation.actor_lr_scale was above zero, which it "
-        "always is without the imitation block",
+        "the actor trained this iteration: the scheduled actor learning-rate scale was above "
+        "zero, which it always is on a run that does not schedule one",
     ),
-    "imitation/actor_lr_scale": "the run has an imitation block that sets actor_lr_scale",
-    "imitation/actor_frozen": "the run has an imitation block that sets actor_lr_scale",
-    "imitation/ev_at_unfreeze": "this iteration is the first after a frozen stretch",
-    "imitation/iterations_since_unfreeze": "the actor has been unfrozen after a frozen stretch",
+    "ppo/actor_lr_scale": "the run schedules the actor's learning-rate scale",
+    "ppo/actor_frozen": "the run schedules the actor's learning-rate scale",
+    "ppo/ev_at_unfreeze": "this iteration is the first after a frozen stretch",
+    "ppo/iterations_since_unfreeze": "the actor has been unfrozen after a frozen stretch",
     # Written only on the iterations that probed the live policy, which is none of them unless
     # ladder.probe_every_iterations is set. Carrying the last probe's number forward would
     # publish a score for weights that have moved since, and a 0.5 for a rung nobody played is
@@ -1038,3 +984,79 @@ def groups() -> tuple[str, ...]:
         if group not in seen:
             seen.append(group)
     return tuple(seen)
+
+
+class SchemaContribution(NamedTuple):
+    """What an optional part of a run adds to the schema that run is checked against.
+
+    Fixed keys, patterned families, the conditions under which its keys may be absent from a
+    row, and the keys each of its alarms reads. A name the core already has is refused by
+    ``for_run``: a contribution adds keys, it never redefines one.
+    """
+
+    metrics: Mapping[str, MetricSpec] = {}
+    patterns: tuple[MetricPattern, ...] = ()
+    conditional: Mapping[str, str] = {}
+    alarm_metrics: Mapping[str, tuple[str, ...]] = {}
+
+
+class RunSchema:
+    """The schema of one run: the core tables with its contributions merged in."""
+
+    def __init__(
+        self,
+        metrics: Mapping[str, MetricSpec],
+        patterns: Iterable[MetricPattern],
+        conditional: Mapping[str, str],
+        alarm_metrics: Mapping[str, tuple[str, ...]],
+    ) -> None:
+        self.metrics = dict(metrics)
+        self.patterns = tuple(patterns)
+        self.conditional = dict(conditional)
+        self.alarm_metrics = dict(alarm_metrics)
+
+    def lookup(self, key: str) -> MetricSpec | None:
+        """The spec for one key, fixed or patterned, or None if this run's schema lacks it."""
+        key = current_name(key)
+        spec = self.metrics.get(key)
+        if spec is not None:
+            return spec
+        for family in self.patterns:
+            if family.regex.match(key):
+                return family.spec
+        return None
+
+    def is_known(self, key: str) -> bool:
+        return self.lookup(key) is not None
+
+    def unknown_keys(self, row: Mapping[str, Any]) -> tuple[str, ...]:
+        """Keys this run's schema does not know, sorted."""
+        return tuple(sorted(key for key in row if not self.is_known(key)))
+
+
+def for_run(contributions: Iterable[SchemaContribution] = ()) -> RunSchema:
+    """The core schema plus ``contributions``, refusing a name defined twice."""
+    metrics: dict[str, MetricSpec] = dict(METRICS)
+    patterns: list[MetricPattern] = list(PATTERNS)
+    conditional: dict[str, str] = dict(CONDITIONAL)
+    alarm_metrics: dict[str, tuple[str, ...]] = dict(ALARM_METRICS)
+    for part in contributions:
+        clashes = sorted(
+            {*(set(part.metrics) & set(metrics)), *(set(part.alarm_metrics) & set(alarm_metrics))}
+            | {p.template for p in part.patterns} & {p.template for p in patterns}
+        )
+        if clashes:
+            raise ValueError(
+                f"a schema contribution redefines names the run already has: {clashes}"
+            )
+        undeclared = sorted(set(part.conditional) - set(part.metrics))
+        if undeclared:
+            raise ValueError(
+                "a schema contribution marks keys conditional that it does not define: "
+                f"{undeclared}"
+            )
+        metrics.update(part.metrics)
+        patterns.extend(part.patterns)
+        conditional.update(part.conditional)
+        alarm_metrics.update(part.alarm_metrics)
+    return RunSchema(metrics, patterns, conditional, alarm_metrics)

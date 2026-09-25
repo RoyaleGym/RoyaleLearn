@@ -73,8 +73,16 @@ def flatten(values: Mapping[str, Any], prefix: str = "") -> dict[str, MetricValu
     return flat
 
 
-def unknown_keys(row: Mapping[str, Any]) -> tuple[str, ...]:
-    """Keys the schema does not know, sorted. The suite turns this into a failure."""
+def unknown_keys(
+    row: Mapping[str, Any], run_schema: schema.RunSchema | None = None
+) -> tuple[str, ...]:
+    """Keys the schema does not know, sorted. The suite turns this into a failure.
+
+    ``run_schema`` is the run's own (``schema.for_run``) when it has optional parts; without it
+    the row is checked against the core schema every run shares.
+    """
+    if run_schema is not None:
+        return run_schema.unknown_keys(row)
     return tuple(sorted(key for key in row if not schema.is_known(key)))
 
 
@@ -329,7 +337,7 @@ def update_fields(result: UpdateResult) -> dict[str, MetricValue]:
         epochs = ("ppo/kl_epoch", "ppo/clip_fraction_epoch")
         for key in [k for k in fields if k in ACTOR_UPDATE_KEYS or k.startswith(epochs)]:
             del fields[key]
-    fields.update(result.imitation)
+    fields.update(result.extra)
     return fields
 
 

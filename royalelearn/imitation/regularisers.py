@@ -5,10 +5,12 @@ is charged for taking probability away from where the reference puts it. It is e
 row's masked legal set under ``factor: joint``, and exact over the play/wait pair under
 ``factor: noop_marginal``.
 
-The PPO update adds ``lambda * sum(KL) * actor_scale`` to the actor's loss in both of its actor
-paths -- ``actor_scale`` being the same per-batch scale the policy term is multiplied by -- so the
-term's weight against the policy term is one number under every ``ppo.forced_rows`` value, and
-minibatch size stays a pure memory knob.
+Each regulariser is an actor-loss term (``api.update.ActorLossTerm``): it hands the update
+``(lambda, sum(KL))``, and the update adds ``lambda * sum(KL) * actor_scale`` to the actor's loss
+in both of its actor paths -- ``actor_scale`` being the same per-batch scale the policy term is
+multiplied by -- so the term's weight against the policy term is one number under every
+``ppo.forced_rows`` value, and minibatch size stays a pure memory knob. The gradient ratio the
+update measures is on ``sum(KL) * actor_scale``, before lambda.
 
 Everything that is only reported (the chain-rule parts, agreement, the reference's own hold
 probability) is computed in the first epoch under ``no_grad``, from tensors the loss already has.
@@ -28,15 +30,16 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
     from ..api.policy import ObsBatch
     from ..api.rollout import EnvSpec
+    from ..api.update import ActorTermInputs
     from ..config import CoefSpec, ImitationConfig, ReferenceKLSpec
     from .references import Reference
 
 __all__ = [
     "AdaptiveCoefficient",
-    "ImitationTerms",
     "KLParts",
     "ReferenceKL",
     "RowFilter",
+    "build_terms",
     "joint_kl",
     "joint_kl_parts",
     "log1mexp",
@@ -179,7 +182,17 @@ class AdaptiveCoefficient:
 
 
 class ReferenceKL:
-    """One ``reference_kl`` regulariser: the term, its first-epoch measurement and its lambda."""
+    """One ``reference_kl`` regulariser: the term, its first-epoch measurement and its lambda.
+
+    An actor-loss term of the ``imitation`` extension. Its state is lambda, kept in the update's
+    checkpoint folder and in the state digest like the backoff's.
+    """
+
+    extension = "imitation"
+    format_version = 1
+    #: ``sum(KL)`` over the choice rows, so the update scales it by ``actor_scale``.
+    scaling = "rows"
+    measure_grad_ratio = True
 
     def __init__(self, spec: ReferenceKLSpec, reference: Reference, env: EnvSpec) -> None:
         from ..learn.schedules import build_schedule
@@ -199,7 +212,6 @@ class ReferenceKL:
         self.kappa = self.budget.value(0)
         self._sums: dict[str, Tensor] = {}
         self._choice: Tensor | None = None
-        self.grad_ratio: float | None = None
 
     # -- one iteration -------------------------------------------------------
 
@@ -214,7 +226,12 @@ class ReferenceKL:
             names += ("card", "tile")
         self._sums = {name: torch.zeros((), dtype=torch.float32, device=device) for name in names}
         self._choice = torch.zeros((), dtype=torch.float32, device=device)
-        self.grad_ratio = None
+
+    def loss(self, inputs: ActorTermInputs, *, epoch: int, measure: bool) -> tuple[float, Tensor]:
+        """``(lambda, sum(KL))`` on the minibatch's choice rows."""
+        return self.lam, self.kl_sum(
+            inputs.obs, inputs.rows, inputs.log_probs, inputs.mask, measure=measure
+        )
 
     def kl_sum(
         self,
@@ -286,11 +303,18 @@ class ReferenceKL:
         sums["top1"] += (agree * keep).sum()
         sums["ref_p_noop"] += (ref_noop.exp() * keep).sum()
 
-    def finish(self, *, adapt: bool) -> dict[str, float]:
-        """This iteration's metrics, and lambda moved for the next one when ``adapt``.
+    def finish(
+        self,
+        *,
+        iteration: int,
+        actor_trained: bool,
+        explained_variance: float,
+        grad_ratio: float | None,
+    ) -> dict[str, float]:
+        """This iteration's metrics, and lambda moved for the next one when the actor trained.
 
-        ``adapt`` is False on a frozen iteration: there was no policy term to anchor, no KL was
-        measured, and lambda does not move.
+        On a frozen iteration there was no policy term to anchor, no KL was measured, and lambda
+        does not move.
         """
         prefix = f"imitation/{self.name}/"
         fields: dict[str, float] = {
@@ -311,82 +335,27 @@ class ReferenceKL:
             fields[prefix + "ref_p_noop"] = float(self._sums["ref_p_noop"].item()) / rows
         if choice > 0:
             fields[prefix + "rows_frac"] = rows / choice
-        if self.grad_ratio is not None:
-            fields[prefix + "grad_ratio"] = self.grad_ratio
-        if adapt:
+        if grad_ratio is not None:
+            fields[prefix + "grad_ratio"] = grad_ratio
+        if actor_trained:
             self.coef.observe(measured, self.kappa, self.env_steps)
         return fields
 
-
-class ImitationTerms:
-    """What the PPO update holds for section 19: the regularisers and the freeze's bookkeeping.
-
-    Its state -- each lambda, and where the last frozen stretch ended -- is update state like the
-    backoff's, saved in the update's checkpoint folder and in the state digest.
-    """
-
-    def __init__(self, regularisers: Sequence[ReferenceKL], *, scheduled_scale: bool) -> None:
-        self.regularisers = list(regularisers)
-        #: Whether the block sets ``actor_lr_scale`` at all; the freeze keys exist only then.
-        self.scheduled_scale = bool(scheduled_scale)
-        #: The first unfrozen iteration after the last frozen stretch, or None.
-        self.unfrozen_at: int | None = None
-        #: Whether the previous iteration was frozen. None before any iteration ran.
-        self.last_frozen: bool | None = None
-
-    @classmethod
-    def from_config(
-        cls,
-        imitation: ImitationConfig | None,
-        references: Mapping[str, Reference],
-        env: EnvSpec,
-    ) -> ImitationTerms | None:
-        # Nothing for the update to hold when the block only initialises the actor: the update
-        # is then the one a run without the block runs, state digest included.
-        if imitation is None or (not imitation.regularisers and imitation.actor_lr_scale is None):
-            return None
-        regularisers = [
-            ReferenceKL(spec, references[spec.reference], env) for spec in imitation.regularisers
-        ]
-        return cls(regularisers, scheduled_scale=imitation.actor_lr_scale is not None)
-
-    def begin(self, env_steps: int, device: Any) -> None:
-        for regulariser in self.regularisers:
-            regulariser.begin(env_steps, device)
-
-    def finish(
-        self, *, iteration: int, scale: float, explained_variance: float
-    ) -> dict[str, float]:
-        """Every ``imitation/`` key of this iteration's row."""
-        frozen = scale == 0.0
-        fields: dict[str, float] = {}
-        for regulariser in self.regularisers:
-            fields.update(regulariser.finish(adapt=not frozen))
-        if self.scheduled_scale:
-            fields["imitation/actor_lr_scale"] = float(scale)
-            fields["imitation/actor_frozen"] = 1.0 if frozen else 0.0
-        if not frozen and self.last_frozen:
-            self.unfrozen_at = int(iteration)
-            fields["imitation/ev_at_unfreeze"] = float(explained_variance)
-        if not frozen and self.unfrozen_at is not None:
-            fields["imitation/iterations_since_unfreeze"] = float(iteration - self.unfrozen_at + 1)
-        self.last_frozen = frozen
-        return fields
-
     def state(self) -> dict[str, Any]:
-        return {
-            "lambda": {reg.name: reg.coef.value for reg in self.regularisers},
-            "unfrozen_at": self.unfrozen_at,
-            "last_frozen": self.last_frozen,
-        }
+        return {"lambda": self.coef.value}
 
-    def load_state(self, state: Mapping[str, Any] | None) -> None:
-        """Restore; a checkpoint written without the block restores each ``coef.start``."""
-        if not state:
-            return
-        values = state.get("lambda") or {}
-        for reg in self.regularisers:
-            if reg.name in values:
-                reg.coef.value = float(values[reg.name])
-        self.unfrozen_at = state.get("unfrozen_at")
-        self.last_frozen = state.get("last_frozen")
+    def load_state(self, state: Mapping[str, Any]) -> None:
+        self.coef.value = float(state["lambda"])
+
+
+def build_terms(
+    imitation: ImitationConfig | None,
+    references: Mapping[str, Reference],
+    env: EnvSpec,
+) -> tuple[ReferenceKL, ...]:
+    """One term per configured regulariser, in config order; none without the block."""
+    if imitation is None:
+        return ()
+    return tuple(
+        ReferenceKL(spec, references[spec.reference], env) for spec in imitation.regularisers
+    )

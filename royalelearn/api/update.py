@@ -9,7 +9,8 @@ Each of those is a number here, logged every iteration, with an alarm behind it.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
 import msgspec
 
@@ -17,9 +18,12 @@ from .checkpoint import Checkpointable
 from .schedule import ScheduleState
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
-    from .buffer import ExperienceBuffer
+    from torch import Tensor
 
-__all__ = ["Update", "UpdateResult"]
+    from .buffer import ExperienceBuffer
+    from .policy import ObsBatch
+
+__all__ = ["ActorLossTerm", "ActorTermInputs", "Update", "UpdateResult", "check_actor_terms"]
 
 
 class UpdateResult(msgspec.Struct):
@@ -83,8 +87,68 @@ class UpdateResult(msgspec.Struct):
     #: False on an iteration the actor was frozen (section 19.5): every quantity computed from
     #: the actor's forward in the update was not measured, and its key is left out of the row.
     actor_trained: bool = True
-    #: The ``imitation/`` keys of section 19.9, when the run has the block.
-    imitation: dict[str, float] = {}
+    #: Keys the update adds beyond the core ``ppo/`` group: each extra actor-loss term's own,
+    #: named under its extension, and the freeze's, when the run schedules the actor's rate.
+    extra: dict[str, float] = {}
+
+
+class ActorTermInputs(NamedTuple):
+    """What an extra actor-loss term is handed, identically in both of the update's actor paths.
+
+    ``log_probs`` and ``mask`` are the actor's masked log-probabilities and mask on the
+    minibatch's choice rows, in ``rows`` order, with the graph attached. ``actor`` is the live
+    actor, for a term that needs a forward of its own on other rows. ``actor_scale`` is the
+    per-batch scale the policy term is multiplied by, and ``weight`` the minibatch's share of
+    its batch.
+    """
+
+    obs: ObsBatch
+    rows: Tensor
+    log_probs: Tensor
+    mask: Tensor
+    actor: Any
+    actor_scale: float
+    weight: float
+
+
+class ActorLossTerm(Protocol):
+    """A term an extension adds to the actor's loss.
+
+    ``loss`` returns ``(coefficient, raw)``. The update adds ``coefficient * raw * scale``, where
+    ``scale`` is ``actor_scale`` for a term whose raw value is a sum over the choice rows
+    (``scaling == "rows"``, which keeps minibatch size a pure memory knob and matches the policy
+    term under every ``ppo.forced_rows`` value) and the minibatch weight for one whose raw value
+    is a mean of its own (``scaling == "minibatch"``). The gradient ratio, when asked for, is
+    measured on ``raw * scale``, before the coefficient.
+
+    ``finish`` returns the term's keys for the row; every one must start with ``<extension>/``.
+    ``actor_trained`` is False on a frozen iteration, when ``loss`` was not called at all.
+    ``state`` is what a checkpoint keeps (an empty dict keeps nothing); ``format_version`` is
+    saved beside it and a different one refuses the resume.
+    """
+
+    extension: str
+    name: str
+    format_version: int
+    scaling: str
+    measure_grad_ratio: bool
+
+    def begin(self, env_steps: int, device: Any) -> None: ...
+
+    def loss(self, inputs: ActorTermInputs, *, epoch: int, measure: bool) -> tuple[float, Any]: ...
+
+    def finish(
+        self,
+        *,
+        iteration: int,
+        actor_trained: bool,
+        explained_variance: float,
+        grad_ratio: float | None,
+    ) -> dict[str, float]: ...
+
+    def state(self) -> dict[str, Any]: ...
+
+    def load_state(self, state: Mapping[str, Any]) -> None: ...
 
 
 class Update(ABC, Checkpointable):
@@ -98,3 +162,23 @@ class Update(ABC, Checkpointable):
         that every cell it hands out is trainable and valid. They MUST apply exactly the mask
         read from the buffer, never a recomputed one, and MUST leave the buffer unchanged.
         """
+
+
+def check_actor_terms(terms: Sequence[ActorLossTerm]) -> None:
+    """Refuse a set of terms the update could not hold apart.
+
+    Two terms with one ``(extension, name)`` would share a checkpoint entry and a gradient
+    ratio, and a scaling the update does not know would be applied as neither. Called where the
+    terms are first assembled, before anything that needs cleaning up exists, and again by the
+    update itself.
+    """
+    keys = [(term.extension, term.name) for term in terms]
+    doubled = sorted({key for key in keys if keys.count(key) > 1})
+    if doubled:
+        raise ValueError(f"two actor-loss terms share an (extension, name): {doubled}")
+    for term in terms:
+        if term.scaling not in ("rows", "minibatch"):
+            raise ValueError(
+                f"actor-loss term {term.extension}/{term.name} declares scaling "
+                f"{term.scaling!r}; it is 'rows' or 'minibatch'"
+            )

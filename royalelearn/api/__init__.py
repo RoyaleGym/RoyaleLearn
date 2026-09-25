@@ -64,13 +64,15 @@ from .rollout import (
     WorkerFailure,
 )
 from .schedule import Schedule, ScheduleState
-from .update import Update, UpdateResult
+from .update import ActorLossTerm, ActorTermInputs, Update, UpdateResult
 
 __all__ = [
     "ActResult",
     "ActionDistribution",
     "Actor",
     "ActorCritic",
+    "ActorLossTerm",
+    "ActorTermInputs",
     "AdvantageEstimator",
     "AdvantageStats",
     "Alarm",

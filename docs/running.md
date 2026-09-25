@@ -347,8 +347,8 @@ because a run stopped early would drop out of any comparison it is part of.
 | --- | --- | --- | --- |
 | `imitation_ref_kl_high` | `imitation/<name>/kl` | a regulariser's KL above `alarms.imitation_ref_kl_warn` (1.0 nats) | warn, 1 |
 | `imitation_lambda_saturated` | `imitation/<name>/lambda_at_max` | the anchor's coefficient sat at its ceiling | warn, `alarms.imitation_lambda_saturated_patience` (10) |
-| `imitation_handoff` | `ppo/kl`, `ppo/clip_fraction`, `imitation/iterations_since_unfreeze` | in the first `alarms.imitation_handoff_window` (20) iterations after a frozen actor starts to move, KL above 0.05 or clip fraction above 0.3 | warn, 1 |
-| `imitation_critic_unready` | `imitation/ev_at_unfreeze` | the critic's explained variance when the actor was unfrozen, below 0.3 | warn, 1 |
+| `actor_handoff` | `ppo/kl`, `ppo/clip_fraction`, `ppo/iterations_since_unfreeze` | in the first `alarms.imitation_handoff_window` (20) iterations after a frozen actor starts to move, KL above 0.05 or clip fraction above 0.3 | warn, 1 |
+| `critic_unready` | `ppo/ev_at_unfreeze` | the critic's explained variance when the actor was unfrozen, below 0.3 | warn, 1 |
 
 **`imitation_ref_kl_high`.** The policy has moved far from the reference it is anchored to. That
 can be the anchor letting go on schedule, or the reward pulling the policy somewhere the reference
@@ -358,10 +358,10 @@ never goes. Read `imitation/<name>/kl_noop`, `kl_card` and `kl_tile` to see whic
 the KL is still above its budget. The anchor is pulling as hard as it is allowed to and losing.
 That is a statement about the reward, not about the anchor.
 
-**`imitation_handoff`.** The first iterations after the freeze moved the policy fast. The
+**`actor_handoff`.** The first iterations after the freeze moved the policy fast. The
 learning-rate backoff acts on its own; this says why it acted.
 
-**`imitation_critic_unready`.** The critic was trained on the frozen policy's battles and still
+**`critic_unready`.** The critic was trained on the frozen policy's battles and still
 explained little of the return when the actor was let go, so the first policy updates run on a
 poor baseline. A longer freeze is the usual answer.
 

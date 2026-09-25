@@ -44,6 +44,7 @@ from .api.rollout import (
     Step,
 )
 from .api.schedule import ScheduleState
+from .api.update import check_actor_terms
 from .checkpoint import (
     CHECKPOINT_FORMAT_VERSION,
     DirCheckpointStore,
@@ -51,6 +52,7 @@ from .checkpoint import (
     check_resume,
 )
 from .config import RunConfig, config_hash, dump_config, geometry, validate
+from .contributions import run_contributions
 from .errors import PreflightError, RoyaleLearnError
 from .identity import RunIdentity, compute_identity, describe_device
 from .identity import run_id as run_id_of
@@ -74,6 +76,7 @@ from .metrics.records import (
     schedule_fields,
     update_fields,
 )
+from .metrics.schema import for_run
 from .metrics.sinks import METRICS_NAME, build_sinks
 from .rollout.inline import (
     InlineRolloutSource,
@@ -90,6 +93,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
     from .api.metrics import MetricsSink
     from .api.rollout import RolloutSource
+    from .learn.freeze import FreezeTracker
 
 __all__ = [
     "AssignmentInsideEpisode",
@@ -802,6 +806,7 @@ class LearningCoordinator:
         preflight_kwargs: Mapping[str, Any] | None = None,
         install_signal_handler: bool = True,
         run_dir: str | Path | None = None,
+        extra_actor_terms: Sequence[Any] = (),
     ) -> None:
         self.config = validate(config)
         self.printer = printer or (lambda _line: None)
@@ -823,6 +828,8 @@ class LearningCoordinator:
         self.preflight_kwargs = dict(preflight_kwargs or {})
         self.install_signal_handler = install_signal_handler
         self._given_source = source
+        #: Actor-loss terms handed in by the caller, after the run's own (``api.update``).
+        self._given_terms = tuple(extra_actor_terms)
 
         self.report: PreflightReport | None = None
         self.identity: RunIdentity | None = None
@@ -865,6 +872,16 @@ class LearningCoordinator:
     def __enter__(self) -> LearningCoordinator:
         if self._entered:
             return self
+        # A refusal raised from here has no __exit__ after it: whatever was built before it --
+        # the buffer's shared memory, the workers, the open sinks -- is closed here instead.
+        # The resume's checks run last, after all of it exists.
+        try:
+            return self._enter()
+        except BaseException:
+            self.close()
+            raise
+
+    def _enter(self) -> LearningCoordinator:
         import torch
 
         from .determinism import apply as apply_determinism
@@ -926,10 +943,12 @@ class LearningCoordinator:
         self.codec = build_codec(
             self.codec_path, self.spec, report.table, tuple(config.extra_component_modules)
         )
-        # Before the buffer's shared segment and the workers exist: a refused init raises out of
-        # __enter__, which no __exit__ follows, so anything built before it would be left behind.
+        # Before the buffer's shared segment and the workers exist, so a refused init or a set
+        # of terms the update could not hold apart is refused before anything costly is built.
         self._initialise_from_imitation()
-        self.imitation_terms = self._imitation_terms()
+        self.actor_terms = (*self._imitation_terms(), *self._given_terms)
+        check_actor_terms(self.actor_terms)
+        self.freeze = self._freeze_tracker()
         self.buffer = RectBuffer(
             self.spec,
             self.codec,
@@ -957,7 +976,8 @@ class LearningCoordinator:
             backoff=self.schedules.backoff,
             device=self.device,
             progress=self.printer,
-            imitation=self.imitation_terms,
+            extra_actor_terms=self.actor_terms,
+            freeze=self.freeze,
         )
         self._build_ladder()
         self.inference = BatchedInference(
@@ -974,7 +994,12 @@ class LearningCoordinator:
         )
         self.config_json = dump_config(config, indent=2)
         self.sinks.open(identity=self.identity, config_json=self.config_json, run_dir=self.run_dir)
-        self.alarms = AlarmSet(config.alarms, ratio_atol=self._ratio_atol(), printer=self.printer)
+        parts = run_contributions(config)
+        #: The schema this run's rows are checked against: the core's and its parts'.
+        self.schema = for_run(parts.schema)
+        self.alarms = AlarmSet(
+            config.alarms, ratio_atol=self._ratio_atol(), extra=parts.alarms, printer=self.printer
+        )
         self.store = DirCheckpointStore(self.run_dir, keep=config.checkpoint.keep)
         self.components = self._components()
         self.control = _Control(
@@ -1102,13 +1127,13 @@ class LearningCoordinator:
             say=self.printer,
         )
 
-    def _imitation_terms(self) -> Any:
-        """The references and regularisers of section 19.6-19.8, or None without the block."""
+    def _imitation_terms(self) -> tuple[Any, ...]:
+        """The regularisers of section 19.6-19.8, as actor-loss terms; none without them."""
         imitation = self.config.imitation
-        if imitation is None:
-            return None
+        if imitation is None or not imitation.regularisers:
+            return ()
         from .imitation.references import build_references
-        from .imitation.regularisers import ImitationTerms
+        from .imitation.regularisers import build_terms
 
         references = build_references(
             imitation,
@@ -1119,7 +1144,16 @@ class LearningCoordinator:
             device=self.device,
             printer=self.printer,
         )
-        return ImitationTerms.from_config(imitation, references, self.spec)
+        return build_terms(imitation, references, self.spec)
+
+    def _freeze_tracker(self) -> FreezeTracker | None:
+        """The freeze's bookkeeping, on a run that schedules the actor's learning-rate scale."""
+        imitation = self.config.imitation
+        if imitation is None or imitation.actor_lr_scale is None:
+            return None
+        from .learn.freeze import FreezeTracker
+
+        return FreezeTracker()
 
     def artifact_spec(self) -> SnapshotSpec:
         """What an actor this run can load must agree with: section 11.6's compatibility fields
@@ -2219,9 +2253,11 @@ class LearningCoordinator:
         digest.update(msgspec.json.encode(self.gae.scaler.state()))
         digest.update(msgspec.json.encode(self.schedules.backoff.state()))
         digest.update(str(self.update.model_updates).encode("utf-8"))
-        # Only with the block, so a run without it keeps the digest it always had.
-        if self.update.imitation is not None:
-            digest.update(msgspec.json.encode(self.update.imitation.state()))
+        # The freeze's state and each actor-loss term's, by name, and only where there is some:
+        # a run with neither keeps the digest it always had.
+        for name, kept in self.update.extra_state():
+            digest.update(name.encode("utf-8"))
+            digest.update(msgspec.json.encode(kept))
         return digest.hexdigest()
 
     # -- what a halt leaves behind -------------------------------------------

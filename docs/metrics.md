@@ -74,7 +74,7 @@ A row is flat. Every key is `group/name`, and there are eight groups, in this or
 `throughput`, `time`, `ppo`, `policy`, `env`, `ladder`, `health`. A run that learns from
 demonstrations adds a ninth, `imitation`, after them; section 19 of
 [harness-spec.md](harness-spec.md) lists its keys. On an iteration where such a run holds its bot
-still (`imitation/actor_frozen` 1), the `ppo/` keys computed from the bot's own update, such as
+still (`ppo/actor_frozen` 1), the `ppo/` keys computed from the bot's own update, such as
 `ppo/kl` and `ppo/entropy`, are left out of the row, because nothing was measured.
 
 The console prints exactly the row it was handed, grouped by the part before the slash. Here is a

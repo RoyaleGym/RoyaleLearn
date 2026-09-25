@@ -13,11 +13,12 @@ from pathlib import Path
 import msgspec
 import pytest
 
+from contributed import contributed_alarms, full_alarms, full_config, full_schema
 from royalelearn.api.metrics import Alarm, AlarmResult, MetricRow
-from royalelearn.config import AlarmConfig
-from royalelearn.errors import AlarmHalt
+from royalelearn.config import AlarmConfig, RunConfig, check_consistency
+from royalelearn.errors import AlarmHalt, PreflightError
 from royalelearn.metrics import schema
-from royalelearn.metrics.alarms import HALT, WARN, AlarmSet, default_alarms
+from royalelearn.metrics.alarms import HALT, WARN, AlarmSet, MetricAlarm, default_alarms, names
 from royalelearn.metrics.bundle import write_bundle
 
 #: A row in the middle of every healthy band the schema declares. Every test below starts from
@@ -54,8 +55,8 @@ HEALTHY: dict[str, float | int | str] = {
     # One imitation regulariser named "bc", well inside its budget, long after the unfreeze.
     "imitation/bc/kl": 0.1,
     "imitation/bc/lambda_at_max": 0.0,
-    "imitation/iterations_since_unfreeze": 50.0,
-    "imitation/ev_at_unfreeze": 0.6,
+    "ppo/iterations_since_unfreeze": 50.0,
+    "ppo/ev_at_unfreeze": 0.6,
 }
 
 #: What one key has to become for each alarm to hold. ``worker_failures`` is a rise rather than
@@ -89,8 +90,8 @@ TRIPS: dict[str, dict[str, float]] = {
     "imitation_lambda_saturated": {"imitation/bc/lambda_at_max": 1.0},
     # Inside the handoff window with a clip fraction the handoff bound catches and clip_pinned
     # does not: it is the early-unfreeze reading this alarm exists for.
-    "imitation_handoff": {"imitation/iterations_since_unfreeze": 3.0, "ppo/clip_fraction": 0.35},
-    "imitation_critic_unready": {"imitation/ev_at_unfreeze": 0.1},
+    "actor_handoff": {"ppo/iterations_since_unfreeze": 3.0, "ppo/clip_fraction": 0.35},
+    "critic_unready": {"ppo/ev_at_unfreeze": 0.1},
 }
 
 #: Alarms about a counter rising across rows rather than about one row's level. No single row
@@ -109,20 +110,72 @@ def _row(**moved: float) -> dict[str, float | int | str]:
 
 
 def _alarm(name: str) -> Alarm:
-    return next(alarm for alarm in default_alarms(AlarmConfig()) if alarm.name == name)
+    return next(alarm for alarm in full_alarms() if alarm.name == name)
 
 
 def _set(**overrides: object) -> AlarmSet:
-    """An alarm set that says nothing on the console: a test reads the results, not the log."""
-    return AlarmSet(AlarmConfig(**overrides), printer=None)  # type: ignore[arg-type]
+    """The alarm set of a run with every optional part, saying nothing on the console: a test
+    reads the results, not the log."""
+    config = AlarmConfig(**overrides)  # type: ignore[arg-type]
+    return AlarmSet(config, extra=contributed_alarms(config), printer=None)
 
 
 # -- the table ---------------------------------------------------------------
 
 
 def test_the_table_covers_every_alarm_the_schema_names() -> None:
-    names = {alarm.name for alarm in default_alarms(AlarmConfig())}
-    assert names == set(schema.ALARM_METRICS)
+    """The core table against the core schema, and a run's whole table against its own."""
+    core = {alarm.name for alarm in default_alarms(AlarmConfig())}
+    assert core == set(schema.ALARM_METRICS)
+    assert set(names(full_alarms())) == set(full_schema().alarm_metrics)
+
+
+def test_a_run_without_the_optional_parts_has_none_of_their_alarms() -> None:
+    """The regularisers' and the freeze's alarms belong to the runs that have them."""
+    plain = set(names(default_alarms(AlarmConfig())))
+    contributed = set(names(contributed_alarms()))
+    assert contributed == {
+        "imitation_ref_kl_high",
+        "imitation_lambda_saturated",
+        "actor_handoff",
+        "critic_unready",
+    }
+    assert not plain & contributed
+    assert len(plain) == 24
+
+
+def test_an_override_naming_no_alarm_of_the_run_is_refused() -> None:
+    """Section 13.3 after the freeze's alarms were renamed: an old name would otherwise switch
+    the renamed alarm back on without a word. The refusal names the new name."""
+    with pytest.raises(PreflightError, match="renamed to 'actor_handoff'"):
+        AlarmSet(AlarmConfig(disabled=["imitation_handoff"]), printer=None)
+    with pytest.raises(PreflightError, match="patience_overrides names 'critic_unreadyy'"):
+        _set(patience_overrides={"critic_unreadyy": 3})
+    # A contributed alarm is a name only on a run that has its part.
+    with pytest.raises(PreflightError, match="imitation_ref_kl_high"):
+        AlarmSet(AlarmConfig(severity_overrides={"imitation_ref_kl_high": HALT}), printer=None)
+    kept = _set(disabled=["imitation_ref_kl_high"]).alarms
+    assert "imitation_ref_kl_high" not in {alarm.name for alarm in kept}
+
+
+def test_the_config_check_refuses_the_same_names_before_anything_is_built() -> None:
+    """The coordinator builds its alarm set after the rollout buffer's shared memory exists, so
+    the refusal that matters is the config check's, which runs first."""
+    renamed = msgspec.structs.replace(
+        RunConfig(), alarms=AlarmConfig(severity_overrides={"imitation_critic_unready": HALT})
+    )
+    assert any("renamed to 'critic_unready'" in p for p in check_consistency(renamed))
+    assert not any(
+        "alarm table" in p
+        for p in check_consistency(full_config(AlarmConfig(disabled=["critic_unready"])))
+    )
+
+
+def test_a_name_twice_in_the_table_is_refused() -> None:
+    """The patience counters are keyed by name: a doubled alarm would count twice a row."""
+    twice = MetricAlarm("kl_high", lambda kl: kl > 1.0)
+    with pytest.raises(ValueError, match="kl_high"):
+        AlarmSet(AlarmConfig(), extra=[twice], printer=None)
 
 
 def test_every_alarm_is_tested_firing_and_staying_silent() -> None:
@@ -134,7 +187,7 @@ def test_every_alarm_is_tested_firing_and_staying_silent() -> None:
     around an alarm nobody has seen work, which is the one kind of alarm section 13.3 says is
     unvalidated.
     """
-    built = {alarm.name: alarm for alarm in default_alarms(AlarmConfig())}
+    built = {alarm.name: alarm for alarm in full_alarms()}
     assert sorted(set(built) - set(TRIPS) - RISES - HISTORY) == [], (
         "an alarm with no row that trips it"
     )
@@ -229,22 +282,31 @@ def test_an_alarm_that_names_a_metric_key_names_one_that_exists() -> None:
     digest a row carries is the learner's weights. Found by the docs session while writing the page
     that lists one section per alarm.
     """
-    known = set(schema.METRICS)
-    for alarm in default_alarms(AlarmConfig()):
+    run_schema = full_schema()
+    for alarm in full_alarms():
         for word in alarm.meaning.replace(",", " ").replace(";", " ").split():
             token = word.strip("`'\".()").rstrip(".")
             if "/" in token and token.split("/")[0] in {
                 "run", "env", "ppo", "policy", "ladder", "health", "time", "throughput"
             }:
-                assert token in known or schema.is_known(token), (
+                assert run_schema.is_known(token), (
                     f"{alarm.name} names {token}, which no row carries"
                 )
 
 
 def test_every_alarm_reads_keys_the_schema_knows() -> None:
+    """Each alarm against the schema of a run that holds it, and each declares its keys where
+    that schema says it does."""
+    run_schema = full_schema()
+    for alarm in full_alarms():
+        assert tuple(alarm.keys) == run_schema.alarm_metrics[alarm.name], alarm.name
+        for key in alarm.keys:
+            assert run_schema.is_known(key), (
+                f"{alarm.name} reads {key}, which is not in the schema"
+            )
     for alarm in default_alarms(AlarmConfig()):
         for key in alarm.keys:
-            assert schema.is_known(key), f"{alarm.name} reads {key}, which is not in the schema"
+            assert schema.is_known(key), f"{alarm.name} reads {key}, which the core lacks"
 
 
 def test_a_healthy_row_fires_nothing() -> None:
@@ -264,7 +326,7 @@ def test_each_alarm_fires_on_its_own_row(name: str) -> None:
 def test_a_missing_key_is_never_a_firing() -> None:
     """A row from an iteration in which nothing finished carries no episode statistics."""
     sparse = {"run/iteration": 4}
-    for alarm in default_alarms(AlarmConfig()):
+    for alarm in full_alarms():
         assert not alarm.holds(sparse)
 
 

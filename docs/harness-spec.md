@@ -4164,12 +4164,12 @@ computes the function that was saved.
 - the actor's weights are asserted bit-unchanged at the end of the update;
 - every key computed from the actor's forward in the update is absent from the row rather than
   0.0 (`ppo/kl`, `ppo/clip_fraction`, the entropies, `ppo/policy_loss` and their relatives, the
-  actor's gradient norm and update magnitude), and `imitation/actor_frozen` is 1.
+  actor's gradient norm and update magnitude), and `ppo/actor_frozen` is 1.
 
 The critic trains normally on the frozen policy's rollouts. The freeze length is fixed by the
 schedule, not triggered by the critic's explained variance, so a resume lands in the same place.
-`imitation/ev_at_unfreeze` is the explained variance of the first iteration after a frozen stretch,
-published on that row, and the `imitation_critic_unready` alarm warns when it is under
+`ppo/ev_at_unfreeze` is the explained variance of the first iteration after a frozen stretch,
+published on that row, and the `critic_unready` alarm warns when it is under
 `alarms.imitation_ev_at_unfreeze` (0.3).
 
 Between zero and one the scale is only a learning-rate multiplier.
@@ -4259,9 +4259,9 @@ Keys, each present only when its regulariser is configured:
 - `imitation/<name>/{lambda, lambda_at_max, budget, grad_ratio, rows_frac}`,
   `imitation/<name>/top1_agree` (the share of covered rows where the two argmaxes agree; under
   `noop_marginal`, whether both say play), and `imitation/<name>/ref_p_noop`.
-- `imitation/actor_lr_scale` and `imitation/actor_frozen` when `actor_lr_scale` is set;
-  `imitation/ev_at_unfreeze` on the first row after a frozen stretch, and
-  `imitation/iterations_since_unfreeze` on every unfrozen row after one.
+- `ppo/actor_lr_scale` and `ppo/actor_frozen` when `actor_lr_scale` is set;
+  `ppo/ev_at_unfreeze` on the first row after a frozen stretch, and
+  `ppo/iterations_since_unfreeze` on every unfrozen row after one.
 - `env/play_rate_by_elixir/{k}`, whether or not the block is present: the share of the learner's
   sampled choice rows at elixir floor `k` (0-10) where it played. Computed where
   `env/mean_elixir_at_decision` is, from the same sample.
@@ -4271,10 +4271,10 @@ Alarms, all WARN, because a halted treatment run would be censored out of any co
 - `imitation_ref_kl_high`: a regulariser's `kl` above `alarms.imitation_ref_kl_warn` (1.0 nats).
 - `imitation_lambda_saturated`: `lambda_at_max` for `alarms.imitation_lambda_saturated_patience`
   (10) iterations. The reward is pulling harder than the anchor can hold.
-- `imitation_handoff`: in the first `alarms.imitation_handoff_window` (20) unfrozen iterations,
+- `actor_handoff`: in the first `alarms.imitation_handoff_window` (20) unfrozen iterations,
   `ppo/kl` above `alarms.imitation_handoff_kl` (0.05) or `ppo/clip_fraction` above
   `alarms.imitation_handoff_clip` (0.3). The existing backoff acts on its own; this says why.
-- `imitation_critic_unready` (19.5).
+- `critic_unready` (19.5).
 - `kl_dead` does not fire on a frozen iteration: its key is absent there.
 
 Their thresholds live in `alarms`, with the other thresholds, so they stay out of the identity.

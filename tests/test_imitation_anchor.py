@@ -30,7 +30,6 @@ from royalelearn import config as cfg
 from royalelearn.errors import PreflightError
 from royalelearn.imitation.regularisers import (
     AdaptiveCoefficient,
-    ImitationTerms,
     ReferenceKL,
     RowFilter,
     joint_kl,
@@ -198,16 +197,15 @@ def test_a_condition_outside_its_field_is_refused(env_spec: Any) -> None:
 # --------------------------------------------------------------------------
 
 
-def _terms(
+def _term(
     spec: Any,
     reference: Any,
     *,
     start: float = 1.0,
     budget: float = 0.1,
     factor: str = "joint",
-    scheduled_scale: bool = False,
     **coef: Any,
-) -> ImitationTerms:
+) -> ReferenceKL:
     regulariser = msgspec.convert(
         {
             "kind": "reference_kl",
@@ -219,9 +217,7 @@ def _terms(
         },
         type=cfg.ReferenceKLSpec,
     )
-    return ImitationTerms(
-        [ReferenceKL(regulariser, reference, spec)], scheduled_scale=scheduled_scale
-    )
+    return ReferenceKL(regulariser, reference, spec)
 
 
 def _reference(spec: Any, seed: int = 99) -> SnapshotReference:
@@ -251,7 +247,7 @@ def test_with_the_anchor_minibatch_size_is_still_a_pure_memory_knob(rect: Any, a
             build_model(rect.spec),
             msgspec.structs.replace(config, minibatch_size=minibatch),
             optimizer_factory=_Recording,
-            imitation=_terms(rect.spec, _reference(rect.spec), start=3.0),
+            extra_actor_terms=(_term(rect.spec, _reference(rect.spec), start=3.0),),
         )
         update.step(rect.buffer, SCHEDULE)
         recorded.append(_flat(update.actor_optimizer.recorded))
@@ -269,7 +265,7 @@ def test_the_anchor_is_the_same_gradient_under_all_and_critic_only(rect: Any) ->
             build_model(rect.spec),
             msgspec.structs.replace(CONFIG, forced_rows=arm),
             optimizer_factory=_Recording,
-            imitation=_terms(rect.spec, _reference(rect.spec), start=3.0),
+            extra_actor_terms=(_term(rect.spec, _reference(rect.spec), start=3.0),),
         )
         update.step(rect.buffer, SCHEDULE)
         recorded.append(_flat(update.actor_optimizer.recorded))
@@ -312,9 +308,9 @@ def test_the_anchor_adds_exactly_lambda_times_the_kl_gradient(rect: Any) -> None
     reference = _reference(rect.spec)
     lam = 2.5
     got = {}
-    for name, terms in (("plain", None), ("anchor", _terms(rect.spec, reference, start=lam))):
+    for name, terms in (("plain", ()), ("anchor", (_term(rect.spec, reference, start=lam),))):
         update = update_for(
-            build_model(rect.spec), CONFIG, optimizer_factory=_Recording, imitation=terms
+            build_model(rect.spec), CONFIG, optimizer_factory=_Recording, extra_actor_terms=terms
         )
         update.step(rect.buffer, SCHEDULE)
         got[name] = _flat(update.actor_optimizer.recorded)
@@ -332,25 +328,25 @@ def test_a_zero_coefficient_is_the_update_without_the_block(rect: Any) -> None:
     model = build_model(rect.spec)
     collect(rect, model)
     got = {}
-    terms = _terms(rect.spec, _reference(rect.spec), start=0.0, max=0.0)
-    for name, imitation in (("plain", None), ("blind", terms)):
+    term = _term(rect.spec, _reference(rect.spec), start=0.0, max=0.0)
+    for name, terms in (("plain", ()), ("blind", (term,))):
         update = update_for(
-            build_model(rect.spec), CONFIG, optimizer_factory=_Recording, imitation=imitation
+            build_model(rect.spec), CONFIG, optimizer_factory=_Recording, extra_actor_terms=terms
         )
         result = update.step(rect.buffer, SCHEDULE)
         got[name] = _flat(update.actor_optimizer.recorded)
     assert torch.equal(got["plain"], got["blind"])
-    assert result.imitation["imitation/bc/kl"] > 0.0
-    assert result.imitation["imitation/bc/lambda"] == 0.0
+    assert result.extra["imitation/bc/kl"] > 0.0
+    assert result.extra["imitation/bc/lambda"] == 0.0
 
 
 def test_the_reported_parts_and_the_coefficient_after_one_update(rect: Any) -> None:
     model = build_model(rect.spec)
     collect(rect, model)
-    terms = _terms(rect.spec, _reference(rect.spec), start=1.0, budget=0.0, up=1.5, max=10.0)
-    update = update_for(build_model(rect.spec), CONFIG, imitation=terms)
+    term = _term(rect.spec, _reference(rect.spec), start=1.0, budget=0.0, up=1.5, max=10.0)
+    update = update_for(build_model(rect.spec), CONFIG, extra_actor_terms=(term,))
     result = update.step(rect.buffer, SCHEDULE)
-    row = result.imitation
+    row = result.extra
     parts = row["imitation/bc/kl_noop"] + row["imitation/bc/kl_card"] + row["imitation/bc/kl_tile"]
     # Float32 sums over every covered row: exact to a part in a thousand here, and the exact
     # identity is held on its own in test_the_chain_rule_parts_sum_to_the_joint_kl.
@@ -361,7 +357,28 @@ def test_the_reported_parts_and_the_coefficient_after_one_update(rect: Any) -> N
     assert 0.0 <= row["imitation/bc/top1_agree"] <= 1.0
     assert row["imitation/bc/grad_ratio"] > 0.0
     # A KL above a zero budget moved lambda up, for the next iteration.
-    assert terms.regularisers[0].coef.value == pytest.approx(1.5)
+    assert term.coef.value == pytest.approx(1.5)
+
+
+def test_the_gradient_ratio_is_measured_before_the_coefficient(rect: Any) -> None:
+    """``grad_ratio`` is for choosing coef.start, so it is the gradient of the UNSCALED KL
+    against the policy term's: the same number at lambda 2.5 as at lambda 1, bit for bit, since
+    it is taken on the first minibatch before any step.
+
+    Plant: measure it on what the loss adds, lambda included, and it reads 2.5 times higher."""
+    model = build_model(rect.spec)
+    collect(rect, model)
+    reference = _reference(rect.spec)
+    ratios = {}
+    for lam in (1.0, 2.5):
+        update = update_for(
+            build_model(rect.spec),
+            CONFIG,
+            extra_actor_terms=(_term(rect.spec, reference, start=lam),),
+        )
+        ratios[lam] = update.step(rect.buffer, SCHEDULE).extra["imitation/bc/grad_ratio"]
+    assert ratios[1.0] > 0.0
+    assert ratios[2.5] == ratios[1.0]
 
 
 def test_the_gradient_ratio_is_zero_while_the_policy_is_the_reference(rect: Any) -> None:
@@ -369,8 +386,8 @@ def test_the_gradient_ratio_is_zero_while_the_policy_is_the_reference(rect: Any)
     collect(rect, model)
     learner = build_model(rect.spec)
     same = SnapshotReference("bc", copy.deepcopy(learner.actor))
-    update = update_for(learner, CONFIG, imitation=_terms(rect.spec, same))
-    row = update.step(rect.buffer, SCHEDULE).imitation
+    update = update_for(learner, CONFIG, extra_actor_terms=(_term(rect.spec, same),))
+    row = update.step(rect.buffer, SCHEDULE).extra
     assert row["imitation/bc/kl"] == pytest.approx(0.0, abs=1e-6)
     assert row["imitation/bc/grad_ratio"] == pytest.approx(0.0, abs=1e-6)
 
@@ -394,9 +411,9 @@ def test_a_play_wait_reference_anchors_only_the_play_wait_split(rect: Any) -> No
     update = update_for(
         build_model(rect.spec),
         CONFIG,
-        imitation=_terms(rect.spec, reference, factor="noop_marginal"),
+        extra_actor_terms=(_term(rect.spec, reference, factor="noop_marginal"),),
     )
-    row = update.step(rect.buffer, SCHEDULE).imitation
+    row = update.step(rect.buffer, SCHEDULE).extra
     assert "imitation/bc/kl_card" not in row and "imitation/bc/kl_tile" not in row
     assert row["imitation/bc/kl_noop"] == pytest.approx(row["imitation/bc/kl"])
     assert row["imitation/bc/kl"] > 0.0
@@ -443,7 +460,7 @@ def test_a_frozen_row_leaves_the_actors_keys_out() -> None:
     from royalelearn.metrics.records import update_fields
 
     base = {field: 0.0 for field in UpdateResult.__struct_fields__}
-    base.update(kl_by_epoch=[0.0], clip_fraction_by_epoch=[0.0], imitation={})
+    base.update(kl_by_epoch=[0.0], clip_fraction_by_epoch=[0.0], extra={})
     base.update(n_minibatches=1, n_optimizer_steps=1, n_samples=1, actor_rows=1, actor_forwards=1)
     trained = update_fields(msgspec.convert({**base, "actor_trained": True}, UpdateResult))
     frozen = update_fields(msgspec.convert({**base, "actor_trained": False}, UpdateResult))
@@ -454,17 +471,23 @@ def test_a_frozen_row_leaves_the_actors_keys_out() -> None:
 
 
 def test_the_coefficient_and_the_freeze_survive_a_checkpoint(rect: Any, tmp_path: Path) -> None:
+    from royalelearn.learn.freeze import FreezeTracker
+
     model = build_model(rect.spec)
     collect(rect, model)
-    terms = _terms(rect.spec, _reference(rect.spec), start=1.0, budget=0.0, up=2.0)
-    update = update_for(model, CONFIG, imitation=terms)
+    term = _term(rect.spec, _reference(rect.spec), start=1.0, budget=0.0, up=2.0)
+    freeze = FreezeTracker()
+    update = update_for(model, CONFIG, extra_actor_terms=(term,), freeze=freeze)
+    update.step(rect.buffer, FROZEN)
     update.step(rect.buffer, SCHEDULE)
     update.save_checkpoint(tmp_path)
-    fresh = _terms(rect.spec, _reference(rect.spec), start=1.0, budget=0.0, up=2.0)
-    restored = update_for(build_model(rect.spec), CONFIG, imitation=fresh)
+    fresh = _term(rect.spec, _reference(rect.spec), start=1.0, budget=0.0, up=2.0)
+    thawed = FreezeTracker()
+    restored = update_for(build_model(rect.spec), CONFIG, extra_actor_terms=(fresh,), freeze=thawed)
     restored.load_checkpoint(tmp_path, strict=True)
-    assert fresh.regularisers[0].coef.value == 2.0
-    assert fresh.state() == terms.state()
+    assert fresh.coef.value == 2.0
+    assert fresh.state() == term.state()
+    assert thawed.state() == freeze.state() == {"unfrozen_at": 0, "last_frozen": False}
 
 
 # --------------------------------------------------------------------------
@@ -541,18 +564,20 @@ def test_a_run_freezes_then_unfreezes_and_says_so(tmp_path: Path) -> None:
         run.iterate()
         later_row = dict(run.rows[-1])
         fired = [result.name for result in run.alarm_rows]
-    assert frozen_row["imitation/actor_frozen"] == 1.0
+        run_schema = run.schema
+    assert frozen_row["ppo/actor_frozen"] == 1.0
     assert not set(schema.ACTOR_UPDATE_KEYS) & set(frozen_row)
     assert "ppo/value_loss" in frozen_row and "ppo/ratio_max_abs_dev" in frozen_row
-    assert thawed_row["imitation/actor_frozen"] == 0.0
+    assert thawed_row["ppo/actor_frozen"] == 0.0
     assert set(schema.ACTOR_UPDATE_KEYS) <= set(thawed_row)
-    assert thawed_row["imitation/ev_at_unfreeze"] == thawed_row["ppo/explained_variance"]
-    assert thawed_row["imitation/iterations_since_unfreeze"] == 1.0
-    assert "imitation/ev_at_unfreeze" not in later_row
-    assert later_row["imitation/iterations_since_unfreeze"] == 2.0
+    assert thawed_row["ppo/ev_at_unfreeze"] == thawed_row["ppo/explained_variance"]
+    assert thawed_row["ppo/iterations_since_unfreeze"] == 1.0
+    assert "ppo/ev_at_unfreeze" not in later_row
+    assert later_row["ppo/iterations_since_unfreeze"] == 2.0
     assert "kl_dead" not in fired
     for row in (frozen_row, thawed_row, later_row):
-        assert not unknown_keys(row)
+        assert not unknown_keys(row, run_schema)
+        assert not any(key.startswith("imitation/") for key in row)
 
 
 def test_lambda_carries_across_a_resume(tmp_path: Path) -> None:

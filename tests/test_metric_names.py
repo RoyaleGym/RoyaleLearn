@@ -167,10 +167,10 @@ PUBLISHED_KEYS = (
     "time/probe",
     "time/residual",
     "time/update",
-    "imitation/actor_frozen",
-    "imitation/actor_lr_scale",
-    "imitation/ev_at_unfreeze",
-    "imitation/iterations_since_unfreeze",
+    "ppo/actor_frozen",
+    "ppo/actor_lr_scale",
+    "ppo/ev_at_unfreeze",
+    "ppo/iterations_since_unfreeze",
 )
 
 PUBLISHED_PATTERNS = (
@@ -178,17 +178,6 @@ PUBLISHED_PATTERNS = (
     "env/reward_terms_abs/{term}",
     "env/reward_terms_step_abs/{term}",
     "env/play_rate_by_elixir/{elixir}",
-    "imitation/{name}/budget",
-    "imitation/{name}/grad_ratio",
-    "imitation/{name}/kl",
-    "imitation/{name}/kl_card",
-    "imitation/{name}/kl_noop",
-    "imitation/{name}/kl_tile",
-    "imitation/{name}/lambda",
-    "imitation/{name}/lambda_at_max",
-    "imitation/{name}/ref_p_noop",
-    "imitation/{name}/rows_frac",
-    "imitation/{name}/top1_agree",
     "health/worker_failures/{kind}",
     "health/housekeeping/{kind}",
     "ladder/rating/{member}",
@@ -206,6 +195,33 @@ PUBLISHED_PATTERNS = (
     "ppo/clip_fraction_epoch{epoch}",
     "ppo/kl_epoch{epoch}",
 )
+
+
+#: The regularisers' families: published on a run with the imitation block only, as that part's
+#: contribution to the run's schema rather than as core keys.
+IMITATION_PUBLISHED_PATTERNS = (
+    "imitation/{name}/budget",
+    "imitation/{name}/grad_ratio",
+    "imitation/{name}/kl",
+    "imitation/{name}/kl_card",
+    "imitation/{name}/kl_noop",
+    "imitation/{name}/kl_tile",
+    "imitation/{name}/lambda",
+    "imitation/{name}/lambda_at_max",
+    "imitation/{name}/ref_p_noop",
+    "imitation/{name}/rows_frac",
+    "imitation/{name}/top1_agree",
+)
+
+
+def test_the_imitation_families_are_the_ones_written_down() -> None:
+    from royalelearn.imitation.schema import IMITATION_PATTERNS
+
+    live = {pattern.template for pattern in IMITATION_PATTERNS}
+    assert live == set(IMITATION_PUBLISHED_PATTERNS)
+    assert not live & {pattern.template for pattern in schema.PATTERNS}, (
+        "a regulariser family is in the core schema, so every run would claim to know it"
+    )
 
 
 def test_the_published_metric_keys_are_the_ones_written_down() -> None:

@@ -1147,6 +1147,7 @@ def check_consistency(config: RunConfig) -> list[str]:
         problems.append(f"ladder.rater.draws {config.ladder.rater.draws!r} is not a draw model")
     problems.extend(_probe_problems(config.ladder))
     problems.extend(imitation_problems(config.imitation))
+    problems.extend(_alarm_override_problems(config))
     if config.checkpoint.keep < 1:
         problems.append("checkpoint.keep must be at least 1")
     if config.determinism.tier not in TIERS:
@@ -1161,6 +1162,14 @@ def check_consistency(config: RunConfig) -> list[str]:
             "checked against"
         )
     return problems
+
+
+def _alarm_override_problems(config: RunConfig) -> list[str]:
+    """Overrides naming an alarm this run's table does not have (``metrics.alarms``)."""
+    from .contributions import run_alarm_names
+    from .metrics.alarms import override_problems
+
+    return override_problems(config.alarms, run_alarm_names(config))
 
 
 def validate(config: RunConfig) -> RunConfig:

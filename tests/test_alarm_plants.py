@@ -31,9 +31,10 @@ from typing import Any
 
 import pytest
 
+from contributed import full_alarms
 from royalelearn.config import AlarmConfig
 from royalelearn.errors import AlarmHalt
-from royalelearn.metrics.alarms import AlarmSet, default_alarms
+from royalelearn.metrics.alarms import AlarmSet
 
 #: One iteration of a real run. Real, because the interesting failure is an alarm that reads a
 #: key no row carries, and a row written by a test carries whatever the test decided to write.
@@ -98,11 +99,12 @@ PLANTS: dict[str, dict[str, Any] | list[dict[str, Any]]] = {
     "imitation_lambda_saturated": {"imitation/bc/lambda_at_max": 1.0},
     # Early after an unfreeze, with a clip fraction the handoff bound catches and clip_pinned
     # does not.
-    "imitation_handoff": {"imitation/iterations_since_unfreeze": 2.0, "ppo/clip_fraction": 0.4},
-    "imitation_critic_unready": {"imitation/ev_at_unfreeze": 0.05},
+    "actor_handoff": {"ppo/iterations_since_unfreeze": 2.0, "ppo/clip_fraction": 0.4},
+    "critic_unready": {"ppo/ev_at_unfreeze": 0.05},
 }
 
-ALARMS = {alarm.name: alarm for alarm in default_alarms(AlarmConfig())}
+#: The table of a run with every optional part: the core's alarms and the contributed ones.
+ALARMS = {alarm.name: alarm for alarm in full_alarms()}
 
 
 def one(name: str) -> AlarmSet:
@@ -111,7 +113,7 @@ def one(name: str) -> AlarmSet:
     One per alarm, because a shared set advances every alarm's patience counter on every row and
     a fire could then belong to a neighbour.
     """
-    only = [alarm for alarm in default_alarms(AlarmConfig()) if alarm.name == name]
+    only = [alarm for alarm in full_alarms() if alarm.name == name]
     assert only, f"{name} is not in the alarm table"
     return AlarmSet(AlarmConfig(), alarms=only, printer=None)
 

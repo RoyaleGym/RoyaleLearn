@@ -26,6 +26,7 @@ __all__ = [
     "ARCH",
     "PREFLIGHT",
     "SEED",
+    "StubTerm",
     "actor_state",
     "build_model",
     "coordinator",
@@ -169,3 +170,58 @@ def learner_rows(run: Any, count: int) -> np.ndarray:
 def actor_state(run: Any) -> dict[str, Any]:
     """A detached copy of a run's actor tensors, as they are right now."""
     return {name: tensor.detach().clone() for name, tensor in run.model.actor.state_dict().items()}
+
+
+class StubTerm:
+    """An actor-loss term that runs the whole path an extension's term runs, at a coefficient the
+    test chooses.
+
+    Its raw value is minus the summed log-probability of the legal actions on the minibatch's
+    choice rows: a sum over the rows, so ``scaling`` is ``"rows"``, with a gradient wherever the
+    policy has one. At coefficient zero the update must be the one without the term, bit for bit;
+    that is what shows the host adds nothing of its own around a term. It reports how often it
+    was called and, when the update measured one, its gradient ratio, under ``stub/<name>/``.
+    ``keep_state`` makes it keep its call count in the checkpoint, for tests of the state layout.
+    """
+
+    extension = "stub"
+    format_version = 1
+    scaling = "rows"
+    measure_grad_ratio = True
+
+    def __init__(
+        self, coefficient: float = 0.0, *, name: str = "inert", keep_state: bool = False
+    ) -> None:
+        self.name = name
+        self.coefficient = float(coefficient)
+        self.keep_state = keep_state
+        self.calls = 0
+
+    def begin(self, env_steps: int, device: Any) -> None:
+        pass
+
+    def loss(self, inputs: Any, *, epoch: int, measure: bool) -> tuple[float, Any]:
+        import torch
+
+        legal = torch.where(inputs.mask, inputs.log_probs, torch.zeros_like(inputs.log_probs))
+        self.calls += 1
+        return self.coefficient, -legal.sum()
+
+    def finish(
+        self,
+        *,
+        iteration: int,
+        actor_trained: bool,
+        explained_variance: float,
+        grad_ratio: float | None,
+    ) -> dict[str, float]:
+        fields = {f"stub/{self.name}/calls": float(self.calls)}
+        if grad_ratio is not None:
+            fields[f"stub/{self.name}/grad_ratio"] = grad_ratio
+        return fields
+
+    def state(self) -> dict[str, Any]:
+        return {"calls": self.calls} if self.keep_state else {}
+
+    def load_state(self, state: Any) -> None:
+        self.calls = int(state["calls"])

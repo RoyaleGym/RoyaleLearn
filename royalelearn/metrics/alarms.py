@@ -15,6 +15,10 @@ would halt a healthy run.
 
 Thresholds live in ``config.alarms``: they are recorded in the checkpoint and left out of the
 run identity, because an alarm can stop a run and can never alter a number.
+
+The table below is the core's, the same for every run. An optional part of a run brings its own
+alarms, each constructed with the keys it reads, and they are appended to this run's table only:
+a run without the part neither evaluates them nor accepts an override naming them.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "DEFAULT_RATIO_ATOL",
     "HALT",
+    "RENAMED_ALARMS",
     "WARN",
     "AlarmSet",
     "FamilyAlarm",
@@ -40,10 +45,19 @@ __all__ = [
     "SpillAlarm",
     "default_alarms",
     "names",
+    "override_problems",
 ]
 
 WARN = "warn"
 HALT = "halt"
+
+#: Alarms that used to be called something else, and what they are called now. An override in
+#: ``config.alarms`` naming the old name is refused with the new one in the message, because
+#: acting on it silently would re-enable an alarm the operator had switched off.
+RENAMED_ALARMS: dict[str, str] = {
+    "imitation_handoff": "actor_handoff",
+    "imitation_critic_unready": "critic_unready",
+}
 
 
 def _value(row: MetricRow, key: str) -> float | None:
@@ -62,9 +76,9 @@ def _value(row: MetricRow, key: str) -> float | None:
 class MetricAlarm(Alarm):
     """An alarm whose predicate is a function of the values of its declared keys.
 
-    The predicate is handed one value per key, in the order ``ALARM_METRICS`` declares them,
-    and is not called at all when any of them is missing. That is the whole of the
-    missing-key rule, in one place.
+    The predicate is handed one value per key, in the order they are declared -- ``keys``, or
+    for a core alarm its ``ALARM_METRICS`` entry -- and is not called at all when any of them
+    is missing. That is the whole of the missing-key rule, in one place.
     """
 
     def __init__(
@@ -72,6 +86,7 @@ class MetricAlarm(Alarm):
         name: str,
         predicate: Callable[..., bool],
         *,
+        keys: Sequence[str] | None = None,
         severity: str = WARN,
         patience: int = 1,
         meaning: str = "",
@@ -80,7 +95,7 @@ class MetricAlarm(Alarm):
         self.name = name
         self.severity = severity
         self.patience = int(patience)
-        self.keys = ALARM_METRICS[name]
+        self.keys = tuple(keys) if keys is not None else ALARM_METRICS[name]
         self.predicate = predicate
         self.meaning = meaning
         #: Whether a firing of this alarm is worth a diagnostic bundle even at ``warn``.
@@ -172,10 +187,10 @@ DEFAULT_RATIO_ATOL = 1e-4
 class FamilyAlarm(Alarm):
     """An alarm over a family of keys, one per member: it holds when any member's value does.
 
-    The imitation regularisers are named by the run's own config, so their keys cannot be listed
-    in ``ALARM_METRICS``; its entry is the template, ``imitation/{name}/kl``, and this reads
-    every key of the row that the template matches. ``predicate`` gets the member's name and
-    its value, so a bound can differ per member. A row without any member is not a firing.
+    For keys named by the run's own config -- one per regulariser, say -- which cannot be
+    listed ahead of time. ``keys`` are templates such as ``imitation/{name}/kl``, and this reads
+    every key of the row that a template matches. ``predicate`` gets the member's name and its
+    value, so a bound can differ per member. A row without any member is not a firing.
     """
 
     def __init__(
@@ -183,6 +198,7 @@ class FamilyAlarm(Alarm):
         name: str,
         predicate: Callable[[str, float], bool],
         *,
+        keys: Sequence[str] | None = None,
         severity: str = WARN,
         patience: int = 1,
         meaning: str = "",
@@ -192,7 +208,7 @@ class FamilyAlarm(Alarm):
         self.name = name
         self.severity = severity
         self.patience = int(patience)
-        self.keys = ALARM_METRICS[name]
+        self.keys = tuple(keys) if keys is not None else ALARM_METRICS[name]
         self.predicate = predicate
         self.meaning = meaning
         self.dump_bundle = False
@@ -227,48 +243,18 @@ class FamilyAlarm(Alarm):
         return {key: value for key, _member, value in self._members(row)}
 
 
-def _imitation_alarms(config: AlarmConfig) -> list[Alarm]:
-    """Section 19.9. All WARN: a halted treatment run is censored out of its comparison."""
-    return [
-        FamilyAlarm(
-            "imitation_ref_kl_high",
-            lambda _member, kl: kl > config.imitation_ref_kl_warn,
-            meaning="the policy has moved far from a reference it is anchored to",
-        ),
-        FamilyAlarm(
-            "imitation_lambda_saturated",
-            lambda _member, at_max: at_max >= 1.0,
-            patience=config.imitation_lambda_saturated_patience,
-            meaning=(
-                "lambda has sat at coef.max: the reward is pulling harder than the anchor can "
-                "hold, which is a statement about the reward"
-            ),
-        ),
-        MetricAlarm(
-            "imitation_handoff",
-            lambda kl, clip, since: since <= config.imitation_handoff_window
-            and (kl > config.imitation_handoff_kl or clip > config.imitation_handoff_clip),
-            meaning=(
-                "the first unfrozen iterations are moving the policy fast; the backoff acts on "
-                "its own, and this says why"
-            ),
-        ),
-        MetricAlarm(
-            "imitation_critic_unready",
-            lambda ev: ev < config.imitation_ev_at_unfreeze,
-            meaning="the critic explained little of the return when the actor was unfrozen",
-        ),
-    ]
-
-
 def default_alarms(
-    config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATOL
+    config: AlarmConfig,
+    *,
+    ratio_atol: float = DEFAULT_RATIO_ATOL,
+    extra: Iterable[Alarm] = (),
 ) -> tuple[Alarm, ...]:
-    """The table of section 13.3, with this run's thresholds in it.
+    """The table of section 13.3, with this run's thresholds in it, then ``extra``.
 
     Built as a function of the config rather than as constants, so that an operator who wants
     one of them louder on their own machine changes a number in the config file and does not
-    end up with a second copy of the table.
+    end up with a second copy of the table. ``extra`` is what the run's optional parts
+    contribute; without it this is the core table every run has.
     """
     alarms: list[Alarm] = [
         MetricAlarm(
@@ -478,8 +464,32 @@ def default_alarms(
             meaning="the harness is becoming the bottleneck rather than the learner",
         ),
     ]
-    alarms.extend(_imitation_alarms(config))
+    alarms.extend(extra)
     return tuple(alarms)
+
+
+def override_problems(config: AlarmConfig, table: Iterable[str]) -> list[str]:
+    """Every name in ``disabled`` and the two override maps that ``table`` does not have.
+
+    An override naming no alarm of the run does nothing, and doing nothing is exactly wrong when
+    the name used to mean something: after a rename, ``disabled: ["imitation_handoff"]`` would
+    switch the renamed alarm back on without a word. So it is a problem, and a renamed name says
+    what it is called now.
+    """
+    known = set(table)
+    problems: list[str] = []
+    for where, named in (
+        ("alarms.disabled", list(config.disabled)),
+        ("alarms.patience_overrides", list(config.patience_overrides)),
+        ("alarms.severity_overrides", list(config.severity_overrides)),
+    ):
+        for name in named:
+            if name in known:
+                continue
+            renamed = RENAMED_ALARMS.get(name)
+            hint = f"; it was renamed to {renamed!r}" if renamed is not None else ""
+            problems.append(f"{where} names {name!r}, which is not in this run's alarm table{hint}")
+    return problems
 
 
 class AlarmSet:
@@ -496,13 +506,27 @@ class AlarmSet:
         *,
         ratio_atol: float = DEFAULT_RATIO_ATOL,
         alarms: Iterable[Alarm] | None = None,
+        extra: Iterable[Alarm] = (),
         printer: Callable[[str], None] | None = print,
     ) -> None:
+        """``alarms`` replaces the core table; ``extra`` is appended to whichever table it is."""
         self.config = config
         self.printer = printer
         disabled = set(config.disabled)
         self.alarms: list[Alarm] = []
-        table = alarms if alarms is not None else default_alarms(config, ratio_atol=ratio_atol)
+        base = alarms if alarms is not None else default_alarms(config, ratio_atol=ratio_atol)
+        table = [*base, *extra]
+        listed = names(table)
+        # The counters are keyed by name, so a name twice would count one alarm twice a row:
+        # half its patience and every firing doubled.
+        doubled = sorted({name for name in listed if listed.count(name) > 1})
+        if doubled:
+            raise ValueError(f"the alarm table names these alarms more than once: {doubled}")
+        problems = override_problems(config, listed)
+        if problems:
+            from ..errors import PreflightError
+
+            raise PreflightError("\n".join(problems))
         for alarm in table:
             if alarm.name in disabled:
                 continue

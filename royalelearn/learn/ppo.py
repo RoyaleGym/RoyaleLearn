@@ -54,7 +54,7 @@ from torch.nn.utils import clip_grad_norm_, parameters_to_vector
 
 from royalegym.action import NOOP
 
-from ..api.update import Update, UpdateResult
+from ..api.update import ActorTermInputs, Update, UpdateResult, check_actor_terms
 from ..config import PPOConfig
 from ..errors import CheckpointFormatError
 from ..seeding import PPO_MINIBATCH, derive_generator, stream_path
@@ -67,8 +67,9 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.advantage import AdvantageEstimator, AdvantageStats
     from ..api.policy import ActorCritic, BackpropResult
     from ..api.schedule import ScheduleState
-    from ..imitation.regularisers import ImitationTerms, ReferenceKL
+    from ..api.update import ActorLossTerm
     from .buffer import Minibatch, RectBuffer
+    from .freeze import FreezeTracker
     from .schedules import LrBackoff
 
 __all__ = [
@@ -279,17 +280,22 @@ class PPOUpdate(Update):
         device: torch.device | str | None = None,
         optimizer_factory: Callable[..., Optimizer] | None = None,
         progress: Callable[[str], None] | None = None,
-        imitation: ImitationTerms | None = None,
+        extra_actor_terms: Sequence[ActorLossTerm] = (),
+        freeze: FreezeTracker | None = None,
     ) -> None:
         #: Said once per epoch while the update runs, because nothing else is said during it.
         self.progress = progress
-        #: Section 19: the reference-KL regularisers and the freeze's bookkeeping. None on a run
-        #: without the ``imitation`` block, and then nothing below behaves differently.
-        self.imitation = imitation
+        #: Terms extensions add to the actor's loss. Empty, the update adds no operation, no key
+        #: and no state.
+        self.extra_actor_terms: tuple[ActorLossTerm, ...] = tuple(extra_actor_terms)
+        check_actor_terms(self.extra_actor_terms)
+        #: The freeze's bookkeeping, on a run that schedules the actor's learning-rate scale.
+        self.freeze = freeze
         #: Whether this iteration's actor is frozen (``actor_lr_scale`` zero, section 19.5).
         self._frozen = False
-        #: Whether this iteration's gradient ratio is still to be measured.
+        #: Whether this iteration's gradient ratios are still to be measured, and what they were.
         self._grad_ratio_pending = False
+        self._grad_ratios: dict[tuple[str, str], float] = {}
         self.model = model
         self.gae = gae
         self.config = config
@@ -385,9 +391,12 @@ class PPOUpdate(Update):
         self._ratio_unchecked = True
         self._frozen = sched.actor_lr_scale == 0.0
         self._apply_learning_rates(sched)
-        if self.imitation is not None:
-            self.imitation.begin(sched.cumulative_env_steps, self.device)
-            self._grad_ratio_pending = bool(self.imitation.regularisers) and not self._frozen
+        for term in self.extra_actor_terms:
+            term.begin(sched.cumulative_env_steps, self.device)
+        self._grad_ratios = {}
+        self._grad_ratio_pending = not self._frozen and any(
+            term.measure_grad_ratio for term in self.extra_actor_terms
+        )
         gather = self._gather_for(buffer)
 
         critic_started = time.perf_counter()
@@ -558,12 +567,7 @@ class PPOUpdate(Update):
             eps_floor_critic=adam_eps_floor_frac(self.critic_optimizer),
         )
         result.actor_trained = not self._frozen
-        if self.imitation is not None:
-            result.imitation = self.imitation.finish(
-                iteration=sched.iteration,
-                scale=sched.actor_lr_scale,
-                explained_variance=result.explained_variance,
-            )
+        result.extra = self._extra_fields(sched, result.explained_variance)
         # A frozen iteration has no KL to observe: the backoff would read the diagnostics'
         # empty 0.0 as a policy that did not move and count it towards nothing.
         if self.backoff is not None and not self._frozen and self.backoff.observe(result.kl):
@@ -651,14 +655,14 @@ class PPOUpdate(Update):
             * weight
         )
         loss = policy_loss + value_loss + entropy_loss
-        if self.imitation is not None and self.imitation.regularisers and minibatch.n_choice:
+        if self.extra_actor_terms and minibatch.n_choice:
             if result.distribution is None:
                 raise TypeError(
-                    f"{type(self.model).__name__}.backprop returned no distribution, and the "
-                    "imitation block's reference KL needs every legal action's log-probability"
+                    f"{type(self.model).__name__}.backprop returned no distribution, and an "
+                    "extra actor-loss term needs every legal action's log-probability"
                 )
             rows = minibatch.choice_index
-            loss = loss + self._imitation_loss(
+            loss = loss + self._extra_actor_loss(
                 minibatch,
                 result.distribution.log_probs.index_select(0, rows),
                 minibatch.obs.mask.index_select(0, rows),
@@ -760,8 +764,8 @@ class PPOUpdate(Update):
                 * actor_scale
             )
             actor_loss = policy_loss + entropy_loss
-            if self.imitation is not None and self.imitation.regularisers:
-                actor_loss = actor_loss + self._imitation_loss(
+            if self.extra_actor_terms:
+                actor_loss = actor_loss + self._extra_actor_loss(
                     minibatch,
                     distribution.log_probs,
                     distribution.mask,
@@ -802,7 +806,7 @@ class PPOUpdate(Update):
                 forced_dual=forced_dual,
             )
 
-    def _imitation_loss(
+    def _extra_actor_loss(
         self,
         minibatch: Minibatch,
         policy: Tensor,
@@ -811,53 +815,100 @@ class PPOUpdate(Update):
         actor_scale: float,
         policy_loss: Tensor,
     ) -> Tensor:
-        """Section 19.7: the sum over regularisers of lambda * sum(KL) * ``actor_scale``.
+        """The sum over extra terms of ``coefficient * raw * scale``, in that order.
 
         ``policy`` and ``mask`` are the actor's masked log-probabilities and mask on the
-        minibatch's choice rows, in ``minibatch.choice_index`` order. The KL of the first epoch
-        is what lambda is moved by; the other epochs only train on it.
+        minibatch's choice rows, in ``minibatch.choice_index`` order, whichever actor path this
+        is. What a term measures, it measures in the first epoch.
         """
-        assert self.imitation is not None
-        rows = minibatch.choice_index
+        inputs = ActorTermInputs(
+            obs=minibatch.obs,
+            rows=minibatch.choice_index,
+            log_probs=policy,
+            mask=mask,
+            actor=getattr(self.model, "actor", self.model),
+            actor_scale=actor_scale,
+            weight=minibatch.weight,
+        )
         measure = epoch == 0
+        ratio_now = self._grad_ratio_pending
         total: Tensor | None = None
-        sums: list[tuple[ReferenceKL, Tensor]] = []
-        for regulariser in self.imitation.regularisers:
-            kl = regulariser.kl_sum(minibatch.obs, rows, policy, mask, measure=measure)
-            sums.append((regulariser, kl))
-            term = regulariser.lam * kl * actor_scale
-            total = term if total is None else total + term
-        if self._grad_ratio_pending:
+        scaled: list[tuple[ActorLossTerm, Tensor]] = []
+        for term in self.extra_actor_terms:
+            coefficient, raw = term.loss(inputs, epoch=epoch, measure=measure)
+            scale = actor_scale if term.scaling == "rows" else minibatch.weight
+            if ratio_now and term.measure_grad_ratio:
+                scaled.append((term, raw * scale))
+            # (coefficient * raw) * scale, in that order: the order the anchor has always been
+            # computed in, so a run whose term moved behind this protocol is bit-identical.
+            contribution = coefficient * raw * scale
+            total = contribution if total is None else total + contribution
+        if ratio_now:
             self._grad_ratio_pending = False
-            self._grad_ratio(policy_loss, sums, actor_scale)
+            self._grad_ratio(policy_loss, scaled)
         assert total is not None
         return total
 
     def _grad_ratio(
-        self,
-        policy_loss: Tensor,
-        sums: Sequence[tuple[ReferenceKL, Tensor]],
-        actor_scale: float,
+        self, policy_loss: Tensor, scaled: Sequence[tuple[ActorLossTerm, Tensor]]
     ) -> None:
-        """||grad of each unscaled KL sum|| / ||grad of the policy term||, once an iteration.
+        """||grad of each term's scaled raw value|| / ||grad of the policy term||, once an
+        iteration, before any coefficient.
 
         On the first minibatch with a choice row. ``autograd.grad`` rather than a backward, so
         nothing reaches the ``.grad`` the optimizer reads and the update is the one it would
-        have been without the measurement. At pi_theta = pi_ref the forward KL's gradient is
-        exactly zero, so this reads zero until the two have parted.
+        have been without the measurement. At pi_theta = pi_ref a forward KL's gradient is
+        exactly zero, so a KL term reads zero until the two have parted.
         """
         params = [parameter for parameter in self.actor_params if parameter.requires_grad]
         policy_grads = torch.autograd.grad(
             policy_loss, params, retain_graph=True, allow_unused=True
         )
         policy_norm = _grad_norm(policy_grads)
-        for regulariser, kl in sums:
-            grads = torch.autograd.grad(
-                kl * actor_scale, params, retain_graph=True, allow_unused=True
-            )
-            regulariser.grad_ratio = float(
+        for term, value in scaled:
+            grads = torch.autograd.grad(value, params, retain_graph=True, allow_unused=True)
+            self._grad_ratios[(term.extension, term.name)] = float(
                 (_grad_norm(grads) / policy_norm.clamp_min(1e-30)).item()
             )
+
+    def _extra_fields(self, sched: ScheduleState, explained_variance: float) -> dict[str, float]:
+        """Each term's keys, held to its extension's namespace, then the freeze's."""
+        fields: dict[str, float] = {}
+        for term in self.extra_actor_terms:
+            reported = term.finish(
+                iteration=sched.iteration,
+                actor_trained=not self._frozen,
+                explained_variance=explained_variance,
+                grad_ratio=self._grad_ratios.get((term.extension, term.name)),
+            )
+            outside = sorted(key for key in reported if not key.startswith(f"{term.extension}/"))
+            if outside:
+                raise ValueError(
+                    f"actor-loss term {term.extension}/{term.name} reported keys outside its "
+                    f"extension's namespace: {outside}"
+                )
+            fields.update(reported)
+        if self.freeze is not None:
+            fields.update(
+                self.freeze.finish(
+                    iteration=sched.iteration,
+                    scale=sched.actor_lr_scale,
+                    explained_variance=explained_variance,
+                )
+            )
+        return fields
+
+    def extra_state(self) -> list[tuple[str, Any]]:
+        """What the freeze and the terms keep, by name, for the state digest. Empty without them;
+        a term whose state is empty keeps nothing."""
+        out: list[tuple[str, Any]] = []
+        if self.freeze is not None:
+            out.append(("freeze", self.freeze.state()))
+        for term in self.extra_actor_terms:
+            state = term.state()
+            if state:
+                out.append((f"{term.extension}/{term.name}", state))
+        return out
 
     def _critic_only(
         self,
@@ -1084,8 +1135,21 @@ class PPOUpdate(Update):
             "format_version": self.FORMAT_VERSION,
             "cumulative_model_updates": self.model_updates,
         }
-        if self.imitation is not None:
-            state["imitation"] = self.imitation.state()
+        if self.freeze is not None:
+            state["freeze"] = {
+                "format_version": self.freeze.FORMAT_VERSION,
+                "state": self.freeze.state(),
+            }
+        extensions: dict[str, dict[str, Any]] = {}
+        for term in self.extra_actor_terms:
+            kept = term.state()
+            if kept:
+                extensions.setdefault(term.extension, {})[term.name] = {
+                    "format_version": term.format_version,
+                    "state": kept,
+                }
+        if extensions:
+            state["extensions"] = extensions
         (folder / self.STATE_FILE).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
     def load_checkpoint(self, folder: Path, *, strict: bool) -> None:
@@ -1123,8 +1187,52 @@ class PPOUpdate(Update):
                 f"{self.FORMAT_VERSION}"
             )
         self.model_updates = int(state.get("cumulative_model_updates", 0))
-        if self.imitation is not None:
-            self.imitation.load_state(state.get("imitation"))
+        self._refuse_unread(path, state)
+        if self.freeze is not None and "freeze" in state:
+            self._check_format(path, "freeze", state["freeze"], self.freeze.FORMAT_VERSION)
+            self.freeze.load_state(state["freeze"]["state"])
+        stored = state.get("extensions") or {}
+        for term in self.extra_actor_terms:
+            entry = stored.get(term.extension, {}).get(term.name)
+            if entry is None:
+                continue
+            self._check_format(path, f"{term.extension}/{term.name}", entry, term.format_version)
+            term.load_state(entry["state"])
+
+    def _refuse_unread(self, path: Path, state: dict[str, Any]) -> None:
+        """Kept state this update has nothing to hand to is refused rather than dropped.
+
+        Dropping it would resume a different run from the one that was saved: an anchor's
+        coefficient back at its start, a freeze that forgot it had ended. The usual cause is a
+        checkpoint written with an add-on or a schedule this run does not have.
+        """
+        known = {"format_version", "cumulative_model_updates", "freeze", "extensions"}
+        unread = sorted(set(state) - known)
+        if "freeze" in state and self.freeze is None:
+            unread.append("freeze")
+        held = {(term.extension, term.name) for term in self.extra_actor_terms}
+        for extension, entries in (state.get("extensions") or {}).items():
+            unread.extend(
+                f"extensions/{extension}/{name}"
+                for name in sorted(entries)
+                if (extension, name) not in held
+            )
+        if unread:
+            raise CheckpointFormatError(
+                f"{path} keeps state this run has nothing to restore it into: {unread}. It was "
+                "written by a run with an add-on, a schedule or a build this one does not have; "
+                "resume it with the configuration and code that wrote it"
+            )
+
+    @staticmethod
+    def _check_format(path: Path, what: str, entry: Any, expected: int) -> None:
+        """A kept state written at another format is refused, not read as this one."""
+        found = entry.get("format_version") if isinstance(entry, dict) else None
+        if found != expected:
+            raise CheckpointFormatError(
+                f"{path}: {what}'s state was written at format {found} and this build reads "
+                f"format {expected}"
+            )
 
 
 # --------------------------------------------------------------------------
