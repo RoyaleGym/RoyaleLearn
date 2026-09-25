@@ -397,7 +397,16 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: The rungs. Scripted ids, because the point of a rung is that it never changes: a snapshot
     #: improves with the pool and a score against it says nothing on its own.
     probe_opponents: tuple[str, ...] = ("scripted:noop", "scripted:random_legal")
-    #: All three of these are in the run identity, and they are meant to be, although the
+    #: Who the scripted share of ``mix`` trains against. Each scripted battle draws one of these,
+    #: uniformly, at every episode, and so does a pool battle until the first snapshot is
+    #: admitted. The default is the two anchors, which is what every run before this field
+    #: played. A run whose scripted share meets only those never meets an attacker: one never
+    #: plays and the other plays at random, so nothing in the run punishes a missing defence.
+    #: Naming ``scripted:push`` or ``scripted:patient`` here, both of which commit forward, is
+    #: how a run trains against something that attacks. Only training moves: the rating anchor,
+    #: the gate's anchors and the probe's default rungs do not change with this list.
+    scripted_opponents: tuple[str, ...] = ("scripted:noop", "scripted:random_legal")
+    #: The three probe fields are in the run identity, and they are meant to be, although the
     #: integrator measured that two runs differing only in them produce the same weights at every
     #: iteration. That measurement is about the WEIGHTS and the identity's question is wider: a
     #: run that probes plays battles the other does not, writes games into the shared result log
@@ -825,6 +834,48 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
     return problems
 
 
+def _scripted_opponent_problems(ladder: LadderConfig) -> list[str]:
+    """Everything wrong with the scripted share's training opponents.
+
+    Checked here rather than at the first scripted assignment, which the worker would meet as an
+    index it cannot look up, some way into a run. The names follow ``probe_opponents``: a full
+    scripted id or a typo.
+    """
+    from .rollout.scripted import SCRIPTED_NAMES, scripted_id
+
+    known = tuple(scripted_id(name) for name in SCRIPTED_NAMES)
+    problems = [
+        f"ladder.scripted_opponents names {opponent!r}, which is not one of {', '.join(known)}"
+        for opponent in ladder.scripted_opponents
+        if opponent not in known
+    ]
+    repeated = sorted(
+        {name for name in ladder.scripted_opponents if ladder.scripted_opponents.count(name) > 1}
+    )
+    if repeated:
+        # The draw is uniform over the list, so a repeat is a weight nobody wrote down.
+        problems.append(
+            f"ladder.scripted_opponents names {', '.join(repeated)} more than once; the scripted "
+            "share draws uniformly over the list, so a repeat would double that opponent's share"
+        )
+    if not ladder.scripted_opponents:
+        _mirror, pool, scripted = ladder.mix
+        if scripted > 0:
+            problems.append(
+                f"ladder.scripted_opponents is empty and ladder.mix {ladder.mix} gives the "
+                "scripted share battles, so those battles would have nobody to play"
+            )
+        elif pool > 0:
+            # A pool battle plays a scripted opponent until the first snapshot is admitted, so
+            # an empty list with a pool share fails at the very first assignment.
+            problems.append(
+                f"ladder.scripted_opponents is empty and ladder.mix {ladder.mix} gives the pool "
+                "share battles, which play a scripted opponent until the first snapshot is "
+                "admitted"
+            )
+    return problems
+
+
 def check_consistency(config: RunConfig) -> list[str]:
     """Everything wrong with a config, in one list.
 
@@ -953,6 +1004,7 @@ def check_consistency(config: RunConfig) -> list[str]:
     if config.ladder.rater.draws not in ("davidson", "half_win"):
         problems.append(f"ladder.rater.draws {config.ladder.rater.draws!r} is not a draw model")
     problems.extend(_probe_problems(config.ladder))
+    problems.extend(_scripted_opponent_problems(config.ladder))
     problems.extend(_extension_problems(config))
     problems.extend(_alarm_override_problems(config))
     if config.checkpoint.keep < 1:

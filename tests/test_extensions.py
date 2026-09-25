@@ -281,7 +281,9 @@ def test_a_config_an_older_build_wrote_loads_to_the_same_run() -> None:
     said: list[str] = []
     loaded = cfg.load_config(DATA / "config-490c74c-laptop.json", say=said.append)
     assert cfg.config_hash(loaded) == cfg.config_hash(cfg.laptop())
-    assert cfg.config_hash(loaded).startswith("9b55b7465c98")
+    # The laptop profile's hash, which moves whenever a field joins the tree: 9b55b7465c98 until
+    # ladder.scripted_opponents was added.
+    assert cfg.config_hash(loaded).startswith("c3344893bbe0")
     assert len(said) == 1
     assert '"imitation": null' in said[0] and "alarms.imitation_handoff_kl" in said[0]
 

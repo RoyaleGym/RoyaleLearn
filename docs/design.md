@@ -116,9 +116,12 @@ stale. Whether that is what `rating_above_v0` should publish is open.
 
 Also open: the four scripted opponents beyond the two anchors (`first_affordable`, `defend`,
 `push`, `patient`) are still played by nothing in a default run. The matchmaker's scripted slots
-draw from the two anchors, and `probe_opponents` defaults to the same two. Naming them in
-`probe_opponents` is now the way to get a number against them, and what they are worth as
-training opponents is a separate question from what they are worth as rungs.
+draw from `ladder.scripted_opponents`, and both it and `probe_opponents` default to the two
+anchors. Naming them in `probe_opponents` is the way to get a number against them. Naming them in
+`scripted_opponents` is the way to train against them, and the reason to: a run whose scripted
+share meets only the anchors never meets an attacker, so nothing in it punishes a missing
+defence. What they are worth as training opponents is a separate question from what they are
+worth as rungs, and it is still open.
 
 **Every run recorded before this batch optimised a different objective, because the rewards
 reached the buffer one cycle late.** A worker publishes the result of stepping cycle `c` as cycle

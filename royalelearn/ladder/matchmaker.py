@@ -115,6 +115,11 @@ class MixMatchmaker(Matchmaker):
     What stays random is what does not change a seat count: which opponent a pool or scripted
     battle draws, and which seat the learner takes, both redrawn at every episode boundary from
     that battle's own stream.
+
+    A scripted battle draws uniformly from ``scripted_ids``. A run passes
+    ``ladder.scripted_opponents`` there, and the default is the two anchors. The list is only who
+    the learner trains against: the anchors the pool and the gate measure against are set apart
+    from it and stay the two.
     """
 
     #: 2 adds ``n_battles``. A format-1 checkpoint loads; see ``load_checkpoint``.
@@ -137,6 +142,13 @@ class MixMatchmaker(Matchmaker):
         self.mix = mix
         self.learner_id = learner_id
         self.scripted_ids = tuple(scripted_ids)
+        if not self.scripted_ids and (mix[1] > 0.0 or mix[2] > 0.0):
+            # A pool battle plays scripted until the first snapshot is admitted, so a pool share
+            # needs the list as much as a scripted one does.
+            raise ValueError(
+                f"the mixture {mix} has pool or scripted battles and no scripted opponent to "
+                "give them"
+            )
         self._ordinal: dict[int, int] = {}
         self._residents: tuple[int, tuple[str, ...]] | None = None
         self._plan_epoch: int | None = None

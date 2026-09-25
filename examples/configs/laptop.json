@@ -156,6 +156,10 @@
       "scripted:noop",
       "scripted:random_legal"
     ],
+    "scripted_opponents": [
+      "scripted:noop",
+      "scripted:random_legal"
+    ],
     "gate": {
       "champion_games": 1000,
       "champion_lower_bound": 0.52,

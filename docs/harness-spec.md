@@ -302,7 +302,7 @@ RoyaleLearn/
       envspec.py                           EnvFactorySpec, ComponentSpec, the class allow-list
       preflight.py                         engine construction, mask_disagreements, digests, the RAM ledger
       plan.py                              SlotPlanner: geometry, slot maps, the per-slot seed paths
-      scripted.py                          worker-side NoopOpponent / RandomLegalOpponent adapters
+      scripted.py                          worker-side scripted opponents: the two anchors and four strategies
       worker.py                            child process main loop; numpy only, torch is a test failure
       farm.py                              ProcessRolloutSource: spawn, handshake, rounds, failure, restart
       inline.py                            InlineRolloutSource: same semantics, one process, no shm
@@ -1205,6 +1205,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `probe_every_iterations` | 0 | iterations | 0 is off, and off is the default: a probe plays real battles in the parent. Section 11.9 |
 | `probe_games` | 40 | battles per rung | paired, so 20 seeds of the frozen set, each from both sides |
 | `probe_opponents` | `("scripted:noop", "scripted:random_legal")` | | the rungs, refused at config time if one is not a scripted opponent |
+| `scripted_opponents` | `("scripted:noop", "scripted:random_legal")` | | who the scripted share trains against, one drawn uniformly per episode. Refused at config time if one is not a scripted opponent, if one is named twice, or if the list is empty while `mix` has pool or scripted battles. Training only: the gate's anchors and `rater.anchor` do not move. Section 11.3 |
 | `gate.champion_games` | 1000 | battles | 500 seeds times 2 side assignments |
 | `gate.champion_lower_bound` | 0.52 | score rate | requires an observed 55.2% or better, about 35 Elo |
 | `gate.anchor_games` | 200 | battles per anchor | |
@@ -1505,7 +1506,8 @@ def worker_main(w: int, cfg: WorkerConfig, handles: Handles) -> None:
   of numpy per row; routing the scripted share of battles through the GPU would cost a forward pass
   and a boundary crossing for nothing. That share is `ladder.mix`, which ships as
   `(0.50, 0.35, 0.15)` -- mirror, pool, scripted -- so it is a configured proportion rather than a
-  measurement, and a run that changes the mixture changes it here too. They draw from a per-slot generator seeded from
+  measurement, and a run that changes the mixture changes it here too. Which opponents that share
+  meets is `ladder.scripted_opponents`. They draw from a per-slot generator seeded from
   `scripted/worker/{w}/slot/{r}/gen/{g}`, so they stay reproducible.
 - **A battle's assignment changes only at that battle's episode boundary, and the parent decides
   it.** The worker holds no pending plan and makes no draw: when a round reports `episode_end`, the
@@ -2461,7 +2463,7 @@ falls across it.
 |---|---|---|---|
 | mirror | 48 (`mix[0]` = 0.50) | the live policy on both seats | 2 |
 | pool | 34 (`mix[1]` = 0.35) | one of at most `max_resident_opponents` frozen snapshots, PFSP-weighted | 1 |
-| scripted | 14 (`mix[2]` = 0.15) | uniform over `NoopOpponent` and `RandomLegalOpponent(0.9)`, run in the worker | 1 |
+| scripted | 14 (`mix[2]` = 0.15) | uniform over `ladder.scripted_opponents`, run in the worker. The default is the two anchors, `NoopOpponent` and `RandomLegalOpponent(0.9)` | 1 |
 
 Trainable rows per cycle are therefore `n_battles + mirror_battles`, which is 96 + 48 = **144 of 192
 slots, exactly three quarters**, on every cycle of every iteration whatever the master seed.
@@ -2525,7 +2527,16 @@ that a run replayed at a different worker count lays its roles out differently, 
   own and is a warning, not a leak.
 - **A pool slot plays scripted while no snapshot is resident.** Before the first candidate is admitted
   there is nothing to draw from, and a scripted opponent is the honest substitute: it fills the same
-  one seat, so the iteration is still exactly the size it was planned at.
+  one seat, so the iteration is still exactly the size it was planned at. It draws from the same
+  `ladder.scripted_opponents` list as a scripted slot.
+- **The scripted share trains against `ladder.scripted_opponents`.** The list defaults to the two
+  anchors, which is what every run before the field played. A run that meets only those never meets
+  an attacker: `noop` never plays and `random_legal` plays at random, so nothing in the run punishes
+  a missing defence. Naming `scripted:push` or `scripted:patient`, which both commit forward, is how
+  a run trains against something that attacks. The list changes training only. The gate's anchors,
+  the rating anchor and the probe's default rungs stay as they were. The whole config is hashed into
+  the run identity, so adding the field moved every identity, and the default keeps every run's
+  behaviour.
 - **Evaluation is not in this mixture at all** (D10). The studied alternative folds evaluation into the
   rollout worker at a small probability and swaps the live match object in place; that makes "win rate"
   depend on the training curriculum and, in the reference, leaves a worker permanently misconfigured if

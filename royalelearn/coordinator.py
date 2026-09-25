@@ -1208,7 +1208,11 @@ class LearningCoordinator:
             context=self.context,
             run_id=self.run_id,
         )
-        self.matchmaker = MixMatchmaker(config.master_seed, config.ladder)
+        # Who the scripted share trains against is the config's. The pool's anchors above and the
+        # gate's below are not: they stay the two anchors whatever the run trains against.
+        self.matchmaker = MixMatchmaker(
+            config.master_seed, config.ladder, scripted_ids=config.ladder.scripted_opponents
+        )
         self.rater = BradleyTerryDavidsonRater(
             prior_sd=config.ladder.rater.prior_sd,
             anchor=config.ladder.rater.anchor,

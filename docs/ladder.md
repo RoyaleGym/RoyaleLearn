@@ -89,11 +89,22 @@ it unchanged:
 - **50% mirror.** The bot plays its live self. Both seats are trainable, which is where most
   of the training data comes from.
 - **35% pool.** The bot plays one frozen snapshot.
-- **15% scripted.** The bot plays one of the two simple hard-coded opponents below.
+- **15% scripted.** The bot plays one hard-coded opponent from `scripted_opponents`. By
+  default that is one of the two anchors below.
 
 Before the first snapshot exists there is nothing in the pool, so a pool draw falls back to
 scripted (`matchmaker.py`, in `assign`). That keeps the number of trainable rows per battle
 exactly what the mixture says it is, which the loop checks every iteration.
+
+`LadderConfig.scripted_opponents` lets your bot train against opponents that attack. With the
+default, the scripted share only meets the two anchors: one never plays a card and the other
+plays at random. Nothing in such a run punishes a bot that never learned to defend. Set it to,
+for example, `["scripted:push", "scripted:defend", "scripted:patient"]` and each scripted battle
+draws one of those, uniformly, every episode. So does a pool battle until the first snapshot
+exists. `push` and `patient` both commit forward. The list changes training only: the anchors
+the gate and the rating use do not change. A name that is not a scripted opponent, a name listed
+twice, or an empty list while the mixture has pool or scripted battles is refused when the
+config loads.
 
 At most `max_resident_opponents` snapshots are loaded on the GPU at once. That defaults to
 **2**. Those two are redrawn only when the pool changes, never in the middle of an iteration.

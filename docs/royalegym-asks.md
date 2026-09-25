@@ -246,8 +246,8 @@ independently.
 
 The harness uses `royalegym.selfplay` for the parts that are pure bookkeeping over ids: the
 `OpponentPool` registry and its persistence, `expected_score` for the Elo update, and the
-`NoopOpponent` and `RandomLegalOpponent` scripted seats that a run trains against before it has
-any snapshots of its own.
+`NoopOpponent` and `RandomLegalOpponent` scripted seats that a run trains against by default
+(`ladder.scripted_opponents`), including before it has any snapshots of its own.
 
 It deliberately does not use two of the pool's methods. Both reasons are in
 `royalelearn/ladder/pool.py:7-13` and both are about measurement, not taste.
