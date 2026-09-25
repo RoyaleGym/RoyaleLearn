@@ -450,7 +450,8 @@ The pages in `docs/` go further than this README does. If you are about to start
 first one.
 
 - [`docs/running.md`](docs/running.md). Running a job: starting one, reading what scrolls past,
-  the 28 alarms and what to do about each, and the one memory setting worth understanding.
+  the 24 alarms every run has and what to do about each, and the one memory setting worth
+  understanding.
 - [`docs/throughput.md`](docs/throughput.md). How long a training step takes, how to measure your
   own machine instead of trusting a number from someone else's, and which part of your computer
   is holding you up.
@@ -464,6 +465,8 @@ first one.
   not.
 - [`docs/design.md`](docs/design.md). Why the harness is shaped this way: the pieces, the metric
   and the rules it is held to.
+- [`docs/extensions.md`](docs/extensions.md). Adding your own part to a run, such as an extra loss
+  term or alarm, as a package of its own and without editing RoyaleLearn.
 - [`docs/harness-spec.md`](docs/harness-spec.md). The harness field by field, for anyone writing
   or reading the code.
 - [`docs/royalegym-asks.md`](docs/royalegym-asks.md). Everything the trainer reaches across the

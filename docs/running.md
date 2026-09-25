@@ -1,8 +1,8 @@
 # running.md: running a job, and what to do when something looks wrong
 
 This page is for the person sitting in front of a run. It covers starting one, reading what
-scrolls past, the 28 alarms and what to do about each, the two ways a shared machine eats an
-afternoon, and the one memory setting that is worth understanding before you touch it.
+scrolls past, the 24 alarms every run has and what to do about each, the two ways a shared machine
+eats an afternoon, and the one memory setting that is worth understanding before you touch it.
 
 Every command block on this page is written for Windows PowerShell, the shell that opens by
 default on Windows 10 and 11, which is why the paths use backslashes. On macOS or Linux the same
@@ -72,7 +72,7 @@ rather than a traceback (`errors.py`, `cli.py`).
 | A run is already in that folder | `coordinator._refuse_an_occupied_run_dir` | The same config on the same code always gets the same `runs/<run_name>-<run_id>/`. A fresh start refuses that folder once it holds metric rows or checkpoints, before writing anything. `resume` the run that is there, or give the new one another `--run-name`. There is no flag to overwrite it. |
 | Uncommitted code | `cli.refuse_dirty_sources` | `train` refuses when the royalelearn, royalegym or royaleviser package, the engine's data, the config file, or a package your own components come from has uncommitted or untracked files. `resume` and `verify-resume` check the same, apart from the config file. `--allow-dirty` runs anyway. |
 | A worker on another engine build | `rollout/farm.py`, `check_worker_binaries` | Every worker reports the compiled engine file it loaded, and it must be the one the run's identity names. At start this means the engine changed while the run was starting. A worker restarted after a rebuild is refused the same way, so do not rebuild RoyaleSim under a running job. |
-| A file a section names is not the one the config names | each section's `verify`, called by `coordinator._enter` before preflight | A section that reads files names each by path and digest (RoyaleImitate's `warm_start.init` and `imitation.references`, say). At every start, fresh or resumed, each folder is hashed again, and one whose content has changed is refused before preflight runs. `royalelearn artifact-digest <folder>` prints a folder's digest. |
+| A file a section names is not the one the config names | each section's `verify`, called by `coordinator._enter` before preflight | A section that reads files names each by path and digest (RoyaleImitate's `warm_start.init` and `imitation.references`, say). At every start, fresh or resumed, each folder is hashed again, and one whose content has changed is refused before preflight runs. The package that provides the section has a command that prints a folder's digest. |
 
 One thing is a warning and not a refusal: if the projection exceeds what is free on the machine
 *right now*, preflight says so and continues (`preflight.run_preflight`, around line 204). The
@@ -138,7 +138,9 @@ an interrupt is a checkpoint rather than a lost afternoon.
 
 ## 3. The alarms, one group at a time
 
-There are exactly 28. You can print the table without starting a run:
+Every run has the same 24. A run can have more: section 3.6 lists the two a freeze adds, and a
+package that adds a config section documents its own ([extensions.md](extensions.md)). You can
+print the 24 without starting a run:
 
 ```
 ../.venv/Scripts/python -c "
@@ -151,7 +153,7 @@ for a in default_alarms(AlarmConfig()):
 
 Three rules govern all of them, from `metrics/alarms.py`:
 
-- **`warn`** (21 alarms) prints a line and appends to `alarms.jsonl`. The run continues.
+- **`warn`** (17 alarms) prints a line and appends to `alarms.jsonl`. The run continues.
 - **`halt`** (7 alarms) does that, then writes a checkpoint and a diagnostic bundle into
   `bundles/<iteration>/`, then stops the run with exit code 2.
 - **A missing key never fires.** An iteration in which no battle finished carries no `env/`

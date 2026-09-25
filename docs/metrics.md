@@ -210,15 +210,15 @@ the schema gives both a healthy range of exactly 0 to 0, and a non-zero value is
 
 ## How the alarms work
 
-The harness watches 28 conditions, and you do not have to know them to start a run. They are
-defined in `royalelearn/metrics/alarms.py`.
+Every run watches the same 24 conditions, and you do not have to know them to start a run. They
+are defined in `royalelearn/metrics/alarms.py`. A config section from an installed package can add
+its own ([extensions.md](extensions.md)).
 
 Each alarm is one yes-or-no question about one row, plus a patience and a severity.
 
 - **Patience** is how many iterations in a row the condition has to hold before the alarm says
   anything. Most are 3 or 5. `ev_negative` is 50, because a critic being bad early is normal.
-- **Severity `warn`** (21 of them) prints a line and appends to `alarms.jsonl`. The run keeps going.
-  Four of them watch a run that learns from demonstrations and are silent on any other run.
+- **Severity `warn`** (17 of them) prints a line and appends to `alarms.jsonl`. The run keeps going.
 - **Severity `halt`** (7 of them) does all of that, then writes a checkpoint and a diagnostic
   bundle into `bundles/`, then stops the run. `royalelearn train` exits with code 2.
 
@@ -303,8 +303,9 @@ request to a flaky dashboard needs its own try block.
 
 Wiring it in currently means a small edit. `build_sinks` in `royalelearn/metrics/sinks.py` matches
 on the sink `kind` string and raises `ValueError` on one it does not know, so a config cannot name
-a class the package has never heard of. Adding a branch there is three lines. There is no plugin
-system for this today.
+a class the package has never heard of. Adding a branch there is three lines. An extension
+([extensions.md](extensions.md)) cannot add a sink either: it can add metric keys and alarms, not
+places to send them.
 
 ### The live viewer
 

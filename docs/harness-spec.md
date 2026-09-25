@@ -4036,6 +4036,7 @@ section named after it. An extension is an installed package that declares the s
 `royalelearn.extensions` entry-point group; `load_config` asks for the providers of exactly the
 keys RoyaleLearn does not own. What an extension can do is `royalelearn.extensions.Extension` and
 nothing else, and what it may import from RoyaleLearn is `royalelearn.extensions.__all__`.
+[extensions.md](extensions.md) builds one from start to finish.
 
 Learning from demonstrations is one such package, RoyaleImitate, with two sections: `warm_start`
 (starting weights and the freeze schedule) and `imitation` (reference policies and the
