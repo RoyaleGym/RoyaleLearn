@@ -37,7 +37,13 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from .config import RunConfig, geometry
-from .rollout.envspec import canonical_json, digest_of
+from .rollout.envspec import (
+    NOT_RECORDED,
+    NOT_STATED,
+    canonical_json,
+    digest_of,
+    engine_binary,
+)
 from .version import UNKNOWN, __version__, git_describe
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -46,6 +52,8 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "EXCLUDED_FROM_IDENTITY",
     "IDENTITY_FORMAT_VERSION",
+    "NOT_RECORDED",
+    "NOT_STATED",
     "EngineBuild",
     "RunIdentity",
     "catalogue_digest",
@@ -57,6 +65,7 @@ __all__ = [
     "royalegym_provenance",
     "run_id",
     "torch_version",
+    "unverified",
 ]
 
 IDENTITY_FORMAT_VERSION = 1
@@ -89,14 +98,23 @@ EXCLUDED_FROM_IDENTITY: tuple[str, ...] = (
 
 
 class EngineBuild(msgspec.Struct, frozen=True):
-    """Which engine, built from which data, with which cards.
+    """Which engine, built from which data and which code, with which cards.
 
-    Both digests come from ``ClashParallelEnv.config()``: ``calibration_digest`` over the
-    calibration values as loaded, ``build_digest`` over the copies compiled into the extension.
-    The harness hashes no data file of its own -- a digest computed here from the data directory
-    would be a second opinion about what the engine is running on, and a second opinion is
-    exactly what a stale build looks like. ``stale_build_differences`` MUST be empty; it is
-    recorded so that a failure is auditable rather than reconstructed.
+    Every field comes from ``ClashParallelEnv.config()``: ``calibration_digest`` over the
+    calibration values as loaded, ``build_digest`` over the copies compiled into the extension,
+    and ``binary_sha256`` over the extension file itself. The harness hashes no data file of its
+    own -- a digest computed here from the data directory would be a second opinion about what
+    the engine is running on, and a second opinion is exactly what a stale build looks like.
+    ``stale_build_differences`` MUST be empty; it is recorded so that a failure is auditable
+    rather than reconstructed.
+
+    ``binary_sha256`` is the one that was missing, and the data digests could not stand in for
+    it. ``build_digest`` hashes the DATA compiled in, not the Rust: across a rebuild from an
+    edited ``state.rs`` on 2026-09-23 it read ``8952c1c4aa7d7923`` on both sides while the file's
+    hash went to ``04d42611db5d6e5a``, so two runs either side of the rebuild wrote identical
+    blocks and played different games. It is ``NOT_STATED`` for an engine with no compiled file,
+    and ``NOT_RECORDED`` -- the default, which only a decode ever reaches -- for an identity
+    written before this field existed.
     """
 
     engine_class: str
@@ -105,6 +123,7 @@ class EngineBuild(msgspec.Struct, frozen=True):
     catalogue_sha256: str
     path_search: str | None
     stale_build_differences: list[str]
+    binary_sha256: str = NOT_RECORDED
 
 
 class RunIdentity(msgspec.Struct, frozen=True):
@@ -140,13 +159,35 @@ def run_id(identity: RunIdentity) -> str:
 def identity_differences(
     a: RunIdentity, b: RunIdentity
 ) -> dict[str, tuple[Any, Any]]:
-    """Every field in which two identities differ, so that a refusal can name all of them."""
+    """Every field in which two identities differ, so that a refusal can name all of them.
+
+    A field one side never recorded is not a difference: nobody can show the two disagree. It is
+    not a match either, and ``unverified`` is where it is said. Only that one field is set aside;
+    the rest of the block it sits in is compared as usual.
+    """
     out: dict[str, tuple[Any, Any]] = {}
     for name in a.__struct_fields__:
         left, right = getattr(a, name), getattr(b, name)
-        if left != right:
+        compare_left, compare_right = left, right
+        if name == "engine_build" and NOT_RECORDED in (left.binary_sha256, right.binary_sha256):
+            compare_left = msgspec.structs.replace(left, binary_sha256=NOT_RECORDED)
+            compare_right = msgspec.structs.replace(right, binary_sha256=NOT_RECORDED)
+        if compare_left != compare_right:
             out[name] = (left, right)
     return out
+
+
+def unverified(a: RunIdentity, b: RunIdentity) -> list[str]:
+    """What a comparison of two identities could not check, one sentence each."""
+    said: list[str] = []
+    if NOT_RECORDED in (a.engine_build.binary_sha256, b.engine_build.binary_sha256):
+        said.append(
+            "engine binary: the checkpoint was written before runs recorded the engine binary, so "
+            "whether this process runs the same engine cannot be checked. The data digests and "
+            "the catalogue still matched. Now running binary "
+            f"{b.engine_build.binary_sha256}."
+        )
+    return said
 
 
 def catalogue_digest(cards: Sequence[Any]) -> str:
@@ -177,6 +218,7 @@ def engine_build(
         catalogue_sha256=catalogue_digest(cards),
         path_search=path_search,
         stale_build_differences=list(stale_build_differences),
+        binary_sha256=engine_binary(env_config),
     )
 
 
@@ -279,14 +321,14 @@ def dirty_sources(config_path: Path | None = None) -> tuple[str, ...]:
     anything a component reads at call time from somewhere else. Hashing each resolved component's
     source would be the thorough answer and it is a much larger one.
 
-    THE ENGINE'S COMPILED CODE IS THE GAP WORTH KNOWING ABOUT. The extension is installed rather
-    than imported from a checkout, so there is no working tree here to ask, and it exposes no
-    build commit: ``build_digest`` is over the DATA compiled into it, not over the Rust it was
-    compiled from. A run can therefore execute an engine built from uncommitted source and nothing
-    anywhere says so. Reaching into a sibling checkout to guess at that would put back the guessed
-    path this function just removed; the fix is for the extension to carry its own build commit,
-    and this reads it the way it reads the data directory once it does. Measured and put to the
-    engine's session by the integrator, 2026-09-22.
+    THE ENGINE'S COMPILED CODE is outside this function, and since 2026-09-24 it is inside the
+    identity instead. The extension is installed rather than imported from a checkout, so there is
+    no working tree here to ask. What the engine does publish is the hash of the file it loaded,
+    and ``EngineBuild.binary_sha256`` records it, so two runs on two builds are two runs. What is
+    still not published is which COMMIT built that file, so an engine built from uncommitted
+    source is identified but not attributable. Reaching into a sibling checkout to guess would
+    put back the guessed path this function removed. First measured and put to the engine's
+    session by the integrator, 2026-09-22; the binary hash was RoyaleGym's answer.
 
     The first version of this checked ``git describe --dirty`` on two hardcoded packages. It
     missed the engine's data, missed RoyaleViser, and was blind to untracked files -- including,

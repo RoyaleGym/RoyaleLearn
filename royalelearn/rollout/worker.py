@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from ..determinism import BLAS_THREAD_VARS, apply_blas_thread_env
+from .envspec import NOT_STATED, engine_binary
 
 #: How often a worker asks whether its parent is still there. Often enough that a killed run
 #: does not leave a tree behind for long, rarely enough to cost nothing in a round.
@@ -81,6 +82,9 @@ class StartupReport(msgspec.Struct, frozen=True):
     thread_env: dict[str, str]
     shards: int
     battles: int
+    #: The engine binary THIS process loaded, stated rather than assumed. A worker restarted
+    #: after a rebuild loads the new file, and the parent's measurement at start cannot see it.
+    engine_binary_sha256: str = NOT_STATED
 
 
 def preamble() -> None:
@@ -165,6 +169,9 @@ def worker_main(
                     thread_env={name: os.environ.get(name, "") for name in BLAS_THREAD_VARS},
                     shards=len(shards),
                     battles=config.geometry.games_per_shard * len(shards),
+                    engine_binary_sha256=engine_binary(shards[0].vec.envs[0].config())
+                    if shards
+                    else NOT_STATED,
                 )
             ),
         )

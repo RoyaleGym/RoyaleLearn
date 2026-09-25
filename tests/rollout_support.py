@@ -304,6 +304,30 @@ class HangingReward:
 # Driving a source
 # ---------------------------------------------------------------------------
 
+#: The binary a ``StampedMockEngine`` claims to be. Any fixed value a real engine would never
+#: produce will do; what matters is that it is not the "not stated" MockEngine reports.
+STAMPED_BINARY = "5e1f5e1f5e1f5e1f"
+
+
+class StampedMockEngine:
+    """A MockEngine that states an engine binary, the way RustEngine does.
+
+    MockEngine states none, and a worker that stopped stating its binary would then agree with
+    the parent by default: both sides "not stated", and a test comparing them passes whether the
+    worker reported anything or not. This engine gives the comparison something to disagree
+    about without needing the compiled extension.
+    """
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> Any:
+        from royalegym.mock_engine import MockEngine
+
+        class _Stamped(MockEngine):
+            def config(self) -> dict[str, Any]:
+                return {**super().config(), "engine_binary_sha256": STAMPED_BINARY}
+
+        return _Stamped(*args, **kwargs)
+
+
 #: Where a worker process finds the pieces above. It is this module, named the way a worker's
 #: component allow-list takes it: the tests sit on the path a spawned child inherits.
 SUPPORT_MODULE = "rollout_support"
@@ -319,6 +343,7 @@ def rollout_config(
     source: str = "inline",
     reward: Any = None,
     master_seed: int = 4242,
+    engine: str | None = None,
     **rollout: Any,
 ) -> Any:
     """A run small enough to drive in a test and shaped like a real one.
@@ -328,7 +353,7 @@ def rollout_config(
     """
     from royalelearn import config as cfg
 
-    env = cfg.default_env_spec(cfg.MOCK_ENGINE, max_steps=max_steps)
+    env = cfg.default_env_spec(engine or cfg.MOCK_ENGINE, max_steps=max_steps)
     if reward is not None:
         env = _replace(env, reward_fn=reward)
     return cfg.RunConfig(

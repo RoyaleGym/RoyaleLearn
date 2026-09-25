@@ -1151,7 +1151,15 @@ class LearningCoordinator:
             return InlineRolloutSource(self.config, self.spec, self.report.table, **kwargs)
         from .rollout.farm import ProcessRolloutSource
 
-        return ProcessRolloutSource(self.config, self.spec, self.report.table, **kwargs)
+        # The workers load the engine themselves, so they are held to the binary the identity
+        # names; the inline source runs in this process and loaded the file that was measured.
+        return ProcessRolloutSource(
+            self.config,
+            self.spec,
+            self.report.table,
+            expected_engine_binary=self.identity.engine_build.binary_sha256,
+            **kwargs,
+        )
 
     def _build_ladder(self) -> None:
         """The pool, the archive, the fit, the seed set and the gate.

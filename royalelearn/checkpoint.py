@@ -33,7 +33,7 @@ import numpy as np
 
 from .api.checkpoint import Checkpointable, CheckpointStore, Manifest, RngState
 from .errors import CheckpointFormatError, IdentityMismatch
-from .identity import RunIdentity, identity_differences
+from .identity import RunIdentity, identity_differences, unverified
 
 __all__ = [
     "CHECKPOINT_FORMAT_VERSION",
@@ -424,6 +424,8 @@ def check_resume(
     drift = identity_differences(manifest.identity, identity)
     if drift and not allow_drift:
         raise IdentityMismatch(drift)
+    for sentence in unverified(manifest.identity, identity):
+        print(f"not checked on resume: {sentence}")
     differences = config_differences(manifest.config, config)
     for name, (was, now) in differences.items():
         print(f"config differs from the checkpoint's: {name}: {was!r} -> {now!r}")

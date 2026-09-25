@@ -953,6 +953,8 @@ class EngineBuild(msgspec.Struct, frozen=True):
     catalogue_sha256: str             # over [(card.name, card.card_id, card.elixir, card.kind), ...]
     path_search: str | None
     stale_build_differences: list[str] # MUST be empty; recorded so a failure is auditable
+    binary_sha256: str = "not recorded"  # config()["engine"]["params"]["engine_binary_sha256"]:
+                                      # the extension FILE; "not stated" for an engine with none
 
 class RunIdentity(msgspec.Struct, frozen=True):
     format_version: int               # of this struct; currently 1
@@ -989,6 +991,30 @@ data file of its own: a digest computed here from `royalegym.protocol.data_dir()
 opinion about what the engine is running on, and a second opinion is exactly what a stale build looks
 like. When they differ, `stale_build_differences` carries the engine's own list verbatim and the run
 refuses to start (section 7.7).
+
+**The binary is the third field, and the two digests cannot stand in for it.** `build_digest` hashes
+the DATA compiled into the extension, not the Rust it was compiled from. Across a rebuild from an
+edited `state.rs` on 2026-09-23 it read `8952c1c4aa7d7923` on both sides while the extension file's
+hash went to `04d42611db5d6e5a` **[M]**. Until 2026-09-24 `engine_build` dropped that hash, so two
+runs either side of the rebuild wrote identical blocks and played different games. It is read by one
+rule, `envspec.engine_binary`, from the env's own config: RustEngine states the hash of the file it
+loaded, and an engine with no compiled file is `"not stated"`. What is still not published is which
+commit built the file, so an engine built from uncommitted source is identified but not attributable.
+
+Three things follow from recording it.
+
+- **An identity written before the field existed** decodes with `"not recorded"`. That is neither a
+  match nor a mismatch, because nobody looked. A resume compares the rest of `engine_build` as usual,
+  leaves the binary out of the comparison, and prints `not checked on resume: engine binary: ...`.
+  Refusing would strand every earlier checkpoint over a difference nobody can show. Passing in
+  silence would claim a check that never happened.
+- **Every rollout worker states the binary it loaded** in its startup report, by the same rule, and
+  the farm refuses a worker whose binary is not the identity's. That covers the window between the
+  parent measuring the engine and the workers loading it.
+- **A restarted worker is checked again**, which is the case that matters. The parent measured the
+  file at start, and a worker restarted after somebody rebuilt the engine loads the new one. It
+  comes up healthy on another game. It is refused in those words, not as a replacement that failed
+  to start, and it is stopped rather than left running.
 
 ### 5.4 What a resume reproduces, operationally
 

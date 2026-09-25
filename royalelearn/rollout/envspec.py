@@ -63,6 +63,28 @@ def canonical_json(value: Any) -> bytes:
     return _ENCODER.encode(value)
 
 
+#: The engine has no compiled file to name. MockEngine is one; a run on it is not missing a fact.
+NOT_STATED = "not stated"
+#: The identity was written before runs recorded the engine binary. Not a match and not a
+#: mismatch: nobody looked, and a resume says so rather than guessing either way.
+NOT_RECORDED = "not recorded"
+
+
+def engine_binary(env_config: Any) -> str:
+    """The engine binary's hash, as the environment's own ``config()`` states it.
+
+    One rule, used by the parent for the identity and by every rollout worker for its startup
+    report, because the same question answered two ways is two answers. ``RustEngine`` puts the
+    hash of the extension FILE it loaded in its config; an engine that states none is
+    ``NOT_STATED``. It is the binary THIS process loaded, which is why each worker states its own
+    rather than inheriting the parent's: a worker restarted after a rebuild loads the new file.
+    """
+    engine = env_config.get("engine") if isinstance(env_config, dict) else None
+    params = engine.get("params") if isinstance(engine, dict) else None
+    stated = params.get("engine_binary_sha256") if isinstance(params, dict) else None
+    return str(stated) if stated else NOT_STATED
+
+
 def digest_of(value: Any) -> str:
     """sha256 of ``canonical_json(value)``, as hex."""
     return hashlib.sha256(canonical_json(value)).hexdigest()

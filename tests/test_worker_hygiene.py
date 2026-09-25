@@ -125,6 +125,17 @@ def _sources(
     return source, buffer, report, planner
 
 
+def _parent_binary(source: Any) -> str:
+    """What the parent's own environment states about its engine binary, for this config."""
+    from royalelearn.rollout.envspec import engine_binary
+
+    env = source.config.env.factory(tuple(source.config.extra_component_modules))()
+    try:
+        return engine_binary(env.config())
+    finally:
+        env.close()
+
+
 def _step(source: Any, timeout: float = 30.0) -> Any:
     """One round, answered with no-ops."""
     round_ = source.next_round(timeout)
@@ -476,6 +487,77 @@ def test_a_token_left_by_an_earlier_command_is_slept_through() -> None:
     assert seen is True, "a stale token's wake was taken as the answer"
     assert tokens.sleeps == 2
     assert tokens.count == 0
+
+
+def test_each_worker_states_the_engine_binary_it_loaded() -> None:
+    """Computed in the child, from its own environment, and not a default that happens to agree.
+
+    On MockEngine both sides say "not stated", so a worker that reported nothing would still
+    match. This engine states a binary, so the report has to carry it to pass.
+    """
+    from rollout_support import STAMPED_BINARY
+
+    source, buffer, _report, planner = _sources(engine="rollout_support.StampedMockEngine")
+    try:
+        assert _parent_binary(source) == STAMPED_BINARY
+        source.expected_engine_binary = STAMPED_BINARY
+        source.begin_iteration(planner.mirror_plan(0), buffer, 0)
+        for said in source.startup_reports():
+            assert said is not None
+            assert said.engine_binary_sha256 == STAMPED_BINARY
+    finally:
+        source.close()
+        buffer.close()
+
+
+def test_workers_on_another_binary_than_the_identity_are_refused_at_start() -> None:
+    """The window between the parent measuring the engine and the workers loading it."""
+    from royalelearn.errors import PreflightError
+
+    source, buffer, _report, planner = _sources(engine="rollout_support.StampedMockEngine")
+    try:
+        source.expected_engine_binary = "0123456789abcdef"
+        with pytest.raises(PreflightError, match="0123456789abcdef"):
+            source.begin_iteration(planner.mirror_plan(0), buffer, 0)
+    finally:
+        source.close()
+        buffer.close()
+
+
+def test_a_replacement_on_another_engine_binary_is_refused_and_stopped() -> None:
+    """The case a rebuild during a run produces, through the real restart path.
+
+    The parent measured the engine at start; a worker restarted later loads whatever file is on
+    disk by then. Here the run's identity names a binary no worker has, so the replacement comes
+    up healthy and on the wrong engine -- which must be refused in those words, not reported as
+    a replacement that failed to start, and must not be left running.
+    """
+    from royalelearn.errors import PreflightError
+
+    source, buffer, report, planner = _sources(round_timeout_s=3.0)
+    try:
+        source.begin_iteration(planner.mirror_plan(0), buffer, 0)
+        _step(source, timeout=10.0)
+        victim = report.geometry.workers - 1
+        source.expected_engine_binary = "0123456789abcdef"
+        source.workers[victim].process.terminate()
+        with pytest.raises(WorkerTimeout):
+            for _ in range(CYCLES):
+                _step(source, timeout=3.0)
+        source.drain_failures()
+
+        with pytest.raises(PreflightError) as refused:
+            source.restart(victim)
+        message = str(refused.value)
+        assert "restarted rollout worker loaded a different engine binary" in message
+        assert "0123456789abcdef" in message
+        assert "its replacement did not" not in message, "a healthy replacement was called a crash"
+        replacement = source.workers[victim].process
+        replacement.join(timeout=10.0)
+        assert not replacement.is_alive(), "the refused replacement was left running"
+    finally:
+        source.close()
+        buffer.close()
 
 
 def test_a_replacement_that_cannot_start_says_the_worker_had_already_started() -> None:

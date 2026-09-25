@@ -34,6 +34,7 @@ import numpy as np
 
 from ..api.rollout import EpisodeRecord, WorkerFailure
 from ..errors import PreflightError, WorkerTimeout
+from .envspec import NOT_RECORDED, NOT_STATED
 from .inline import (
     COMMAND_CLOSE,
     PlanMessage,
@@ -90,6 +91,35 @@ class _Worker:
         self.report: StartupReport | None = None
 
 
+def check_worker_binaries(expected: str, reports: list[Any], *, restarted: bool = False) -> None:
+    """Refuse a worker that loaded a different engine binary from the one the identity names.
+
+    The identity is measured in the parent at start. A worker loads the extension itself, and a
+    worker restarted after somebody rebuilt the engine loads the new file: its battles are a
+    different game, filed under the old identity, and nothing else in the run can tell. This is
+    the one place both numbers are in hand. An engine that states no binary has nothing to hold
+    a worker to, and neither does an identity that never recorded one.
+    """
+    if expected in (NOT_STATED, NOT_RECORDED):
+        return
+    wrong = [r for r in reports if r is not None and r.engine_binary_sha256 != expected]
+    if not wrong:
+        return
+    listed = "\n".join(f"  worker {r.worker}: {r.engine_binary_sha256}" for r in wrong)
+    if restarted:
+        raise PreflightError(
+            "a restarted rollout worker loaded a different engine binary from the one this run "
+            f"started on ({expected}):\n{listed}\nThe engine was rebuilt under a running run. "
+            "Its battles would be a different game filed under this run's identity, so the "
+            "replacement is refused rather than admitted."
+        )
+    raise PreflightError(
+        f"the run's identity names engine binary {expected}, and these rollout workers loaded "
+        f"another:\n{listed}\nThe engine changed between the parent measuring it and the "
+        "workers loading it. Start again once nothing is rebuilding it."
+    )
+
+
 class ProcessRolloutSource(RolloutSourceBase):
     """``K`` worker processes, each holding ``shards_per_worker`` vec envs."""
 
@@ -103,12 +133,16 @@ class ProcessRolloutSource(RolloutSourceBase):
         codec: str = "royalelearn.rollout.codec.SpatialObsCodec",
         geometry: Geometry | None = None,
         viser: bool = False,
+        expected_engine_binary: str = NOT_STATED,
     ) -> None:
         super().__init__(config, spec, codec_table, run_id=run_id, codec=codec, geometry=geometry)
         import atexit
         import multiprocessing
 
         self.viser = viser
+        #: The binary the run's identity names. Every worker, including every replacement, must
+        #: report this one; see ``check_worker_binaries``.
+        self.expected_engine_binary = expected_engine_binary
         self.context = multiprocessing.get_context("spawn")
         self.workers: list[_Worker] = []
         self._started = False
@@ -129,6 +163,7 @@ class ProcessRolloutSource(RolloutSourceBase):
                 time.sleep(self.config.rollout.launch_delay_s)
         for worker in self.workers:
             worker.report = self._await_report(worker)
+        check_worker_binaries(self.expected_engine_binary, [w.report for w in self.workers])
         self._started = True
 
     def _build_worker(self, index: int) -> _Worker:
@@ -436,6 +471,14 @@ class ProcessRolloutSource(RolloutSourceBase):
                 "the run -- an engine rebuilt against different data, a file moved, a device "
                 f"taken -- rather than a configuration that was never going to work.\n{exc}"
             ) from exc
+        # Outside the handler above on purpose: this replacement DID come up, on another binary,
+        # and "its replacement did not" would send the reader looking for a crash that is not
+        # there. It is stopped before the refusal, so a refused worker does not keep running.
+        try:
+            check_worker_binaries(self.expected_engine_binary, [child.report], restarted=True)
+        except PreflightError:
+            self._terminate(child)
+            raise
         # Up, and out of the iteration: its battles started from a new seed, so the matches its
         # slots were collecting are gone and its cells arrive invalid until the next plan.
         self.live[worker] = False
