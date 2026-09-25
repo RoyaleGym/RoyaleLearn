@@ -59,7 +59,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.buffer import ObsCodec
     from ..api.rollout import EnvSpec, RolloutRound, SlotPlan
 
-__all__ = ["AdvantageInputs", "Batch", "Minibatch", "RectBuffer", "batch_count"]
+__all__ = ["AdvantageInputs", "Batch", "Minibatch", "RectBuffer", "batch_count", "empty_obs"]
 
 
 class Minibatch(NamedTuple):
@@ -212,6 +212,35 @@ def batch_count(n_samples: int, batch_size: int) -> int:
     dropped. An epoch smaller than one batch is one batch, which is what it already was.
     """
     return max(1, int(n_samples) // max(1, int(batch_size)))
+
+
+def empty_obs(spec: EnvSpec, count: int, *, frames: int, device: Any) -> ObsBatch:
+    """The tensors ``count`` stacked observations are unpacked into.
+
+    One function for the buffer and for everything else that decodes codec rows -- a probe set,
+    a demonstration shard -- so the shapes an update reads and the shapes a cloned actor is
+    trained on cannot drift apart.
+    """
+    planes, tiles_y, tiles_x = spec.spatial_shape
+    return ObsBatch(
+        spatial=torch.empty(
+            (count, frames * planes, tiles_y, tiles_x), dtype=torch.float32, device=device
+        ),
+        mask_planes=torch.empty(
+            (count, frames * spec.hand_size, tiles_y, tiles_x), dtype=torch.float32, device=device
+        ),
+        vector=torch.empty((count, spec.vector_size), dtype=torch.float32, device=device),
+        mask=torch.empty((count, spec.n_actions), dtype=torch.bool, device=device),
+        card_ids=(
+            torch.empty(
+                (count, frames * spec.obs_space["card_ids"].shape[0], tiles_y, tiles_x),
+                dtype=torch.int64,
+                device=device,
+            )
+            if "card_ids" in spec.obs_space
+            else None
+        ),
+    )
 
 
 class RectBuffer(ExperienceBuffer):
@@ -695,32 +724,7 @@ class RectBuffer(ExperienceBuffer):
         the caching allocator hands back the same blocks, and a reused tensor would be overwritten
         while a backward pass still held it.
         """
-        spec = self.spec
-        frames = self.frame_stack
-        planes, tiles_y, tiles_x = spec.spatial_shape
-        return ObsBatch(
-            spatial=torch.empty(
-                (count, frames * planes, tiles_y, tiles_x),
-                dtype=torch.float32,
-                device=self.device,
-            ),
-            mask_planes=torch.empty(
-                (count, frames * spec.hand_size, tiles_y, tiles_x),
-                dtype=torch.float32,
-                device=self.device,
-            ),
-            vector=torch.empty((count, spec.vector_size), dtype=torch.float32, device=self.device),
-            mask=torch.empty((count, spec.n_actions), dtype=torch.bool, device=self.device),
-            card_ids=(
-                torch.empty(
-                    (count, frames * spec.obs_space["card_ids"].shape[0], tiles_y, tiles_x),
-                    dtype=torch.int64,
-                    device=self.device,
-                )
-                if "card_ids" in spec.obs_space
-                else None
-            ),
-        )
+        return empty_obs(self.spec, count, frames=self.frame_stack, device=self.device)
 
     def _statics(self) -> Tensor:
         if self._static_planes is None:

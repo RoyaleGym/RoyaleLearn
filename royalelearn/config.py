@@ -36,12 +36,16 @@ __all__ = [
     "AlarmConfig",
     "ArchSpec",
     "CheckpointConfig",
+    "CoefSpec",
     "ConstantSpec",
     "DeterminismConfig",
     "DoctorConfig",
+    "FieldMLPReferenceSpec",
     "GateConfig",
     "GeometricSpec",
     "Geometry",
+    "ImitationConfig",
+    "InitSpec",
     "LadderConfig",
     "LinearSpec",
     "LrBackoffConfig",
@@ -51,15 +55,20 @@ __all__ = [
     "PPOConfig",
     "PiecewiseConstantSpec",
     "RaterConfig",
+    "ReferenceKLSpec",
+    "ReferenceSpec",
     "RolloutConfig",
+    "RowCondition",
     "RunConfig",
     "ScheduleSpec",
     "SinkSpec",
+    "SnapshotReferenceSpec",
     "check_consistency",
     "config_hash",
     "default_env_spec",
     "dump_config",
     "geometry",
+    "imitation_problems",
     "laptop",
     "load_config",
     "many_core",
@@ -467,6 +476,14 @@ class AlarmConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     transitivity_residual: float = 0.10
     capacity_ratio: float = 1.5
     gate_failures: int = 5
+    #: Section 19.9. Every imitation alarm warns and none halts: a halted treatment run would be
+    #: censored out of the comparison it is part of.
+    imitation_ref_kl_warn: float = 1.0
+    imitation_lambda_saturated_patience: int = 10
+    imitation_handoff_window: int = 20
+    imitation_handoff_kl: float = 0.05
+    imitation_handoff_clip: float = 0.3
+    imitation_ev_at_unfreeze: float = 0.3
     disabled: list[str] = []
     patience_overrides: dict[str, int] = {}
     severity_overrides: dict[str, str] = {}
@@ -510,6 +527,186 @@ class DoctorConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: strictly worse than the slow run it replaced, because a legible penalty becomes an
     #: illegible late crash.
     vram_headroom_mb: int = 256
+
+
+# --------------------------------------------------------------------------
+# Learning from demonstrations (section 19)
+# --------------------------------------------------------------------------
+
+#: The two ways a reference-KL regulariser can compare policies (section 19.7).
+KL_FACTORS = ("joint", "noop_marginal")
+#: The comparisons an ``exclude_when`` condition can make.
+ROW_OPS = ("<", "<=", ">", ">=")
+
+
+class InitSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
+    """The actor's starting weights: an actor artifact and its digest (section 19.4)."""
+
+    path: str
+    #: The artifact digest of the folder (section 19.2), not a hash of the weights file alone.
+    sha256: str
+    #: How far the loaded actor's log-probabilities on the artifact's probe rows may be from the
+    #: ones recorded when it was written.
+    self_test_atol: float = 1e-5
+
+
+class SnapshotReferenceSpec(
+    msgspec.Struct,
+    frozen=True,
+    forbid_unknown_fields=True,
+    kw_only=True,
+    tag_field="kind",
+    tag="snapshot",
+):
+    """A reference policy that is an actor artifact, run on a second copy of the run's actor."""
+
+    path: str
+    sha256: str
+
+
+class FieldMLPReferenceSpec(
+    msgspec.Struct,
+    frozen=True,
+    forbid_unknown_fields=True,
+    kw_only=True,
+    tag_field="kind",
+    tag="field_mlp",
+):
+    """A reference over named observation fields that says only how likely a play is."""
+
+    path: str
+    sha256: str
+
+
+ReferenceSpec = SnapshotReferenceSpec | FieldMLPReferenceSpec
+
+
+class RowCondition(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
+    """One element of a named vector field compared with a value (section 19.7)."""
+
+    field: str
+    index: int = 0
+    op: str
+    value: float
+
+
+class CoefSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
+    """The adaptive coefficient of section 19.8: where it starts and how it may move."""
+
+    start: float
+    max: float = 10.0
+    #: A floor that may fall over the run: high while the anchor is protected, then low.
+    min: ScheduleSpec = ConstantSpec(0.0)
+    up: float = 1.5
+    down: float = 1.5
+    #: The dead band around the budget: no move while ``budget/band <= kl <= band*budget``.
+    band: float = 1.5
+
+
+class ReferenceKLSpec(
+    msgspec.Struct,
+    frozen=True,
+    forbid_unknown_fields=True,
+    kw_only=True,
+    tag_field="kind",
+    tag="reference_kl",
+):
+    """KL(reference || policy) on the choice rows, held to a budget (sections 19.7-19.8)."""
+
+    name: str
+    reference: str
+    factor: str = "joint"
+    exclude_when: list[RowCondition] = []
+    budget: ScheduleSpec
+    coef: CoefSpec
+
+
+RegulariserSpec = ReferenceKLSpec
+
+
+class ImitationConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
+    """Section 19.1. Absent from a run means nothing in section 19 runs."""
+
+    init: InitSpec | None = None
+    #: Multiplies the actor's learning rate after the backoff has set it. Zero freezes the actor.
+    actor_lr_scale: ScheduleSpec | None = None
+    references: dict[str, ReferenceSpec] = {}
+    regularisers: list[RegulariserSpec] = []
+
+
+def _schedule_values(spec: ScheduleSpec) -> list[float]:
+    """Every value a schedule can take, for a bound that has to hold over the whole run."""
+    if isinstance(spec, ConstantSpec):
+        return [spec.value]
+    if isinstance(spec, PiecewiseConstantSpec):
+        return [value for _, value in spec.points]
+    return [spec.start, spec.end]
+
+
+def imitation_problems(imitation: ImitationConfig | None) -> list[str]:
+    """What is wrong with an ``imitation`` block that can be seen without building anything.
+
+    Fields that need the environment -- an ``exclude_when`` naming a vector field -- are checked
+    at preflight, where the layout is known.
+    """
+    if imitation is None:
+        return []
+    problems: list[str] = []
+    where = "imitation"
+    if imitation.init is not None and not imitation.init.self_test_atol >= 0.0:
+        problems.append(f"{where}.init.self_test_atol must be at least 0")
+    if imitation.actor_lr_scale is not None and any(
+        not value >= 0.0 for value in _schedule_values(imitation.actor_lr_scale)
+    ):
+        problems.append(f"{where}.actor_lr_scale takes a negative value")
+    for name, reference in imitation.references.items():
+        if not name or "/" in name:
+            problems.append(f"{where}.references: {name!r} is not a usable name")
+        if not reference.path or not reference.sha256:
+            problems.append(f"{where}.references.{name} needs both a path and a sha256")
+    seen: set[str] = set()
+    for index, reg in enumerate(imitation.regularisers):
+        label = f"{where}.regularisers[{index}] ({reg.name!r})"
+        if not reg.name or "/" in reg.name or reg.name != reg.name.strip():
+            problems.append(f"{label}: the name must be one metric segment")
+        if reg.name in seen:
+            problems.append(f"{label}: two regularisers are named {reg.name!r}")
+        seen.add(reg.name)
+        reference = imitation.references.get(reg.reference)
+        if reference is None:
+            declared = ", ".join(sorted(imitation.references)) or "none"
+            problems.append(
+                f"{label}: reference {reg.reference!r} is not declared (declared: {declared})"
+            )
+        if reg.factor not in KL_FACTORS:
+            problems.append(f"{label}: factor {reg.factor!r} is not one of {', '.join(KL_FACTORS)}")
+        elif reg.factor == "joint" and isinstance(reference, FieldMLPReferenceSpec):
+            problems.append(
+                f"{label}: a field_mlp reference says only how likely a play is, so it can back "
+                "factor 'noop_marginal' and not 'joint'"
+            )
+        for condition in reg.exclude_when:
+            if condition.op not in ROW_OPS:
+                problems.append(
+                    f"{label}: exclude_when op {condition.op!r} is not one of {', '.join(ROW_OPS)}"
+                )
+            if condition.index < 0:
+                problems.append(f"{label}: exclude_when index {condition.index} is negative")
+        if any(not value >= 0.0 for value in _schedule_values(reg.budget)):
+            problems.append(f"{label}: the budget takes a negative value")
+        coef = reg.coef
+        floors = _schedule_values(coef.min)
+        if any(not value >= 0.0 for value in (coef.start, coef.max, *floors)):
+            problems.append(f"{label}: a coefficient (start, max or min) is negative")
+        elif coef.max < max(floors):
+            problems.append(
+                f"{label}: coef.max {coef.max:g} is below the largest floor coef.min takes, "
+                f"{max(floors):g}"
+            )
+        for knob in ("up", "down", "band"):
+            if not getattr(coef, knob) > 1.0:
+                problems.append(f"{label}: coef.{knob} must be above 1")
+    return problems
 
 
 def default_env_spec(engine: str = RUST_ENGINE, *, max_steps: int = 480) -> EnvFactorySpec:
@@ -568,6 +765,8 @@ class RunConfig(msgspec.Struct, forbid_unknown_fields=True):
     alarms: AlarmConfig = AlarmConfig()
     determinism: DeterminismConfig = DeterminismConfig()
     doctor: DoctorConfig = DoctorConfig()
+    #: Section 19. None -- the default -- runs nothing of it and leaves the identity as it was.
+    imitation: ImitationConfig | None = None
 
 
 # --------------------------------------------------------------------------
@@ -947,6 +1146,7 @@ def check_consistency(config: RunConfig) -> list[str]:
     if config.ladder.rater.draws not in ("davidson", "half_win"):
         problems.append(f"ladder.rater.draws {config.ladder.rater.draws!r} is not a draw model")
     problems.extend(_probe_problems(config.ladder))
+    problems.extend(imitation_problems(config.imitation))
     if config.checkpoint.keep < 1:
         problems.append("checkpoint.keep must be at least 1")
     if config.determinism.tier not in TIERS:

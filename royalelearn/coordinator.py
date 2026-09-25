@@ -1023,6 +1023,12 @@ class LearningCoordinator:
             torch.cuda.manual_seed_all(derive_int(config.master_seed, stream_path(TORCH_CUDA)))
 
         self.device = self._resolve_device(torch)
+        # Before preflight, which takes a minute against the real engine: a stale digest is a
+        # refusal that needs nothing built to be found, and it holds on a resume as on a fresh
+        # start, because the identity carries the digests and only this makes them true.
+        from .imitation.init import verify_imitation_files
+
+        self.imitation_files = verify_imitation_files(config.imitation)
         self.report = run_preflight(
             config,
             codec=self.codec_path,
@@ -1058,6 +1064,9 @@ class LearningCoordinator:
         self.codec = build_codec(
             self.codec_path, self.spec, report.table, tuple(config.extra_component_modules)
         )
+        # Before the buffer's shared segment and the workers exist: a refused init raises out of
+        # __enter__, which no __exit__ follows, so anything built before it would be left behind.
+        self._initialise_from_imitation()
         self.buffer = RectBuffer(
             self.spec,
             self.codec,
@@ -1193,6 +1202,45 @@ class LearningCoordinator:
             **kwargs,
         )
 
+    def row_codec(self) -> Any:
+        """This run's codec as a pack and a decode, for rows that did not come through the
+        buffer: a probe set, a demonstration shard."""
+        from .imitation.rows import RowCodec
+
+        assert self.report is not None
+        return RowCodec(self.spec, self.codec, self.report.statics, self.device)
+
+    def _initialise_from_imitation(self) -> None:
+        """Section 19.4, on a fresh start only. On a resume the checkpoint's weights win."""
+        imitation = self.config.imitation
+        if imitation is None or imitation.init is None or self.resume_from is not None:
+            return
+        from .imitation.init import initialise_actor
+
+        self.init_self_test = initialise_actor(
+            self.model,
+            imitation.init,
+            current=self._artifact_spec(),
+            codec=self.row_codec(),
+            printer=self.printer,
+        )
+
+    def _artifact_spec(self) -> SnapshotSpec:
+        """What an actor this run can load must agree with: section 11.6's compatibility fields
+        and the action layout. The pool's template is this plus where the snapshot came from."""
+        assert self.report is not None
+        return SnapshotSpec(
+            snapshot_id="",
+            arch_digest=self.arch_digest,
+            obs_digest=self.spec.obs_digest,
+            action_digest=self.identity.action_digest if self.identity else "",
+            codec_version=self.report.codec_version,
+            codec_table_digest=self.report.codec_table_digest,
+            frame_stack=self.spec.frame_stack,
+            num_cards=self.spec.num_cards,
+            vector_size=self.spec.vector_size,
+        )
+
     def _build_ladder(self) -> None:
         """The pool, the archive, the fit, the seed set and the gate.
 
@@ -1214,18 +1262,8 @@ class LearningCoordinator:
             config.ladder.release_mode,
             self.report.build.build_digest or self.report.build.calibration_digest,
         )
-        self.snapshot_template = SnapshotSpec(
-            snapshot_id="",
-            arch_digest=self.arch_digest,
-            obs_digest=self.spec.obs_digest,
-            action_digest=self.identity.action_digest if self.identity else "",
-            codec_version=self.report.codec_version,
-            codec_table_digest=self.report.codec_table_digest,
-            frame_stack=self.spec.frame_stack,
-            num_cards=self.spec.num_cards,
-            vector_size=self.spec.vector_size,
-            context=self.context,
-            run_id=self.run_id,
+        self.snapshot_template = msgspec.structs.replace(
+            self._artifact_spec(), context=self.context, run_id=self.run_id
         )
         self.snapshot_store = DiskSnapshotStore(
             self.run_dir / "snapshots",

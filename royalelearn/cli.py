@@ -157,6 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("--viser", action="store_true")
     play.set_defaults(handler=_play)
 
+    digest = commands.add_parser(
+        "artifact-digest", help="print the digest a config names an artifact folder by"
+    )
+    digest.add_argument("folder", type=Path)
+    digest.set_defaults(handler=_artifact_digest)
+
     return parser
 
 
@@ -256,6 +262,14 @@ def _config(args: argparse.Namespace) -> int:
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(text + "\n", encoding="utf-8")
     print(f"wrote {args.output}")
+    return 0
+
+
+def _artifact_digest(args: argparse.Namespace) -> int:
+    """The digest section 19.2 defines: over every file in the folder, by relative path."""
+    from .imitation.artifacts import artifact_digest
+
+    print(artifact_digest(args.folder))
     return 0
 
 

@@ -15,6 +15,8 @@ What is in it, and why:
     algo_digest                                                 the PPO, GAE and schedule settings
     rollout_digest                                              workers, games, shards, T and R
     ladder_digest                                               who the learner plays
+    imitation_digest                                            the init and references it learns
+                                                                from, by content (section 19.3)
 
 What is recorded and NOT in it, because none of it changes what the run is: ``run_name``,
 ``runs_dir``, ``timestep_limit``, the metrics sinks and their settings, ``checkpoint.keep``, the
@@ -64,6 +66,7 @@ __all__ = [
     "engine_build",
     "env_spec_digest_of",
     "identity_differences",
+    "imitation_digest_of",
     "royalegym_provenance",
     "run_id",
     "torch_version",
@@ -129,8 +132,14 @@ class EngineBuild(msgspec.Struct, frozen=True):
     binary_sha256: str = NOT_RECORDED
 
 
-class RunIdentity(msgspec.Struct, frozen=True):
-    """The identity itself. ``run_id`` is the first sixteen hex characters of its sha256."""
+class RunIdentity(msgspec.Struct, frozen=True, omit_defaults=True):
+    """The identity itself. ``run_id`` is the first sixteen hex characters of its sha256.
+
+    Encoded with ``omit_defaults`` so that a field added with a default of None leaves every
+    identity that does not use it byte-identical, and so every ``run_id`` where it was. Every
+    other field is always set when an identity is computed; the only one that can sit at its
+    default is ``user_code``, and only on an identity decoded from before it existed.
+    """
 
     format_version: int
     royalelearn_version: str
@@ -157,11 +166,35 @@ class RunIdentity(msgspec.Struct, frozen=True):
     #: royaleviser, which their commits already name. None -- only a decode reaches it -- for an
     #: identity written before this field existed. See ``user_code``.
     user_code: dict[str, str] | None = None
+    #: The ``imitation`` block by value, with every file in it named by its digest rather than its
+    #: path (section 19.3). None -- and so absent from the encoding -- for a run without one.
+    imitation_digest: str | None = None
 
 
 def env_spec_digest_of(config: RunConfig) -> str:
     """The environment's identity: what it will be built as, not how its config was spelled."""
     return env_value_digest(config.env, tuple(config.extra_component_modules))
+
+
+def imitation_digest_of(config: RunConfig) -> str | None:
+    """The ``imitation`` block's digest, or None for a run without one.
+
+    Every ``path`` is left out. Each referenced folder is named by its artifact digest beside the
+    path, so the content of every file is in the identity already, and a folder moved to another
+    disk is not a new experiment. That the digest is TRUE of the folder is checked at every
+    start (``imitation.artifacts.verify_artifact``), fresh or resumed.
+    """
+    if config.imitation is None:
+        return None
+
+    def without_paths(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: without_paths(item) for key, item in value.items() if key != "path"}
+        if isinstance(value, list):
+            return [without_paths(item) for item in value]
+        return value
+
+    return digest_of(without_paths(msgspec.to_builtins(config.imitation)))
 
 
 def run_id(identity: RunIdentity) -> str:
@@ -596,4 +629,5 @@ def compute_identity(
         torch_version=torch_version() if torch_version_string is None else torch_version_string,
         device_kind=describe_device(config.net.device) if device_kind is None else device_kind,
         user_code=user_code(config),
+        imitation_digest=imitation_digest_of(config),
     )
