@@ -52,6 +52,7 @@ from royalegym.protocol import (
     DeployResult,
     Engine,
     EntityKind,
+    EntityState,
     TowerSlot,
 )
 from royalegym.reward import CombinedReward, RewardFunction, WinLossReward
@@ -176,6 +177,28 @@ class CommittedElixirPotential(PotentialReward):
     and holding a full bar loses ground, because the opponent's side keeps rising while yours
     cannot. The last is the one that replaces a leak penalty, and unlike a leak penalty it is
     zero-sum.
+
+    WHICH UNITS ARE PRICED, and why this is not every unit on the board. An engine reports each
+    entity under SOME card that can produce it, which need not be the card its owner played: a
+    Goblin Gang's spear goblins are filed under the Goblin Hut, at five elixir each; a dying
+    Golem's golemites are filed under the Golem, at eight; a dying Battle Ram's barbarians under
+    the Battle Ram, at four. Priced by the card they are filed under, measured on RustEngine
+    2026-09-24 by the train session's review: one Goblin Gang play read +15 elixir of potential,
+    a Golem's death +8, a Battle Ram's +4 -- under every run to date, at every weight. So a unit
+    is priced only when it IS the unit its card's catalogue row describes: same hitpoints, same
+    collision radius, same air or ground. Anything else a card produced scores zero. That is an
+    understatement and it is deliberate, the rule RoyaleGym's ``ElixirTradeReward`` adopted in
+    4488a2f: a golemite is worth something, and this term says zero rather than eight. What it
+    keeps true is the property the term needs. ONE PLAY OF A UNIT CARD PUTS EXACTLY THAT CARD'S
+    ELIXIR ON THE BOARD: a card's summon count covers exactly the units its row describes, so a
+    Goblin Gang still totals three. ``tests/test_elixir_pricing.py`` taps every card each engine
+    will place, on both seats, because the rule rests on that.
+
+    SPELLS ARE CHARGED AT THE TAP, through the bar, by construction: the bar drops by the spell's
+    cost and nothing it leaves on the board is priced, so the elixir comes back only through what
+    the spell kills. That is the true trade, and it is what ``ElixirTradeReward`` charges too. A
+    spell that leaves units behind -- a barrel -- is charged the same way, and its units score
+    zero by the rule above. It telescopes like everything else here, so it moves no optimum.
     """
 
     def __init__(self, scale: float = 10.0) -> None:
@@ -190,6 +213,23 @@ class CommittedElixirPotential(PotentialReward):
     def bind(self, engine: Engine) -> None:
         cards: Sequence[CardInfo] = engine.cards()
         self.value = {card.card_id: Fraction(card.elixir, max(1, card.count)) for card in cards}
+        #: The unit each card's row describes. An entity filed under a card is that card's own
+        #: unit only if it matches, and only then is it priced.
+        self.own_unit: dict[int, tuple[int, int, bool]] = {
+            card.card_id: (card.hitpoints, card.radius, bool(card.flying)) for card in cards
+        }
+
+    def unit_value(self, entity: EntityState) -> Fraction:
+        """What one entity on the board is worth: its card's per-unit elixir, or zero.
+
+        Zero for anything that is not the unit its card's row describes -- a spear goblin filed
+        under the Goblin Hut, a golemite under the Golem -- because pricing it by the card it is
+        filed under is how a three-elixir play came to read as eighteen.
+        """
+        row = self.own_unit.get(entity.card_id)
+        if row is None or row != (entity.max_hp, entity.radius, bool(entity.flying)):
+            return Fraction(0)
+        return self.value[entity.card_id]
 
     def potential(self, state: BattleState, team: int) -> Fraction:
         return (self._committed(state, team) - self._committed(state, 1 - team)) / self._scale
@@ -203,18 +243,18 @@ class CommittedElixirPotential(PotentialReward):
         much ground. It telescopes: potential-based shaping pays ``gamma*Phi(s') - Phi(s)``, so
         a dip and its recovery cancel to within one discount factor, and once the spell resolves
         the elixir really is spent and really is worth nothing, which is the steady state this
-        term already reports. A card that RELEASES units is not affected at all: what it leaves
-        behind are ordinary entities filed under the releasing card's own catalogue id.
+        term already reports.
 
-        Confirmed with the gym session on 2026-09-22 rather than assumed; the same structural
-        split is why the planned card-identity planes leave a spell in flight off the board too,
-        which keeps the two readings consistent with each other.
+        This paragraph used to say that a card which RELEASES units "is not affected at all",
+        because what it leaves behind is filed under its own catalogue id. Filed there, yes; its
+        own unit, no -- and pricing by the filing is what made a Goblin Gang read as eighteen
+        elixir and a dying Golem as a gain. See the class docstring; ``unit_value`` is the fix.
         """
         total = Fraction(state.players[team].elixir_milli, ELIXIR_MILLI)
         for entity in state.entities:
             if entity.team != team or entity.kind in TOWER_KINDS:
                 continue
-            total += self.value.get(entity.card_id, Fraction(0))
+            total += self.unit_value(entity)
         return total
 
 

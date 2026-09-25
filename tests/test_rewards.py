@@ -90,20 +90,27 @@ def player(
     )
 
 
-def unit(uid: int, team: int, card_id: int) -> EntityState:
-    """One live troop of ``team``. Its position is irrelevant to every potential here."""
+def unit(uid: int, team: int, card: CardInfo) -> EntityState:
+    """One live unit of ``team``: the unit ``card``'s own catalogue row describes.
+
+    Its stats are the row's because that is what makes it the card's own unit. This helper used
+    to give every unit made-up stats (100 hp, radius 1, ground), which was harmless while the
+    elixir potential priced a unit by whatever card it was filed under, and is exactly the
+    blindness that let a Goblin Gang read as eighteen elixir: a board built by hand only ever
+    held units that were their card's own. Position is irrelevant to every potential here.
+    """
     return EntityState(
         uid=uid,
         team=team,
         kind=EntityKind.TROOP,
-        card_id=card_id,
+        card_id=card.card_id,
         tower_slot=-1,
         x=0,
         y=0,
-        hp=100,
-        max_hp=100,
-        radius=1,
-        flying=False,
+        hp=card.hitpoints,
+        max_hp=card.hitpoints,
+        radius=card.radius,
+        flying=bool(card.flying),
         deploy_ticks=0,
     )
 
@@ -154,7 +161,7 @@ def state(
 
 def units(team: int, card: CardInfo, *, first: int = 0) -> list[EntityState]:
     """Everything one play of ``card`` puts on the board."""
-    return [unit(first + index, team, card.card_id) for index in range(card.count)]
+    return [unit(first + index, team, card) for index in range(card.count)]
 
 
 # --------------------------------------------------------------------------
