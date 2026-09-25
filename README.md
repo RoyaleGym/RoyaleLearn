@@ -212,6 +212,14 @@ most first-run failures. `bench` measures your own machine's throughput instead 
 someone else's. It runs at least one whole training iteration, so on a real profile it takes as
 long as one iteration does.
 
+`bench` also leaves a run folder behind in `runs`, and that changes what you type next. A run's
+folder is named after its config, so the same config on the same code always gets the same folder.
+`train` will not start a fresh run in a folder that already holds one. So after `bench`, give your
+first real run a name of its own, for example
+`python -m royalelearn train --config examples/configs/laptop.json --run-name first`. The same goes
+for starting one config twice. If you meant to carry on the earlier run instead, the refusal
+prints the `resume` command for it.
+
 The config profiles are `laptop`, `workstation` and `many_core`. The first two also ship as files
 in `examples/configs/`. `workstation.json` has not been run yet. Its minibatch, the number of
 decisions the graphics card works through at once, is 2048, and nobody has measured it. If that
@@ -237,12 +245,28 @@ the ladder's context like every other component. `examples/custom_reward.py` doe
 It writes one new term, which scores having your units on the opponent's side of the river, adds
 it to the others and names the result in the config. It also lists its own module in
 `extra_component_modules`. Without that line the run refuses to load your code, and the error
-says which setting to add it to. The reward is the other main thing a bot creator changes.
+says which setting to add it to. Your reward's source is part of the run's identity too, so an
+edit to it, or to any other file in the same package, makes a new run. If that package sits inside
+a git checkout, `train` refuses while it has uncommitted or untracked files, and names them. Commit
+them first, or pass `--allow-dirty`. The reward is the other main thing a bot creator changes.
 
-One warning, because it is the mistake a newcomer is most likely to make. Do not re-tune the
-shipped weights. Every shaping term here is a difference of potentials, and that form is what makes
-the terms unable to change which strategy is best. A weight you nudge every time you measure a new
-behaviour is standing in for a term that is missing. Write the missing term instead.
+The three shaping weights are settings in your config, so changing one needs no code. They are
+keyword arguments of the shipped reward, and these are the shipped values:
+
+```json
+"reward_fn": {"cls": "royalelearn.rewards.default_potential_reward",
+              "kwargs": {"crown": 0.2, "tower_hp": 0.1, "elixir": 0.05}}
+```
+
+A weight that is negative, not a number, or misspelt is refused when the config loads, and the
+message names every problem at once.
+
+One warning, because it is the mistake a newcomer is most likely to make. Do not keep re-tuning
+those weights. Every shaping term here is a difference of potentials, and that form is what keeps
+the terms from changing which strategy is best, as long as no reward gets clipped. The
+`reward_clipped` alarm tells you if one does. A weight you nudge every time you measure a new
+behaviour is standing in for a term that is missing. Write the missing term instead. To see how
+loud each term really is, read `env/reward_terms_step_abs/<term>` in your metrics.
 
 ## With the rest of the stack
 
@@ -381,8 +405,8 @@ What works:
 
 What is open:
 
-- A bot. Every run so far has been a short test rather than real training, so there is no
-  evidence yet about whether a policy trained here is any good.
+- A bot. Runs are no longer only short tests: `train-hog26-10` reached iteration 621. That is
+  still not evidence about whether a policy trained here is any good.
 - Rollout workers are Python today, and move to Rust when Python becomes the slow part. Here is why
   that order. A tick is 50 ms of game time, and the engine does roughly 25,000 of them a second. A
   Python observation builder measured in 2026-09 capped out at about 520 env steps a second, so
@@ -424,7 +448,7 @@ The pages in `docs/` go further than this README does. If you are about to start
 first one.
 
 - [`docs/running.md`](docs/running.md). Running a job: starting one, reading what scrolls past,
-  the 23 alarms and what to do about each, and the one memory setting worth understanding.
+  the 24 alarms and what to do about each, and the one memory setting worth understanding.
 - [`docs/throughput.md`](docs/throughput.md). How long a training step takes, how to measure your
   own machine instead of trusting a number from someone else's, and which part of your computer
   is holding you up.
