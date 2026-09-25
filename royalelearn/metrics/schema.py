@@ -22,6 +22,7 @@ from typing import NamedTuple
 import msgspec
 
 __all__ = [
+    "ACTOR_UPDATE_KEYS",
     "ALARM_METRICS",
     "METRICS",
     "PATTERNS",
@@ -639,6 +640,29 @@ METRICS: dict[str, MetricSpec] = {
     "health/buffer_fill_frac": _m(
         "fraction", "Share of the rectangle's cells written this iteration.", high=0.98
     ),
+    # -- imitation (section 19; only with the imitation block) -------------------------
+    "imitation/actor_lr_scale": _m(
+        "multiplier",
+        "imitation.actor_lr_scale at this iteration's clock. It multiplies the backoff's actor "
+        "learning rate, and zero freezes the actor.",
+        low=0.0,
+    ),
+    "imitation/actor_frozen": _m(
+        "flag",
+        "1 on an iteration the actor was frozen: no actor loss, no actor step, and the ppo/ keys "
+        "computed from the actor's forward are left out of the row.",
+    ),
+    "imitation/ev_at_unfreeze": _m(
+        "fraction",
+        "ppo/explained_variance on the first iteration after a frozen stretch: how ready the "
+        "critic was when the actor started to move. Published on that row only.",
+        low=0.3,
+    ),
+    "imitation/iterations_since_unfreeze": _m(
+        "count",
+        "Unfrozen iterations since the last frozen stretch, this one included. The handoff "
+        "alarm watches the first imitation_handoff_window of them.",
+    ),
 }
 
 PATTERNS: tuple[MetricPattern, ...] = (
@@ -705,6 +729,76 @@ PATTERNS: tuple[MetricPattern, ...] = (
         ),
     ),
     _pattern(
+        "env/play_rate_by_elixir/{elixir}",
+        _m(
+            "fraction",
+            "Of the learner's sampled choice rows at this whole elixir (the bar floored, with "
+            "a 0.005 tolerance for the vector's half precision), the share where it played. "
+            "Absent for an elixir level with no choice row in the sample.",
+        ),
+    ),
+    _pattern(
+        "imitation/{name}/kl",
+        _m(
+            "nats",
+            "KL(reference || policy), the mean over the choice rows the regulariser covered "
+            "in epoch 1. The number lambda is moved by. Absent when no row was covered.",
+        ),
+    ),
+    _pattern(
+        "imitation/{name}/kl_noop",
+        _m("nats", "The play/wait part of kl, by the chain rule."),
+    ),
+    _pattern(
+        "imitation/{name}/kl_card",
+        _m("nats", "p_ref(play) times the KL of the card given a play. Joint factor only."),
+    ),
+    _pattern(
+        "imitation/{name}/kl_tile",
+        _m("nats", "The reference-weighted KL of the tile given the card. Joint factor only."),
+    ),
+    _pattern(
+        "imitation/{name}/lambda",
+        _m("coefficient", "The coefficient this iteration's loss used.", low=0.0),
+    ),
+    _pattern(
+        "imitation/{name}/lambda_at_max",
+        _m(
+            "flag",
+            "1 when the coefficient this iteration used was coef.max: the anchor is pulling as "
+            "hard as it is allowed to.",
+        ),
+    ),
+    _pattern(
+        "imitation/{name}/budget",
+        _m("nats", "The budget kl is held to this iteration.", low=0.0),
+    ),
+    _pattern(
+        "imitation/{name}/grad_ratio",
+        _m(
+            "ratio",
+            "||grad of the unscaled KL|| / ||grad of the policy term|| on the first minibatch "
+            "with a choice row. Zero while the policy equals the reference. For setting "
+            "coef.start.",
+        ),
+    ),
+    _pattern(
+        "imitation/{name}/rows_frac",
+        _m("fraction", "Share of epoch-1 choice rows the regulariser covered (exclude_when)."),
+    ),
+    _pattern(
+        "imitation/{name}/top1_agree",
+        _m(
+            "fraction",
+            "Share of covered rows where the reference's and the policy's most likely actions "
+            "agree; under noop_marginal, whether both would play.",
+        ),
+    ),
+    _pattern(
+        "imitation/{name}/ref_p_noop",
+        _m("probability", "The reference's mean p(no-op) over the covered rows."),
+    ),
+    _pattern(
         "ladder/score_vs/{opponent}",
         _m("fraction", "The live policy's score rate against one scripted rung."),
     ),
@@ -758,6 +852,15 @@ PATTERNS: tuple[MetricPattern, ...] = (
 #: Which keys each alarm of section 13.3 reads. ``metrics/alarms.py`` implements the predicates;
 #: the suite checks that every key named here exists above.
 ALARM_METRICS: dict[str, tuple[str, ...]] = {
+    # Section 19.9. A template names a family: the alarm reads every key of it the row carries.
+    "imitation_ref_kl_high": ("imitation/{name}/kl",),
+    "imitation_lambda_saturated": ("imitation/{name}/lambda_at_max",),
+    "imitation_handoff": (
+        "ppo/kl",
+        "ppo/clip_fraction",
+        "imitation/iterations_since_unfreeze",
+    ),
+    "imitation_critic_unready": ("imitation/ev_at_unfreeze",),
     "illegal_actions": ("env/illegal_action_rate",),
     "ratio_invariant": ("ppo/ratio_max_abs_dev",),
     "nonfinite": ("health/nan_guard_trips",),
@@ -810,7 +913,33 @@ RENAMED: dict[str, str] = {
 #: missing key never fires. What was missing was a way to say WHICH keys that applies to, so the
 #: distinction lived in whichever function happened to fill a default. Declaring it here makes
 #: the row contract checkable: every other key must be present in every row.
+#: The ``ppo/`` keys computed from the actor's forward in the update. A frozen actor (section
+#: 19.5) ran none, and the diagnostics' 0.0 for them is the healthiest reading each has, so a
+#: frozen row leaves them out rather than publish it.
+ACTOR_UPDATE_KEYS: tuple[str, ...] = (
+    "ppo/policy_loss",
+    "ppo/policy_loss_choice",
+    "ppo/entropy",
+    "ppo/noop_entropy",
+    "ppo/entropy_normalised",
+    "ppo/logit_std",
+    "ppo/kl",
+    "ppo/clip_fraction",
+    "ppo/dual_clip_fraction",
+    "ppo/grad_norm_actor",
+    "ppo/update_magnitude_actor",
+)
+
 CONDITIONAL: dict[str, str] = {
+    **dict.fromkeys(
+        ACTOR_UPDATE_KEYS,
+        "the actor trained this iteration: imitation.actor_lr_scale was above zero, which it "
+        "always is without the imitation block",
+    ),
+    "imitation/actor_lr_scale": "the run has an imitation block that sets actor_lr_scale",
+    "imitation/actor_frozen": "the run has an imitation block that sets actor_lr_scale",
+    "imitation/ev_at_unfreeze": "this iteration is the first after a frozen stretch",
+    "imitation/iterations_since_unfreeze": "the actor has been unfrozen after a frozen stretch",
     # Written only on the iterations that probed the live policy, which is none of them unless
     # ladder.probe_every_iterations is set. Carrying the last probe's number forward would
     # publish a score for weights that have moved since, and a 0.5 for a rung nobody played is

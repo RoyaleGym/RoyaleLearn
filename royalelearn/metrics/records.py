@@ -321,6 +321,15 @@ def update_fields(result: UpdateResult) -> dict[str, MetricValue]:
         floor = getattr(result, f"adam_eps_floor_frac_{side}", None)
         if floor is not None:
             fields[f"ppo/adam_eps_floor_frac_{side}"] = floor
+    if not result.actor_trained:
+        # A frozen actor (section 19.5) ran no loss. What the diagnostics hold for these keys is
+        # a default, not a measurement, so the row leaves them out.
+        from .schema import ACTOR_UPDATE_KEYS
+
+        epochs = ("ppo/kl_epoch", "ppo/clip_fraction_epoch")
+        for key in [k for k in fields if k in ACTOR_UPDATE_KEYS or k.startswith(epochs)]:
+            del fields[key]
+    fields.update(result.imitation)
     return fields
 
 

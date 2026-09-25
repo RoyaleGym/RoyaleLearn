@@ -80,6 +80,11 @@ class UpdateResult(msgspec.Struct):
     #: the same thing whichever population the arm optimises over.
     policy_loss_choice: float = 0.0
     explained_variance_choice: float = 0.0
+    #: False on an iteration the actor was frozen (section 19.5): every quantity computed from
+    #: the actor's forward in the update was not measured, and its key is left out of the row.
+    actor_trained: bool = True
+    #: The ``imitation/`` keys of section 19.9, when the run has the block.
+    imitation: dict[str, float] = {}
 
 
 class Update(ABC, Checkpointable):

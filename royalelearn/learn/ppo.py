@@ -67,6 +67,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.advantage import AdvantageEstimator, AdvantageStats
     from ..api.policy import ActorCritic, BackpropResult
     from ..api.schedule import ScheduleState
+    from ..imitation.regularisers import ImitationTerms, ReferenceKL
     from .buffer import Minibatch, RectBuffer
     from .schedules import LrBackoff
 
@@ -278,9 +279,17 @@ class PPOUpdate(Update):
         device: torch.device | str | None = None,
         optimizer_factory: Callable[..., Optimizer] | None = None,
         progress: Callable[[str], None] | None = None,
+        imitation: ImitationTerms | None = None,
     ) -> None:
         #: Said once per epoch while the update runs, because nothing else is said during it.
         self.progress = progress
+        #: Section 19: the reference-KL regularisers and the freeze's bookkeeping. None on a run
+        #: without the ``imitation`` block, and then nothing below behaves differently.
+        self.imitation = imitation
+        #: Whether this iteration's actor is frozen (``actor_lr_scale`` zero, section 19.5).
+        self._frozen = False
+        #: Whether this iteration's gradient ratio is still to be measured.
+        self._grad_ratio_pending = False
         self.model = model
         self.gae = gae
         self.config = config
@@ -374,7 +383,11 @@ class PPOUpdate(Update):
         config = self.config
         self._n_slots = buffer.n_slots
         self._ratio_unchecked = True
+        self._frozen = sched.actor_lr_scale == 0.0
         self._apply_learning_rates(sched)
+        if self.imitation is not None:
+            self.imitation.begin(sched.cumulative_env_steps, self.device)
+            self._grad_ratio_pending = bool(self.imitation.regularisers) and not self._frozen
         gather = self._gather_for(buffer)
 
         critic_started = time.perf_counter()
@@ -491,7 +504,7 @@ class PPOUpdate(Update):
                 # with the old gating restored, which is the reason this note exists rather than
                 # a green test.
                 first = self._ratio_unchecked and (
-                    not self._skip_forced or bool(minibatch.n_choice)
+                    not (self._skip_forced or self._frozen) or bool(minibatch.n_choice)
                 )
                 if first:
                     self._ratio_unchecked = False
@@ -504,13 +517,17 @@ class PPOUpdate(Update):
                     first=first,
                     actor_scale=actor_scale,
                 )
-            if self._skip_forced:
+            if self._skip_forced and not self._frozen:
                 self._zero_the_actors_missing_gradients()
             diagnostics.gradients(
                 clip_grad_norm_(self.actor_params, config.max_grad_norm),
                 clip_grad_norm_(self.critic_params, config.max_grad_norm),
             )
             for optimizer in self.optimizers:
+                # A frozen actor's optimizer does not step, so its moments are empty at unfreeze
+                # rather than filled with gradients of a policy that was not allowed to move.
+                if self._frozen and optimizer is self.actor_optimizer:
+                    continue
                 optimizer.step()
             self.model_updates += 1
         if self.device.type == "cuda":  # pragma: no cover - the suite runs on the CPU
@@ -519,6 +536,11 @@ class PPOUpdate(Update):
 
         after_actor = parameters_to_vector(self.actor_params).detach()
         after_critic = parameters_to_vector(self.critic_params).detach()
+        if self._frozen and not torch.equal(after_actor, before_actor):
+            raise AssertionError(
+                "the actor moved on an iteration imitation.actor_lr_scale froze it: something "
+                "other than the actor optimizer wrote to its parameters"
+            )
         result = diagnostics.result(
             n_samples=n_samples,
             epochs=config.n_epochs,
@@ -535,7 +557,16 @@ class PPOUpdate(Update):
             eps_floor_actor=adam_eps_floor_frac(self.actor_optimizer),
             eps_floor_critic=adam_eps_floor_frac(self.critic_optimizer),
         )
-        if self.backoff is not None and self.backoff.observe(result.kl):
+        result.actor_trained = not self._frozen
+        if self.imitation is not None:
+            result.imitation = self.imitation.finish(
+                iteration=sched.iteration,
+                scale=sched.actor_lr_scale,
+                explained_variance=result.explained_variance,
+            )
+        # A frozen iteration has no KL to observe: the backoff would read the diagnostics'
+        # empty 0.0 as a policy that did not move and count it towards nothing.
+        if self.backoff is not None and not self._frozen and self.backoff.observe(result.kl):
             print(
                 f"lr_backoff: KL stayed above {self.backoff.config.kl_threshold} for "
                 f"{self.backoff.config.patience} iterations; the rates are now "
@@ -571,6 +602,9 @@ class PPOUpdate(Update):
             assert bool(
                 (minibatch.obs.mask.sum(-1) == minibatch.n_legal).all()
             ), _legal_count_message(minibatch, self._n_slots)
+        if self._frozen:
+            self._critic_only(minibatch, sched, diagnostics, epoch, first=first)
+            return
         if self._skip_forced:
             self._critic_then_the_rows_that_can_move(
                 minibatch,
@@ -616,7 +650,23 @@ class PPOUpdate(Update):
             )
             * weight
         )
-        (policy_loss + value_loss + entropy_loss).backward()
+        loss = policy_loss + value_loss + entropy_loss
+        if self.imitation is not None and self.imitation.regularisers and minibatch.n_choice:
+            if result.distribution is None:
+                raise TypeError(
+                    f"{type(self.model).__name__}.backprop returned no distribution, and the "
+                    "imitation block's reference KL needs every legal action's log-probability"
+                )
+            rows = minibatch.choice_index
+            loss = loss + self._imitation_loss(
+                minibatch,
+                result.distribution.log_probs.index_select(0, rows),
+                minibatch.obs.mask.index_select(0, rows),
+                epoch,
+                actor_scale,
+                policy_loss,
+            )
+        loss.backward()
         with torch.no_grad():
             diagnostics.minibatch(
                 epoch=epoch,
@@ -709,7 +759,17 @@ class PPOUpdate(Update):
                 )
                 * actor_scale
             )
-            (policy_loss + entropy_loss).backward()
+            actor_loss = policy_loss + entropy_loss
+            if self.imitation is not None and self.imitation.regularisers:
+                actor_loss = actor_loss + self._imitation_loss(
+                    minibatch,
+                    distribution.log_probs,
+                    distribution.mask,
+                    epoch,
+                    actor_scale,
+                    policy_loss,
+                )
+            actor_loss.backward()
         else:
             # Every row of this minibatch was forced, so there is no actor forward to run and
             # nothing to differentiate. The diagnostics are still told about the rows, because
@@ -740,6 +800,127 @@ class PPOUpdate(Update):
                 clip_range=config.clip_range,
                 dual_clip_c=config.dual_clip_c,
                 forced_dual=forced_dual,
+            )
+
+    def _imitation_loss(
+        self,
+        minibatch: Minibatch,
+        policy: Tensor,
+        mask: Tensor,
+        epoch: int,
+        actor_scale: float,
+        policy_loss: Tensor,
+    ) -> Tensor:
+        """Section 19.7: the sum over regularisers of lambda * sum(KL) * ``actor_scale``.
+
+        ``policy`` and ``mask`` are the actor's masked log-probabilities and mask on the
+        minibatch's choice rows, in ``minibatch.choice_index`` order. The KL of the first epoch
+        is what lambda is moved by; the other epochs only train on it.
+        """
+        assert self.imitation is not None
+        rows = minibatch.choice_index
+        measure = epoch == 0
+        total: Tensor | None = None
+        sums: list[tuple[ReferenceKL, Tensor]] = []
+        for regulariser in self.imitation.regularisers:
+            kl = regulariser.kl_sum(minibatch.obs, rows, policy, mask, measure=measure)
+            sums.append((regulariser, kl))
+            term = regulariser.lam * kl * actor_scale
+            total = term if total is None else total + term
+        if self._grad_ratio_pending:
+            self._grad_ratio_pending = False
+            self._grad_ratio(policy_loss, sums, actor_scale)
+        assert total is not None
+        return total
+
+    def _grad_ratio(
+        self,
+        policy_loss: Tensor,
+        sums: Sequence[tuple[ReferenceKL, Tensor]],
+        actor_scale: float,
+    ) -> None:
+        """||grad of each unscaled KL sum|| / ||grad of the policy term||, once an iteration.
+
+        On the first minibatch with a choice row. ``autograd.grad`` rather than a backward, so
+        nothing reaches the ``.grad`` the optimizer reads and the update is the one it would
+        have been without the measurement. At pi_theta = pi_ref the forward KL's gradient is
+        exactly zero, so this reads zero until the two have parted.
+        """
+        params = [parameter for parameter in self.actor_params if parameter.requires_grad]
+        policy_grads = torch.autograd.grad(
+            policy_loss, params, retain_graph=True, allow_unused=True
+        )
+        policy_norm = _grad_norm(policy_grads)
+        for regulariser, kl in sums:
+            grads = torch.autograd.grad(
+                kl * actor_scale, params, retain_graph=True, allow_unused=True
+            )
+            regulariser.grad_ratio = float(
+                (_grad_norm(grads) / policy_norm.clamp_min(1e-30)).item()
+            )
+
+    def _critic_only(
+        self,
+        minibatch: Minibatch,
+        sched: ScheduleState,
+        diagnostics: _Diagnostics,
+        epoch: int,
+        *,
+        first: bool,
+    ) -> None:
+        """A frozen iteration's minibatch: the critic's loss and backward, nothing of the actor's.
+
+        Except the ratio invariant, which still runs on a no-grad forward of the first minibatch
+        that has a choice row. It is still the check that the stored rows and masks are the ones
+        the policy acted on, and on a frozen actor every ratio must be exactly one.
+        """
+        from ..api.policy import ObsBatch
+
+        config = self.config
+        values = self.model.value(minibatch.obs)
+        mean_squared_error = value_error(
+            values,
+            minibatch.values,
+            minibatch.returns,
+            clip_range=config.clip_range if config.value_clipping else None,
+        )
+        (config.vf_coef * mean_squared_error * minibatch.weight).backward()
+        if first and minibatch.n_choice:
+            rows = minibatch.choice_index
+            subset = ObsBatch(
+                *(None if t is None else t.index_select(0, rows) for t in minibatch.obs)
+            )
+            with torch.no_grad():
+                distribution = self.model.distribution(subset)
+                actions = minibatch.actions.index_select(0, rows)
+                ratio = torch.exp(
+                    distribution.log_prob(actions) - minibatch.log_probs.index_select(0, rows)
+                )
+            diagnostics.actor_forward(minibatch.n_choice)
+            self._ratio_invariant(
+                ratio,
+                minibatch.cells.index_select(0, rows),
+                actions,
+                diagnostics,
+                sched.iteration,
+            )
+        empty = minibatch.advantages[:0]
+        with torch.no_grad():
+            diagnostics.minibatch(
+                epoch=epoch,
+                n=minibatch.n,
+                ratio=empty,
+                advantages=empty,
+                surr=empty,
+                dual=empty,
+                entropy=empty,
+                noop_entropy=empty,
+                logit_std=empty,
+                n_legal=minibatch.n_legal[:0],
+                value_loss=mean_squared_error.detach(),
+                clip_range=config.clip_range,
+                dual_clip_c=config.dual_clip_c,
+                forced_dual=minibatch.advantages.sum(),
             )
 
     def _zero_the_actors_missing_gradients(self) -> None:
@@ -838,10 +1019,11 @@ class PPOUpdate(Update):
     def _apply_learning_rates(self, sched: ScheduleState) -> None:
         """Take this iteration's rates. They move only under the backoff, which is why they
         arrive on the schedule state rather than being read from the config here."""
-        self.actor_kwargs["lr"] = sched.lr_actor
+        actor_rate = sched.lr_actor * sched.actor_lr_scale
+        self.actor_kwargs["lr"] = actor_rate
         self.critic_kwargs["lr"] = sched.lr_critic
         for optimizer, rate in (
-            (self.actor_optimizer, sched.lr_actor),
+            (self.actor_optimizer, actor_rate),
             (self.critic_optimizer, sched.lr_critic),
         ):
             for group in optimizer.param_groups:
@@ -898,10 +1080,12 @@ class PPOUpdate(Update):
         folder.mkdir(parents=True, exist_ok=True)
         torch.save(self.actor_optimizer.state_dict(), folder / self.ACTOR_FILE)
         torch.save(self.critic_optimizer.state_dict(), folder / self.CRITIC_FILE)
-        state = {
+        state: dict[str, Any] = {
             "format_version": self.FORMAT_VERSION,
             "cumulative_model_updates": self.model_updates,
         }
+        if self.imitation is not None:
+            state["imitation"] = self.imitation.state()
         (folder / self.STATE_FILE).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
     def load_checkpoint(self, folder: Path, *, strict: bool) -> None:
@@ -939,6 +1123,8 @@ class PPOUpdate(Update):
                 f"{self.FORMAT_VERSION}"
             )
         self.model_updates = int(state.get("cumulative_model_updates", 0))
+        if self.imitation is not None:
+            self.imitation.load_state(state.get("imitation"))
 
 
 # --------------------------------------------------------------------------
@@ -1197,6 +1383,14 @@ def _per_epoch(sums: Sequence[Tensor], counts: Sequence[Tensor]) -> list[float]:
         rows = float(count.item())
         out.append(float((value / rows).item()) if rows else 0.0)
     return out
+
+
+def _grad_norm(grads: Sequence[Tensor | None]) -> Tensor:
+    """The L2 norm over a parameter list's gradients; a parameter with none contributes zero."""
+    parts = [grad.detach().float().pow(2).sum() for grad in grads if grad is not None]
+    if not parts:
+        return torch.zeros(())
+    return torch.stack(parts).sum().sqrt()
 
 
 def _mean_of(values: Sequence[Tensor]) -> float:

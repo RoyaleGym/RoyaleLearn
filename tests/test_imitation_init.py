@@ -375,3 +375,52 @@ def test_a_resume_keeps_the_checkpoint_weights_and_still_checks_the_digest(tmp_p
     (folder / "spec.json").write_bytes((folder / "spec.json").read_bytes() + b" ")
     with pytest.raises(PreflightError, match="has digest"), coordinator(config, resume=saved):
         pass
+
+
+# -- the ratio guard, measured on the loaded actor ---------------------------------------------
+
+
+def test_the_ratio_guard_is_measured_on_a_loaded_actor(tmp_path: Path) -> None:
+    """Section 19.9: an initialised actor's p_max is its own, not the one noop_bias implies.
+
+    A cloned policy that holds on most rows puts far more than the bias's share on one action.
+    The same rows pass in float32 and are refused in bfloat16 once the head is pushed there.
+    Plant: taking p_max from noop_bias instead of the rows must let the bfloat16 case through.
+    """
+    from royalelearn.imitation.init import loaded_ratio_guard
+
+    folder = tmp_path / "seeded"
+    digest = seeded_artifact(tiny_config(tmp_path / "donor"), folder, coordinator)
+    rows = read_actor_artifact(folder).probe.rows
+    said: list[str] = []
+    with coordinator(_init_config(tmp_path, folder, digest), printer=said.append) as run:
+        assert any("measured on" in line and "probe rows" in line for line in said)
+        with torch.no_grad():
+            run.model.actor.head.noop.bias.fill_(40.0)
+        codec = run.row_codec()
+        quiet = loaded_ratio_guard(
+            run.model, codec, rows, atol=1e-4, precision="float32", say=said.append
+        )
+        assert quiet < 1e-4 / 4
+        with pytest.raises(PreflightError, match="the loaded actor's own arithmetic"):
+            loaded_ratio_guard(
+                run.model, codec, rows, atol=2e-2, precision="bfloat16", say=said.append
+            )
+
+
+def test_preflight_defers_the_ratio_guard_to_the_init(env_spec: Any) -> None:
+    """The noop_bias estimate is about a seeded actor; with an init it is not this run's."""
+    from royalelearn.rollout.preflight import _ratio_precision_gate
+
+    heavy = cfg.RunConfig(
+        env=cfg.default_env_spec(cfg.MOCK_ENGINE),
+        net=cfg.NetConfig(noop_bias=40.0, autocast_dtype="bfloat16"),
+    )
+    with pytest.raises(PreflightError):
+        _ratio_precision_gate(heavy, env_spec, lambda _line: None)
+    initialised = msgspec.structs.replace(
+        heavy, imitation=cfg.ImitationConfig(init=cfg.InitSpec(path="x", sha256="y"))
+    )
+    said: list[str] = []
+    _ratio_precision_gate(initialised, env_spec, said.append)
+    assert said and "probe rows" in said[0]

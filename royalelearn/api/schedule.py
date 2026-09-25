@@ -42,6 +42,9 @@ class ScheduleState(msgspec.Struct, frozen=True):
     lr_actor: float
     lr_critic: float
     lr_backoff_events: int = 0
+    #: ``imitation.actor_lr_scale`` at this clock: multiplies ``lr_actor``, and zero freezes the
+    #: actor for the iteration (section 19.5). One on every run without the block.
+    actor_lr_scale: float = 1.0
 
     def credit_horizon_seconds(self, decision_ms: int) -> float:
         """``1 / (1 - gamma * lambda)`` decisions, in seconds.

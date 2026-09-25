@@ -34,6 +34,7 @@ __all__ = [
     "HALT",
     "WARN",
     "AlarmSet",
+    "FamilyAlarm",
     "MetricAlarm",
     "RoseAlarm",
     "SpillAlarm",
@@ -168,9 +169,101 @@ class RoseAlarm(MetricAlarm):
 DEFAULT_RATIO_ATOL = 1e-4
 
 
-def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATOL) -> tuple[
-    Alarm, ...
-]:
+class FamilyAlarm(Alarm):
+    """An alarm over a family of keys, one per member: it holds when any member's value does.
+
+    The imitation regularisers are named by the run's own config, so their keys cannot be listed
+    in ``ALARM_METRICS``; its entry is the template, ``imitation/{name}/kl``, and this reads
+    every key of the row that the template matches. ``predicate`` gets the member's name and
+    its value, so a bound can differ per member. A row without any member is not a firing.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        predicate: Callable[[str, float], bool],
+        *,
+        severity: str = WARN,
+        patience: int = 1,
+        meaning: str = "",
+    ) -> None:
+        import re
+
+        self.name = name
+        self.severity = severity
+        self.patience = int(patience)
+        self.keys = ALARM_METRICS[name]
+        self.predicate = predicate
+        self.meaning = meaning
+        self.dump_bundle = False
+        self._patterns = [
+            re.compile("^" + re.escape(template).replace(r"\{name\}", "([^/]+)") + "$")
+            for template in self.keys
+        ]
+
+    def _members(self, row: MetricRow) -> list[tuple[str, str, float]]:
+        found: list[tuple[str, str, float]] = []
+        for key in sorted(row):
+            for pattern in self._patterns:
+                match = pattern.match(key)
+                value = _value(row, key)
+                if match and value is not None:
+                    found.append((key, match.group(1), value))
+        return found
+
+    def holds(self, row: MetricRow) -> bool:
+        return any(self.predicate(member, value) for _, member, value in self._members(row))
+
+    def message(self, row: MetricRow) -> str:
+        firing = [
+            f"{key}={value!r}"
+            for key, member, value in self._members(row)
+            if self.predicate(member, value)
+        ]
+        tail = f" -- {self.meaning}" if self.meaning else ""
+        return f"{self.name}: {', '.join(firing)}{tail}"
+
+    def values(self, row: MetricRow) -> dict[str, float]:
+        return {key: value for key, _member, value in self._members(row)}
+
+
+def _imitation_alarms(config: AlarmConfig) -> list[Alarm]:
+    """Section 19.9. All WARN: a halted treatment run is censored out of its comparison."""
+    return [
+        FamilyAlarm(
+            "imitation_ref_kl_high",
+            lambda _member, kl: kl > config.imitation_ref_kl_warn,
+            meaning="the policy has moved far from a reference it is anchored to",
+        ),
+        FamilyAlarm(
+            "imitation_lambda_saturated",
+            lambda _member, at_max: at_max >= 1.0,
+            patience=config.imitation_lambda_saturated_patience,
+            meaning=(
+                "lambda has sat at coef.max: the reward is pulling harder than the anchor can "
+                "hold, which is a statement about the reward"
+            ),
+        ),
+        MetricAlarm(
+            "imitation_handoff",
+            lambda kl, clip, since: since <= config.imitation_handoff_window
+            and (kl > config.imitation_handoff_kl or clip > config.imitation_handoff_clip),
+            meaning=(
+                "the first unfrozen iterations are moving the policy fast; the backoff acts on "
+                "its own, and this says why"
+            ),
+        ),
+        MetricAlarm(
+            "imitation_critic_unready",
+            lambda ev: ev < config.imitation_ev_at_unfreeze,
+            meaning="the critic explained little of the return when the actor was unfrozen",
+        ),
+    ]
+
+
+def default_alarms(
+    config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATOL
+) -> tuple[Alarm, ...]:
     """The table of section 13.3, with this run's thresholds in it.
 
     Built as a function of the config rather than as constants, so that an operator who wants
@@ -385,6 +478,7 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
             meaning="the harness is becoming the bottleneck rather than the learner",
         ),
     ]
+    alarms.extend(_imitation_alarms(config))
     return tuple(alarms)
 
 

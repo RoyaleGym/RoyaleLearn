@@ -4180,8 +4180,9 @@ A reference is evaluated on the rows the actor is trained on, under `no_grad`, w
 autocast, and never trained.
 
 - **`snapshot`**: an actor artifact (19.2), loaded into a second copy of the run's actor and checked
-  exactly as an init is (steps 2-4 of 19.4). Its distribution is a `MaskedCategorical` over the
-  row's own mask, so it is a full policy over the legal set.
+  as an init is (steps 2-4 of 19.4), plus the self-test at 1e-5 when the artifact carries probe
+  rows. Its distribution is a `MaskedCategorical` over the row's own mask, so it is a full policy
+  over the legal set.
 - **`field_mlp`**: a small MLP over named fields of the observation vector, giving the logit of
   p(play) on a row. Its `spec.json` lists each field's name and width, the normalisation, the
   layer widths and activation. At load every field must exist in the run's vector layout with that
@@ -4255,10 +4256,12 @@ Keys, each present only when its regulariser is configured:
 
 - `imitation/<name>/{kl, kl_noop, kl_card, kl_tile}`: epoch-1 means over the covered choice rows;
   `kl_card` and `kl_tile` are absent under `noop_marginal`.
-- `imitation/<name>/{lambda, budget, grad_ratio, rows_frac}`, `imitation/<name>/top1_agree` (the
-  share of covered rows where the two argmaxes agree; under `noop_marginal`, whether both say
-  play), and `imitation/<name>/ref_p_noop`.
-- `imitation/actor_frozen` when `actor_lr_scale` is set; `imitation/ev_at_unfreeze` on one row.
+- `imitation/<name>/{lambda, lambda_at_max, budget, grad_ratio, rows_frac}`,
+  `imitation/<name>/top1_agree` (the share of covered rows where the two argmaxes agree; under
+  `noop_marginal`, whether both say play), and `imitation/<name>/ref_p_noop`.
+- `imitation/actor_lr_scale` and `imitation/actor_frozen` when `actor_lr_scale` is set;
+  `imitation/ev_at_unfreeze` on the first row after a frozen stretch, and
+  `imitation/iterations_since_unfreeze` on every unfrozen row after one.
 - `env/play_rate_by_elixir/{k}`, whether or not the block is present: the share of the learner's
   sampled choice rows at elixir floor `k` (0-10) where it played. Computed where
   `env/mean_elixir_at_decision` is, from the same sample.
@@ -4266,8 +4269,8 @@ Keys, each present only when its regulariser is configured:
 Alarms, all WARN, because a halted treatment run would be censored out of any comparison it is in:
 
 - `imitation_ref_kl_high`: a regulariser's `kl` above `alarms.imitation_ref_kl_warn` (1.0 nats).
-- `imitation_lambda_saturated`: λ at `max` for `alarms.imitation_lambda_saturated_patience` (10)
-  iterations. The reward is pulling harder than the anchor can hold.
+- `imitation_lambda_saturated`: `lambda_at_max` for `alarms.imitation_lambda_saturated_patience`
+  (10) iterations. The reward is pulling harder than the anchor can hold.
 - `imitation_handoff`: in the first `alarms.imitation_handoff_window` (20) unfrozen iterations,
   `ppo/kl` above `alarms.imitation_handoff_kl` (0.05) or `ppo/clip_fraction` above
   `alarms.imitation_handoff_clip` (0.3). The existing backoff acts on its own; this says why.
@@ -4276,9 +4279,11 @@ Alarms, all WARN, because a halted treatment run would be censored out of any co
 
 Their thresholds live in `alarms`, with the other thresholds, so they stay out of the identity.
 
-`ratio_precision` at preflight takes p_max and the largest |logit| from the loaded actor on the
-probe rows when there is an init, rather than from `net.noop_bias`: a cloned actor's no-op
-probability is its own.
+The ratio guard of section 7.7 predicts the importance ratio's arithmetic floor from
+`net.noop_bias`, which is a seeded actor's largest probability. With an init, preflight defers it,
+and once the weights are loaded it is measured instead: p_max and the largest legal |logit| over
+the artifact's probe rows, refused above `ppo.ratio_atol` and warned within a factor of four. A
+cloned actor's no-op probability is its own.
 
 ### 19.10 Demonstration shards (L4)
 
@@ -4422,11 +4427,15 @@ above, built by the owner's code, which is never a component and so never enters
 ### 19.15 Controls, each seen failing on a plant before it is trusted
 
 - **The blind control (L1).** The block present with every coefficient zero, no init and a scale of
-  one reproduces the run without the block bit for bit for three iterations under `run_exact`.
-  Plant: one extra draw from a named stream inside the block's path must make it fail.
+  one reproduces the run without the block bit for bit for three iterations: every weight, every
+  optimizer moment and every action. The reference is another seed's actor, so the KL it reports is
+  not zero and the term's whole path ran. Plant: a coefficient that leaks a thousandth past zero
+  must make it fail. (A draw from a named stream cannot contaminate this harness: every stream is
+  addressed by name, so an extra draw moves nothing else.)
 - **The init-identity control (L1).** An init from an artifact holding the seeded weights, with no
-  freeze and no regulariser, reproduces the run without the block bit for bit for three iterations.
-  Plant: one weight changed in the artifact must make the self-test refuse.
+  freeze and no regulariser, reproduces the run without the block bit for bit for three iterations,
+  state digest included. Plants: an init that also touches the critic must break it, and one weight
+  changed in the artifact must make the self-test refuse.
 - **The chain-rule identity (L2).** `kl_noop + kl_card + kl_tile == kl`. Plant: dropping the p_ref
   weighting of `kl_tile` must break it.
 - **The shard round trip (L4).** Rows written and read back through the codec equal the rows the

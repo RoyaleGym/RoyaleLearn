@@ -229,6 +229,7 @@ class SeparateActorCritic(_BaseActorCritic):
             values=self.critic.value(obs),
             n_legal=distribution.n_legal(),
             logit_std=distribution.logit_std(),
+            distribution=distribution,
         )
 
     def distribution_on_rows(self, obs: ObsBatch, rows: Tensor) -> MaskedCategorical:
@@ -290,6 +291,7 @@ class SharedTrunkActorCritic(_BaseActorCritic):
             values=values,
             n_legal=distribution.n_legal(),
             logit_std=distribution.logit_std(),
+            distribution=distribution,
         )
 
     def critic_parameters(self) -> Iterator[Parameter]:

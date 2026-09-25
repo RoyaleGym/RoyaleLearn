@@ -51,6 +51,11 @@ HEALTHY: dict[str, float | int | str] = {
     "ladder/transitivity_residual": 0.02,
     "ladder/consecutive_gate_failures": 0,
     "throughput/rollout_capacity_ratio": 2.4,
+    # One imitation regulariser named "bc", well inside its budget, long after the unfreeze.
+    "imitation/bc/kl": 0.1,
+    "imitation/bc/lambda_at_max": 0.0,
+    "imitation/iterations_since_unfreeze": 50.0,
+    "imitation/ev_at_unfreeze": 0.6,
 }
 
 #: What one key has to become for each alarm to hold. ``worker_failures`` is a rise rather than
@@ -80,6 +85,12 @@ TRIPS: dict[str, dict[str, float]] = {
     "transitivity": {"ladder/transitivity_residual": 0.4},
     "gate_starved": {"ladder/consecutive_gate_failures": 6},
     "capacity_ratio": {"throughput/rollout_capacity_ratio": 0.8},
+    "imitation_ref_kl_high": {"imitation/bc/kl": 1.5},
+    "imitation_lambda_saturated": {"imitation/bc/lambda_at_max": 1.0},
+    # Inside the handoff window with a clip fraction the handoff bound catches and clip_pinned
+    # does not: it is the early-unfreeze reading this alarm exists for.
+    "imitation_handoff": {"imitation/iterations_since_unfreeze": 3.0, "ppo/clip_fraction": 0.35},
+    "imitation_critic_unready": {"imitation/ev_at_unfreeze": 0.1},
 }
 
 #: Alarms about a counter rising across rows rather than about one row's level. No single row
@@ -128,8 +139,28 @@ def test_every_alarm_is_tested_firing_and_staying_silent() -> None:
         "an alarm with no row that trips it"
     )
     for alarm in built.values():
-        absent = [key for key in alarm.keys if key not in HEALTHY]
+        absent = [key for key in alarm.keys if not any(_carries(key, k) for k in HEALTHY)]
         assert absent == [], f"{alarm.name} is silent on the healthy row: it lacks {absent}"
+
+
+def _carries(template: str, key: str) -> bool:
+    """Whether a row key is the template itself or, for a family, one of its members."""
+    import re
+
+    pattern = re.escape(template).replace(r"\{name\}", "[^/]+")
+    return re.fullmatch(pattern, key) is not None
+
+
+def test_a_family_alarm_names_only_the_members_that_hold() -> None:
+    """Two regularisers, one over its bound: the message names that one and not the other, and
+    a row carrying no member at all is not a firing."""
+    alarm = _alarm("imitation_ref_kl_high")
+    row = _row(**{"imitation/bc/kl": 1.5, "imitation/timing/kl": 0.2})
+    assert alarm.holds(row)
+    assert "imitation/bc/kl" in alarm.message(row)
+    assert "imitation/timing/kl" not in alarm.message(row)
+    bare = {key: value for key, value in HEALTHY.items() if not key.startswith("imitation/")}
+    assert not alarm.holds(bare)
 
 
 def _spill_rows(alarms, seconds, free_mb, *, count=1, start=1):

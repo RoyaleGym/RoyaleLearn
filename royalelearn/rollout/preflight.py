@@ -298,17 +298,53 @@ def ratio_precision(*, noop_bias: float, n_actions: int, dtype_name: str) -> flo
     """
     import math
 
-    bits = MANTISSA_BITS.get(dtype_name, MANTISSA_BITS["float32"])
     others = max(1, n_actions - 1)
     # p_max at initialisation: the biased action against a field of roughly equal ones. The rest
     # of the head is small next to a bias of several nats, so this is the bias alone.
     p_max = math.exp(noop_bias) / (math.exp(noop_bias) + others)
-    # The spacing between representable values at the biased logit's magnitude. A magnitude below
-    # one still has a spacing, so the floor keeps this a statement about the head rather than
-    # about zero.
-    magnitude = max(abs(noop_bias), 1.0)
+    return precision_bound(p_max=p_max, magnitude=abs(noop_bias), dtype_name=dtype_name)
+
+
+def precision_bound(*, p_max: float, magnitude: float, dtype_name: str) -> float:
+    """``p_max`` times the spacing between representable logits at ``magnitude``.
+
+    The arithmetic of ``ratio_precision`` with its two inputs given rather than derived from
+    ``noop_bias``: an actor loaded from an artifact (section 19.4) has a p_max and logits of its
+    own, and those are measured on its probe rows instead of assumed.
+    """
+    import math
+
+    bits = MANTISSA_BITS.get(dtype_name, MANTISSA_BITS["float32"])
+    # A magnitude below one still has a spacing, so the floor keeps this a statement about the
+    # head rather than about zero.
+    magnitude = max(float(magnitude), 1.0)
     spacing = 2.0 ** (math.floor(math.log2(magnitude))) * 2.0 ** -bits
-    return p_max * spacing
+    return float(p_max) * spacing
+
+
+def precision_name(config: RunConfig) -> str:
+    """The update's name for the run's autocast precision, the key of ``ppo.ratio_atol``."""
+    from ..learn.ppo import PRECISION_NAMES
+
+    name = str(config.net.autocast_dtype)
+    for dtype, spelling in PRECISION_NAMES.items():  # normalise torch's spelling to the config's
+        if spelling == name or str(dtype).endswith(name):
+            return spelling
+    return name
+
+
+def judge_ratio_precision(
+    predicted: float, atol: float, *, trouble: str, say: Callable[[str], None]
+) -> None:
+    """Refuse above the tolerance, warn within a factor of four of it, else say nothing more."""
+    if predicted <= atol / 4.0:
+        return
+    if predicted > atol:
+        raise PreflightError(
+            "this run would fail its own importance-ratio assertion within a few iterations: "
+            + trouble
+        )
+    say(f"              WARNING: within a factor of four of the guard. {trouble}")
 
 
 def _ratio_precision_gate(config: RunConfig, spec: EnvSpec, say: Callable[[str], None]) -> None:
@@ -318,13 +354,13 @@ def _ratio_precision_gate(config: RunConfig, spec: EnvSpec, say: Callable[[str],
     was written for died at iteration 6 with a deviation of 0.0261 against a tolerance of 0.02,
     and everything needed to predict that was in the config before it started.
     """
-    from ..learn.ppo import PRECISION_NAMES
-
-    name = str(config.net.autocast_dtype)
-    for dtype, spelling in PRECISION_NAMES.items():  # normalise torch's spelling to the config's
-        if spelling == name or str(dtype).endswith(name):
-            name = spelling
-            break
+    name = precision_name(config)
+    if config.imitation is not None and config.imitation.init is not None:
+        # The estimate below is from noop_bias alone, which is what a SEEDED actor's p_max is.
+        # An initialised actor's is its own, and it is measured on the artifact's probe rows
+        # once the weights are loaded (imitation.init.initialise_actor).
+        say(f"ratio guard   {name}: measured on the init artifact's probe rows after loading")
+        return
     predicted = ratio_precision(
         noop_bias=config.net.noop_bias, n_actions=spec.n_actions, dtype_name=name
     )
@@ -345,12 +381,7 @@ def _ratio_precision_gate(config: RunConfig, spec: EnvSpec, say: Callable[[str],
         f"{amplification:.0f}x what an unbiased head would see. Set net.autocast_dtype to "
         f"float32, measured at 9.5e-7 on this action space, or lower net.noop_bias"
     )
-    if predicted > atol:
-        raise PreflightError(
-            "this run would fail its own importance-ratio assertion within a few iterations: "
-            + trouble
-        )
-    say(f"              WARNING: within a factor of four of the guard. {trouble}")
+    judge_ratio_precision(predicted, atol, trouble=trouble, say=say)
 
 
 def _ladder_cost_line(config: RunConfig, geo: Geometry) -> str:

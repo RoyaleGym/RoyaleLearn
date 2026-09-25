@@ -92,6 +92,14 @@ PLANTS: dict[str, dict[str, Any] | list[dict[str, Any]]] = {
     "gate_starved": {"ladder/consecutive_gate_failures": 99},
     "capacity_ratio": {"throughput/rollout_capacity_ratio": 0.01},
     "artefact_exploit": {"policy/card_tile_top10_share": 0.99},
+    # The imitation alarms read families named by the run's own regularisers; "bc" is one. The
+    # real baseline row has no imitation keys at all, which is also what makes them quiet on it.
+    "imitation_ref_kl_high": {"imitation/bc/kl": 2.0},
+    "imitation_lambda_saturated": {"imitation/bc/lambda_at_max": 1.0},
+    # Early after an unfreeze, with a clip fraction the handoff bound catches and clip_pinned
+    # does not.
+    "imitation_handoff": {"imitation/iterations_since_unfreeze": 2.0, "ppo/clip_fraction": 0.4},
+    "imitation_critic_unready": {"imitation/ev_at_unfreeze": 0.05},
 }
 
 ALARMS = {alarm.name: alarm for alarm in default_alarms(AlarmConfig())}
@@ -160,11 +168,19 @@ def test_a_plant_only_touches_keys_the_alarm_declares(name: str) -> None:
     tripped through a key outside it is an alarm whose declaration is wrong -- and the schema
     check would not notice, because it only looks at what is declared.
     """
-    declared = set(ALARMS[name].keys)
+    declared = ALARMS[name].keys
     plant = PLANTS[name]
     steps = plant if isinstance(plant, list) else [plant]
     used = {key for step in steps for key in step}
-    assert used <= declared, f"{name} was planted through {sorted(used - declared)}"
+    undeclared = sorted(key for key in used if not any(_member(t, key) for t in declared))
+    assert not undeclared, f"{name} was planted through {undeclared}"
+
+
+def _member(template: str, key: str) -> bool:
+    """A declared key, or a member of a declared family such as ``imitation/{name}/kl``."""
+    import re
+
+    return re.fullmatch(re.escape(template).replace(r"\{name\}", "[^/]+"), key) is not None
 
 
 def test_the_baseline_trips_exactly_what_that_run_really_had_wrong() -> None:

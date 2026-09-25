@@ -75,6 +75,8 @@ PRODUCED_ELSEWHERE: dict[str, str] = {
     "env/frac_elixir_above_99": "rollout worker",
     # the advantage estimator's own report
     "ppo/advantage_std_pre_norm": "advantage estimator",
+    # section 19: the update's imitation terms, on a run with the block
+    **{key: "imitation terms" for key in schema.METRICS if key.startswith("imitation/")},
     # the update's own statistics of the cells that had a choice, taken where the population is
     "ppo/advantage_std_choice_pre_norm": "the update",
     "ppo/advantage_mean_choice": "the update",

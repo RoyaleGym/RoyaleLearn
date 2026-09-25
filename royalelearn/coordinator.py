@@ -64,6 +64,7 @@ from .ladder.rating import BradleyTerryDavidsonRater, EloReadout
 from .ladder.results import KIND_PROBE, ResultLog, context_digest
 from .ladder.snapshots import DiskSnapshotStore, SnapshotSpec
 from .metrics.alarms import AlarmSet
+from .metrics.behaviour import play_rate_by_elixir
 from .metrics.bundle import RatioOutlier, replay_episode, write_bundle
 from .metrics.records import (
     IterationMetrics,
@@ -508,6 +509,7 @@ class PolicyProbe:
         bar = np.concatenate(elixir).astype(np.float64)
         fields["env/mean_elixir_at_decision"] = float(bar.mean() * self.max_mana)
         fields["env/frac_elixir_above_99"] = float(np.mean(bar >= 0.99))
+        fields.update(play_rate_by_elixir(bar * self.max_mana, legal, taken))
 
         fields.update(
             self._plays(
@@ -1067,6 +1069,7 @@ class LearningCoordinator:
         # Before the buffer's shared segment and the workers exist: a refused init raises out of
         # __enter__, which no __exit__ follows, so anything built before it would be left behind.
         self._initialise_from_imitation()
+        self.imitation_terms = self._imitation_terms()
         self.buffer = RectBuffer(
             self.spec,
             self.codec,
@@ -1094,6 +1097,7 @@ class LearningCoordinator:
             backoff=self.schedules.backoff,
             device=self.device,
             progress=self.printer,
+            imitation=self.imitation_terms,
         )
         self._build_ladder()
         self.inference = BatchedInference(
@@ -1215,15 +1219,47 @@ class LearningCoordinator:
         imitation = self.config.imitation
         if imitation is None or imitation.init is None or self.resume_from is not None:
             return
-        from .imitation.init import initialise_actor
+        from .imitation.artifacts import read_actor_artifact
+        from .imitation.init import initialise_actor, loaded_ratio_guard
+        from .rollout.preflight import precision_name
 
+        codec = self.row_codec()
         self.init_self_test = initialise_actor(
             self.model,
             imitation.init,
             current=self._artifact_spec(),
-            codec=self.row_codec(),
+            codec=codec,
             printer=self.printer,
         )
+        probe = read_actor_artifact(imitation.init.path).probe
+        assert probe is not None  # initialise_actor refuses an init without one
+        self.init_ratio_precision = loaded_ratio_guard(
+            self.model,
+            codec,
+            probe.rows,
+            atol=self._ratio_atol(),
+            precision=precision_name(self.config),
+            say=self.printer,
+        )
+
+    def _imitation_terms(self) -> Any:
+        """The references and regularisers of section 19.6-19.8, or None without the block."""
+        imitation = self.config.imitation
+        if imitation is None:
+            return None
+        from .imitation.references import build_references
+        from .imitation.regularisers import ImitationTerms
+
+        references = build_references(
+            imitation,
+            spec=self.spec,
+            current=self._artifact_spec(),
+            build_actor=self._build_actor,
+            codec=self.row_codec(),
+            device=self.device,
+            printer=self.printer,
+        )
+        return ImitationTerms.from_config(imitation, references, self.spec)
 
     def _artifact_spec(self) -> SnapshotSpec:
         """What an actor this run can load must agree with: section 11.6's compatibility fields
@@ -2323,6 +2359,9 @@ class LearningCoordinator:
         digest.update(msgspec.json.encode(self.gae.scaler.state()))
         digest.update(msgspec.json.encode(self.schedules.backoff.state()))
         digest.update(str(self.update.model_updates).encode("utf-8"))
+        # Only with the block, so a run without it keeps the digest it always had.
+        if self.update.imitation is not None:
+            digest.update(msgspec.json.encode(self.update.imitation.state()))
         return digest.hexdigest()
 
     # -- what a halt leaves behind -------------------------------------------

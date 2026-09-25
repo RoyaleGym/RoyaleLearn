@@ -168,6 +168,10 @@ class BackpropResult(msgspec.Struct):
     #: and reads within 1e-5 of its maximum for the first hundred iterations of a run; this does
     #: not, so it is the one a plot can show.
     logit_std: Tensor
+    #: The masked distribution itself, over every row, for a term that needs more of it than
+    #: the taken action's log-probability -- the reference KL of section 19.7. None from an
+    #: implementation that does not say.
+    distribution: Any = None
 
 
 class NetworkFactory(ABC):

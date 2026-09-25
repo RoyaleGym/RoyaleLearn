@@ -251,12 +251,14 @@ class ScheduleSet:
         ent_coef_noop: Schedule,
         gae_lambda: float,
         backoff: LrBackoff,
+        actor_lr_scale: Schedule | None = None,
     ) -> None:
         self.gamma = gamma
         self.ent_coef = ent_coef
         self.ent_coef_noop = ent_coef_noop
         self.gae_lambda = float(gae_lambda)
         self.backoff = backoff
+        self.actor_lr_scale = actor_lr_scale if actor_lr_scale is not None else Constant(1.0)
 
     @classmethod
     def from_config(cls, config: RunConfig) -> ScheduleSet:
@@ -269,6 +271,11 @@ class ScheduleSet:
                 config.ppo.lr_backoff,
                 lr_actor=config.ppo.lr_actor,
                 lr_critic=config.ppo.lr_critic,
+            ),
+            actor_lr_scale=(
+                build_schedule(config.imitation.actor_lr_scale)
+                if config.imitation is not None and config.imitation.actor_lr_scale is not None
+                else None
             ),
         )
 
@@ -288,4 +295,5 @@ class ScheduleSet:
             lr_actor=self.backoff.lr_actor,
             lr_critic=self.backoff.lr_critic,
             lr_backoff_events=self.backoff.events,
+            actor_lr_scale=self.actor_lr_scale.value(steps),
         )
