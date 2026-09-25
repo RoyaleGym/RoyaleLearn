@@ -284,7 +284,12 @@ METRICS: dict[str, MetricSpec] = {
         "units", "The return scaler's running standard deviation: the divisor."
     ),
     "ppo/reward_clip_frac": _m(
-        "fraction", "Share of rewards the clip bound touched.", low=0.0, high=0.01
+        "fraction",
+        "Share of rewards the clip bound touched. Healthy is exactly zero: a clipped step is one "
+        "where the potential terms stop cancelling, so the shaping can move the optimum, and a "
+        "clipped terminal step makes a win worth less than a win.",
+        low=0.0,
+        high=0.0,
     ),
     "ppo/n_minibatches": _m("count", "Minibatch forwards this iteration.", dtype="int"),
     "ppo/n_optimizer_steps": _m("count", "Optimizer steps this iteration.", dtype="int"),
@@ -772,6 +777,7 @@ ALARM_METRICS: dict[str, tuple[str, ...]] = {
     "seat_bias": ("env/win_rate_by_seat_ci95_lo", "env/win_rate_by_seat_ci95_hi"),
     "elixir_count_inexact": ("env/elixir_count_exact_frac",),
     "shaping_dominates": ("env/reward_shaping_abs", "env/reward_terminal_abs"),
+    "reward_clipped": ("ppo/reward_clip_frac",),
     "vram_spilling": ("time/update", "health/vram_driver_free_mb"),
     "transitivity": ("ladder/transitivity_residual",),
     "gate_starved": ("ladder/consecutive_gate_failures",),

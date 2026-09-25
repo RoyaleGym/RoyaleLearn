@@ -275,6 +275,7 @@ These are about what the policy is actually doing in battles. Six warn; one stop
 | `tile_spam` | `policy/tile_top1_share` | above `alarms.tile_top1_share` (0.25) | warn, 5 |
 | `artefact_exploit` | `policy/card_tile_top10_share` | above `alarms.card_tile_top10_share` (0.5) | warn, 5 |
 | `draw_equilibrium` | `env/draw_rate`, `env/episode_steps_at_cap_frac` | draws above 0.5 **and** episodes ending at the cap above 0.8 | warn, 5 |
+| `reward_clipped` | `ppo/reward_clip_frac` | any reward was clipped this iteration | warn, 1 |
 | `shaping_dominates` | `env/reward_shaping_abs`, `env/reward_terminal_abs` | the shaping terms' per-episode sums exceed the terminal term's: a term has stopped telescoping | warn, 5 |
 
 **`noop_collapse` and `noop_collapse_severe`.** Cards played per finished battle, not the no-op
@@ -301,6 +302,12 @@ strategy. This is the only warn-severity alarm that writes a diagnostic bundle a
 **`draw_equilibrium`.** The turtle equilibrium: nobody attacks, and the step limit ends every
 game. It needs both conditions, which is what distinguishes it from a run that happens to be
 drawing. Usually a reward shaping problem: there is no gradient pushing anyone to commit.
+
+**`reward_clipped`.** A reward hit `advantage.reward_clip` this iteration. That matters more
+than the size of the number suggests. Potential shaping leaves the best policy unchanged only
+while every step's reward reaches the return intact, and a clipped step is one where it does not.
+If the step that was cut was the one carrying the win, a win is worth less than a win. Raise
+`advantage.reward_clip`, or lower the shaping weights you raised.
 
 **`shaping_dominates`.** One of your shaping terms has stopped telescoping. Under a potential
 reward each term's per-episode sum is small by construction, whatever its weight: the steps cancel.

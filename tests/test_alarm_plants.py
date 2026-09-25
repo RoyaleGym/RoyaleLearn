@@ -61,6 +61,8 @@ QUIET = dict(BASELINE, **{"ppo/kl": 0.008, "ppo/explained_variance": 0.7})
 #: between rows rather than a level.
 PLANTS: dict[str, dict[str, Any] | list[dict[str, Any]]] = {
     "ratio_invariant": {"ppo/ratio_max_abs_dev": 1.0},
+    # Below the 1% the schema used to call healthy: under potential shaping any cut is a cut.
+    "reward_clipped": {"ppo/reward_clip_frac": 0.001},
     "nonfinite": {"health/nan_guard_trips": 3},
     "buffer_overflow": {"health/buffer_fill_frac": 1.5},
     "illegal_actions": {"env/illegal_action_rate": 0.5},

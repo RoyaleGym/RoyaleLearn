@@ -321,6 +321,22 @@ def default_alarms(config: AlarmConfig, *, ratio_atol: float = DEFAULT_RATIO_ATO
                 "identity.json engine_build first"
             ),
         ),
+        # "The optimum is unchanged" was an OBSERVATION until this: potential shaping telescopes
+        # only while every step's reward reaches the return intact, and the clip is the one
+        # place a step can be cut. It never fired in the first eight runs on this machine, which
+        # said the rewards had stayed small, not that they must. Stronger weights, another
+        # reward scale or another deck can start it cutting, and nothing else would change
+        # visibly. Found by the integrator, reading every run's rows, 2026-09-24.
+        MetricAlarm(
+            "reward_clipped",
+            lambda frac: frac > 0.0,
+            patience=1,
+            meaning=(
+                "a reward was clipped: on that step the potential terms no longer cancel, so the "
+                "shaping can move the optimum, and if the terminal step was cut a win is worth "
+                "less than a win. Raise advantage.reward_clip or lower the shaping weights"
+            ),
+        ),
         MetricAlarm(
             "shaping_dominates",
             lambda shaping, terminal: shaping > terminal,
