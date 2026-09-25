@@ -1,0 +1,81 @@
+# RoyaleImitate's suite, against the RoyaleLearn commit under test.
+#
+# RoyaleImitate is built only on royalelearn.extensions, and this repo promises to keep that
+# surface. This job is where the promise is checked: a change here that breaks the add-on shows
+# on the commit that made it, not on RoyaleImitate's next push. RoyaleImitate's own CI runs the
+# same suite against this repo's main.
+#
+# The install is the READMEs' sequence, as in suite.yml, with this checkout as RoyaleLearn and
+# RoyaleImitate at its main. No royalesim build: the RustEngine rows of its test_public_log skip.
+name: imitate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  imitate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: RoyaleLearn
+      - uses: actions/checkout@v4
+        with:
+          repository: RoyaleGym/RoyaleImitate
+          path: RoyaleImitate
+      - uses: actions/checkout@v4
+        with:
+          repository: RoyaleGym/RoyaleGym
+          path: RoyaleGym
+      - uses: actions/checkout@v4
+        with:
+          repository: RoyaleGym/RoyaleViser
+          path: RoyaleViser
+      - uses: actions/checkout@v4
+        with:
+          repository: RoyaleGym/RoyaleSim
+          path: RoyaleSim
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install torch (cpu)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: generate RoyaleSim's data tables
+        working-directory: RoyaleSim
+        shell: bash
+        run: |
+          python tools/extract_arena.py
+          python tools/extract_cards.py --vintage 2018
+          python tools/extract_cards.py --vintage 2018 --out data/derived/cards.json
+          python tools/extract_globals.py
+
+      - name: install
+        shell: bash
+        run: |
+          pip install -e RoyaleGym
+          pip install -e RoyaleViser
+          pip install -e "RoyaleLearn[torch]"
+          pip install -e "RoyaleLearn[dev]"
+          pip install -e RoyaleImitate --no-deps
+
+      - name: RoyaleImitate's suite
+        working-directory: RoyaleImitate
+        env:
+          ROYALESIM_DATA_DIR: ${{ github.workspace }}/RoyaleSim/data
+        run: pytest -q -p no:randomly -rs
+
+      - name: record what this run was
+        if: always()
+        shell: bash
+        run: |
+          echo "royalelearn=$(git -C RoyaleLearn rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "royaleimitate=$(git -C RoyaleImitate rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
