@@ -67,6 +67,12 @@ class Manifest(msgspec.Struct):
     state_digest: str
     component_versions: dict[str, int]
     files: dict[str, str]
+    #: Seconds spent gating so far, and the last gate's decision: run state, like the wall clock.
+    #: None on a manifest written before either was recorded.
+    gate_seconds: float | None = None
+    #: Stored as plain data and converted by the coordinator, so this module need not import
+    #: the ladder's types: ``api.ladder`` already imports this one.
+    last_decision: dict[str, Any] | None = None
 
 
 class RngState(msgspec.Struct):

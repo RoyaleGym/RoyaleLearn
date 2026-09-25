@@ -829,8 +829,13 @@ CONDITIONAL: dict[str, str] = {
     # reads as a measurement: an Elo of zero, uncorrelated seats, a gate that cost nothing, a
     # perfectly transitive rating, and a learner exactly as good as the first snapshot.
     "ladder/elo_readout": "a training game has been scored this run",
-    "ladder/paired_rho": "the paired-seed correlation has been computed",
-    "ladder/gate_seconds_frac": "a gate ran this iteration",
+    "ladder/paired_rho": (
+        "a gate has played a champion comparison and its paired-seed correlation is defined"
+    ),
+    "ladder/gate_seconds_frac": (
+        "the run's gate total is known: absent only after resuming a checkpoint written before "
+        "it was recorded"
+    ),
     "ladder/transitivity_residual": "a rating fit exists",
     "ladder/rating_above_v0": "the fit holds both the learner and the first snapshot",
     "ladder/gate_observed_rate": "a gate decision carries its champion condition",

@@ -978,6 +978,8 @@ class LearningCoordinator:
         self.ratings: RatingTable | None = None
         self.last_gate_seconds = 0.0
         self.gate_seconds_total = 0.0
+        #: True after resuming a checkpoint that predates the gate total being recorded.
+        self.gate_seconds_unknown = False
         #: The last probe of the live policy, by rung. Emptied at the top of every iteration, so
         #: a row publishes a score only when that iteration measured one: a probe's numbers are
         #: about the weights it played, and the weights move every iteration.
@@ -1877,7 +1879,7 @@ class LearningCoordinator:
             decision = floor_decision(candidate, self.pool.champion)
         else:
             decision = self.gate.evaluate(candidate, self.pool, self.eval_runner)
-        self.pool.apply(decision)
+        self.pool.apply(decision, step=self.cumulative_env_steps)
         self.last_decision = decision
         self._evict()
         seconds = time.perf_counter() - started
@@ -2106,7 +2108,11 @@ class LearningCoordinator:
                 decision=self.last_decision,
                 elo=self.elo.rating(LEARNER_ID),
                 paired_rho=self._paired_rho(),
-                gate_seconds_frac=self.gate_seconds_total / max(1e-9, wall),
+                gate_seconds_frac=(
+                    None
+                    if self.gate_seconds_unknown
+                    else self.gate_seconds_total / max(1e-9, wall)
+                ),
                 rungs=self.last_rungs or None,
                 # Absent until a probe has run, rather than a zero that reads as "probing is
                 # free" on a run that never probes.
@@ -2142,15 +2148,22 @@ class LearningCoordinator:
                 metrics.health[f"health/housekeeping/{kind}"] = int(n)
         return metrics.row()
 
-    def _paired_rho(self) -> float:
-        """How much of a battle's outcome the start state decided, from the last comparison.
+    def _paired_rho(self) -> float | None:
+        """How much of a battle's outcome the start state decided, in the last gate's CHAMPION
+        comparison -- the one whose effective sample size decides the gate.
 
-        It is the number that sets the gate's real effective sample size, and it is worth
-        knowing on its own, so it is kept off the last comparison the evaluation runner made
-        rather than recomputed from the result log.
+        It used to be read off whichever comparison the evaluation runner made last, which after
+        a full gate is the eighth stratified member, and to be 0.0 when there was none; hog26-10
+        published 0.0 in every row. Now it is the champion condition's own, and None -- so the
+        row leaves the key out -- when no gate has played a champion or the correlation is
+        undefined.
         """
-        comparison = self.eval_runner.last
-        return float(comparison.rho) if comparison is not None else 0.0
+        from .ladder.gate import CONDITION_CHAMPION
+
+        if self.last_decision is None:
+            return None
+        champion = self.last_decision.conditions.get(CONDITION_CHAMPION)
+        return None if champion is None else champion.rho
 
     def _take_checkpoint_seconds(self) -> float:
         """What the last checkpoint cost, once. A checkpoint is written after the row it
@@ -2179,6 +2192,10 @@ class LearningCoordinator:
             cumulative_timesteps=self.cumulative_timesteps,
             cumulative_model_updates=self.update.model_updates,
             wall_seconds=self.wall_seconds,
+            gate_seconds=self.gate_seconds_total,
+            last_decision=(
+                msgspec.to_builtins(self.last_decision) if self.last_decision else None
+            ),
             created_unix_ns=time.time_ns(),
             state_digest=self.state_digest(),
             component_versions={},
@@ -2227,6 +2244,18 @@ class LearningCoordinator:
         self.cumulative_env_steps = manifest.cumulative_env_steps
         self.cumulative_timesteps = manifest.cumulative_timesteps
         self.wall_seconds = manifest.wall_seconds
+        # The gate's total and its last decision are run state like the wall clock. They lived
+        # only in the process that ran the gate, so after a resume hog26-10 published
+        # gate_seconds_frac 0.0 and its gate columns vanished. A checkpoint from before they were
+        # recorded has neither; the total is then unknown for the rest of the run, and the row
+        # leaves it out rather than restart it at zero.
+        self.last_decision = (
+            msgspec.convert(manifest.last_decision, GateDecision)
+            if manifest.last_decision is not None
+            else None
+        )
+        self.gate_seconds_unknown = manifest.gate_seconds is None
+        self.gate_seconds_total = manifest.gate_seconds or 0.0
         self._last_checkpoint_step = manifest.cumulative_env_steps
         self._saved_at = (manifest.cumulative_env_steps, Path(path))
         self._last_candidate_step = manifest.cumulative_env_steps

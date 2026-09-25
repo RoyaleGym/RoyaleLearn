@@ -191,12 +191,14 @@ every row they appear in. As of 2026-09-22 there were 56 metric files and 249 ro
 | `ladder/score_vs_noop`, `ladder/score_vs_random_legal` | Real on probe iterations; absent otherwise; exactly 0.5 in all 172 older rows that have them | Score against the two scripted benchmark opponents. The bot used never to be evaluated under its own name, so the pair these keys asked about had no games and the lookup answered 0.5, which is also what a genuine dead heat looks like; then the key was omitted. Since `ladder.probe_every_iterations` exists they are the live bot's own score, measured on the iterations it probes, with `ladder/score_vs_n/{rung}` beside them for the sample size and `ladder/score_vs_ci95_lo\|hi/{rung}` for the interval. Off by default. Read the interval first: at the shipped width a move under about 18 points against `random_legal` is the instrument rather than the bot. See `ladder.md`. |
 | `time/overlap_saved` | Hardcoded 0.0 | A timing slot reserved for overlapped collection, which is not built. `time/critic_pass` and `time/gae` were beside it until 2026-09-22 and are now measured: they are the critic's pass over every collected cell and the advantage recursion, both of which run before the first epoch of an update. |
 | `time/codec` | 0.0 in every row on disk | Time spent packing observations in the workers. It reads `codec_ms` out of the rollout source's stats, and no shipped source reports it yet. |
+| `ladder/champion_step` | 0 in every row on disk | The env step the champion was snapshotted at. Every admission was filed at step 0 until 2026-09-24, because the pool looked the step up in the registry the candidate was about to be added to. New runs carry the real step. |
+| `ladder/paired_rho` | 0.0 in every row on disk | The champion comparison's paired-seed correlation. It was read off whichever comparison ran last, and an undefined correlation was written as 0.0; both fixed 2026-09-24. It is now absent when there is nothing to report. |
 | `env/reward_terminal_abs` | 0.0 in every row on disk | How much of the reward came from actually winning. A fix landed on 2026-09-22 (commit `c38dc82`) that files the win/loss term under the fixed name `terminal` rather than under its Python class name. Every row currently on disk predates that fix, so they all read 0.0. New runs should carry a real number. |
 
 Some other rows are zero simply because nothing has happened yet, and those are fine:
 `health/worker_restarts`, `health/nan_guard_trips`, `health/obs_codec_clipped`,
 `health/housekeeping_failures`,
-`ppo/lr_backoff_events`, `ladder/evictions`, `ladder/champion_step`. Zero there is the healthy
+`ppo/lr_backoff_events`, `ladder/evictions`. Zero there is the healthy
 reading. `env/illegal_action_rate` and `health/samples_unused_frac` are zero **by construction**:
 the schema gives both a healthy range of exactly 0 to 0, and a non-zero value is a bug report.
 

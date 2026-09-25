@@ -175,7 +175,7 @@ class Comparison(msgspec.Struct, frozen=True):
     score_a: float
     lo: float
     hi: float
-    rho: float
+    rho: float | None
     draw_rate: float
     seed_scores: tuple[SeedScore, ...]
 
@@ -374,18 +374,20 @@ class EvalRunner:
             )
 
 
-def paired_rho(scores: Sequence[SeedScore]) -> float:
-    """The correlation between a seed's two side assignments.
+def paired_rho(scores: Sequence[SeedScore]) -> float | None:
+    """The correlation between a seed's two side assignments, or None where it is undefined.
 
-    Zero variance on either side -- every seed decided the same way -- is reported as zero
-    rather than as a division by zero: nothing about the pairing was learned.
+    Undefined with fewer than two seeds, or with zero variance on either side -- every seed
+    decided the same way -- where nothing about the pairing was learned. That used to be
+    reported as 0.0, which does not read as "undefined": it reads as "uncorrelated", and it is
+    what ``ladder/paired_rho`` published in every row of hog26-10.
     """
     if len(scores) < 2:
-        return 0.0
+        return None
     blue = np.array([score.as_blue for score in scores], dtype=np.float64)
     red = np.array([score.as_red for score in scores], dtype=np.float64)
     if blue.std() == 0.0 or red.std() == 0.0:
-        return 0.0
+        return None
     return float(np.corrcoef(blue, red)[0, 1])
 
 

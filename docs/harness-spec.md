@@ -2621,7 +2621,10 @@ eval seed set hash, the champion id and the wall time.
    are correlated and treating them as independent overstates `n` by up to a factor of two.
 
 The empirical correlation between the two side assignments on a seed, `rho`, is measured and logged as
-`ladder/paired_rho`. The effective sample size is about `n / (1 + rho)`; at `rho = 0` pairing costs
+`ladder/paired_rho` -- for the last gate's CHAMPION comparison, which is the one whose effective sample
+size decides the gate, carried on that condition's record. Where it is undefined (every seed decided
+one way on a side) it is None and the key is absent; it used to be written as 0.0, which reads as
+"uncorrelated". The effective sample size is about `n / (1 + rho)`; at `rho = 0` pairing costs
 nothing and above it pairing wins. It is also worth knowing on its own: it says how much of a battle's
 outcome the start state decides rather than the policies.
 

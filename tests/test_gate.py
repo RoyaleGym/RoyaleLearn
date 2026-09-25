@@ -225,10 +225,38 @@ def test_a_swept_rung_does_not_report_a_zero_width_interval() -> None:
 def test_the_paired_correlation_is_reported(tmp_path) -> None:
     both = SwapPlayer(blue_wins=set(range(1000)), red_wins=set(range(0, 1000, 2)))
     comparison = _runner(both, tmp_path, seeds=40).compare("a", "b", games=40)
-    assert -1.0 <= comparison.rho <= 1.0
-    # Every seed goes the same way on blue, so there is nothing to correlate and the number
-    # says so rather than dividing by zero.
-    assert comparison.rho == 0.0
+    # Every seed goes the same way on blue, so there is nothing to correlate. This used to be
+    # reported as 0.0, which does not say "undefined": it says "uncorrelated", and it is the
+    # number hog26-10 published in every row. None is the answer that cannot be misread.
+    assert comparison.rho is None
+
+
+def test_a_correlation_that_exists_is_a_number(tmp_path) -> None:
+    """The control: undefined is only for the degenerate case."""
+    both = SwapPlayer(
+        blue_wins=set(range(0, 1000, 2)) | set(range(1, 1000, 6)),
+        red_wins=set(range(0, 1000, 2)),
+    )
+    comparison = _runner(both, tmp_path, seeds=40).compare("a", "b", games=40)
+    assert comparison.rho is not None and -1.0 <= comparison.rho <= 1.0
+
+
+def test_the_champion_condition_carries_its_own_correlation(tmp_path) -> None:
+    """``ladder/paired_rho`` claims to set the GATE's effective sample size, which is the champion
+    comparison's. It used to read whichever comparison the runner made last -- the eighth
+    stratified member -- so the champion's is now kept on the condition that played it."""
+    pool = _gated_pool(tmp_path)
+    rates = _rates(0.7, members=0.9)
+    decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(QuotaPlayer(rates), tmp_path))
+
+    # An independent replay of the champion comparison alone: same player, same frozen seeds.
+    alone = _runner(QuotaPlayer(rates), tmp_path).compare(CANDIDATE, CHAMPION, games=1000)
+    # And the comparison a gate plays LAST, which is what used to be read.
+    last = _runner(QuotaPlayer(rates), tmp_path).compare(CANDIDATE, POOL_MEMBERS[-1], games=100)
+
+    assert alone.rho is not None, "the fixture must give the champion comparison a defined rho"
+    assert decision.conditions[CONDITION_CHAMPION].rho == pytest.approx(alone.rho)
+    assert last.rho != alone.rho, "the fixture cannot tell the champion's from the last one"
 
 
 def test_a_pairing_of_two_different_observations_is_refused(tmp_path) -> None:
@@ -379,7 +407,7 @@ def test_the_first_candidate_of_a_run_is_admitted_unopposed(tmp_path) -> None:
     )
     assert decision.admit and decision.promote
     assert decision.conditions == {}
-    pool.apply(decision)
+    pool.apply(decision, step=12_500_000)
     assert pool.champion == CANDIDATE
     assert pool.v0 == CANDIDATE
 
@@ -393,12 +421,12 @@ def test_the_pool_counts_what_the_gate_decided(tmp_path) -> None:
     pool = _pool(tmp_path)
     gate = _gate(tmp_path)
     failing = gate.evaluate(CANDIDATE, pool, _runner(QuotaPlayer(_rates(0.50)), tmp_path))
-    pool.apply(failing)
+    pool.apply(failing, step=12_500_000)
     assert pool.state.consecutive_gate_failures == 1
     assert pool.state.gate_attempts == 1
     assert pool.champion == CHAMPION
     passing = gate.evaluate(CANDIDATE, pool, _runner(QuotaPlayer(_rates(0.60)), tmp_path))
-    pool.apply(passing)
+    pool.apply(passing, step=12_500_000)
     assert pool.state.consecutive_gate_failures == 0
     assert pool.state.gate_passes == 1
     assert pool.champion == CANDIDATE
@@ -740,3 +768,29 @@ def test_an_empty_pool_skips_the_collapse_check_and_says_why(tmp_path) -> None:
     assert "no" in collapse.reason and "pool" in collapse.reason, collapse.reason
     assert decision.admit and decision.promote and not decision.cycle
     assert failed_condition(decision) == "none", "a promoted candidate named a failed condition"
+
+
+# -- the champion's step -------------------------------------------------------------------
+
+
+def test_an_admitted_candidate_is_filed_at_the_step_it_was_taken(tmp_path) -> None:
+    """``apply`` used to look the candidate's step up in the registry it was about to be added to.
+
+    A new candidate is never there yet, so every admission was filed at step 0 and
+    ``ladder/champion_step`` read 0 in every row of hog26-10. The caller knows the step -- it took
+    the snapshot -- so it now has to say it, and there is no fallback that could guess.
+    """
+    pool = LadderPool(ResultLog(tmp_path / "games.jsonl"), context="ctx")
+    decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(QuotaPlayer({}), tmp_path))
+    pool.apply(decision, step=12_500_000)
+    assert pool.champion == CANDIDATE
+    assert pool.step_of(pool.champion) == 12_500_000
+
+
+def test_apply_cannot_be_called_without_the_step() -> None:
+    """The shape that made the bug possible is gone: the step is not optional."""
+    import inspect
+
+    parameter = inspect.signature(LadderPool.apply).parameters["step"]
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY

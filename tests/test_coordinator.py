@@ -720,3 +720,100 @@ def test_a_run_never_leaves_its_shared_segment_behind(tmp_path: Path) -> None:
             run.iterate()
             names.append(run.buffer.shared_handle().name)
     assert names[0] != names[1], "two runs shared one segment name"
+
+
+def test_the_row_says_the_step_the_champion_was_taken_at(tmp_path: Path) -> None:
+    """Through a real iteration: the first candidate is admitted unopposed and becomes champion,
+    and the row names the env step it was snapshotted at, not 0."""
+    base = tiny_config(tmp_path)
+    config = msgspec.structs.replace(
+        base, ladder=msgspec.structs.replace(base.ladder, candidate_every_env_steps=1)
+    )
+    with coordinator(config) as run:
+        run.iterate()
+        champion = run.pool.champion
+        assert champion is not None
+        row = run.rows[-1]
+        assert row["ladder/champion_step"] == run.cumulative_env_steps > 0
+
+
+def test_paired_rho_is_the_champion_comparisons_and_absent_without_one(run: Any) -> None:
+    """Read off the decision's champion condition, never off the runner's last comparison, and
+    never a 0.0 standing in for "nothing measured" -- hog26-10 published 0.0 in every row."""
+    from royalelearn.api.ladder import ConditionResult, GateDecision
+    from royalelearn.ladder.gate import CONDITION_CHAMPION
+
+    assert run._paired_rho() is None, "no gate yet, and the row claimed a correlation"
+    run.last_decision = GateDecision(
+        candidate="c",
+        champion="p",
+        admit=True,
+        promote=True,
+        cycle=False,
+        conditions={
+            CONDITION_CHAMPION: ConditionResult(
+                passed=True, n=8, observed=0.7, bound=0.6, reference=0.52, rho=0.37
+            )
+        },
+        eval_seed_set_sha="x",
+        wall_seconds=1.0,
+    )
+    assert run._paired_rho() == pytest.approx(0.37)
+
+
+def test_the_gate_state_survives_a_resume(tmp_path: Path) -> None:
+    """hog26-10 after its resume: gate_seconds_frac read 0.0 and the gate columns vanished,
+    because the gate total and the last decision lived only in the process that ran the gate."""
+    base = tiny_config(tmp_path)
+    config = msgspec.structs.replace(
+        base, ladder=msgspec.structs.replace(base.ladder, candidate_every_env_steps=1)
+    )
+    with coordinator(config) as first:
+        first.iterate()
+        assert first.last_decision is not None and first.gate_seconds_total > 0
+        decision, seconds = first.last_decision, first.gate_seconds_total
+        saved = first.checkpoint()
+        run_dir = first.run_dir
+    with coordinator(config, resume=saved, run_dir=run_dir) as again:
+        assert again.last_decision == decision
+        assert again.gate_seconds_total == pytest.approx(seconds)
+
+
+@pytest.mark.slow  # a real gate plays out on the resumed iteration: about fifty seconds
+def test_a_checkpoint_from_before_the_gate_state_resumes_and_leaves_the_total_out(
+    tmp_path: Path,
+) -> None:
+    """A manifest written before the gate total was recorded: unknown, so absent, not 0.0.
+
+    Built by removing the two fields from a real manifest, which is exactly what an older
+    checkpoint's manifest is. The manifest is not in its own hash list, so this is a real load.
+    """
+    import json
+
+    base = tiny_config(tmp_path)
+    # A gate every iteration, small enough for the four evaluation seeds a tiny run holds: the
+    # resumed iteration plays a real one against the champion the first iteration admitted.
+    small_gate = cfg.GateConfig(
+        champion_games=8, anchor_games=8, stratified_snapshots=1, stratified_games=8
+    )
+    config = msgspec.structs.replace(
+        base,
+        ladder=msgspec.structs.replace(base.ladder, candidate_every_env_steps=1, gate=small_gate),
+    )
+    with coordinator(config) as first:
+        first.iterate()
+        saved = first.checkpoint()
+        run_dir = first.run_dir
+    manifest = saved / "manifest.json"
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "gate_seconds" in raw and "last_decision" in raw, "nothing to remove"
+    del raw["gate_seconds"], raw["last_decision"]
+    manifest.write_text(json.dumps(raw), encoding="utf-8")
+
+    with coordinator(config, resume=saved, run_dir=run_dir) as again:
+        assert again.last_decision is None
+        assert again.gate_seconds_unknown
+        again.iterate()
+        assert "ladder/gate_seconds_frac" not in again.rows[-1], (
+            "a total nobody recorded was published as a number"
+        )

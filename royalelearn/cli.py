@@ -559,7 +559,8 @@ def _eval(args: argparse.Namespace) -> int:
         print(f"games written to {side}, not to this run's ladder (--record puts them in it)")
     print(f"{args.a} vs {args.b} over {comparison.n_games} battles ({comparison.n_seeds} seeds)")
     print(f"score  {comparison.score_a:.4f}  95% [{comparison.lo:.4f}, {comparison.hi:.4f}]")
-    print(f"rho    {comparison.rho:.3f}   draws {comparison.draw_rate:.3f}")
+    rho = "undefined" if comparison.rho is None else f"{comparison.rho:.3f}"
+    print(f"rho    {rho}   draws {comparison.draw_rate:.3f}")
     return 0
 
 

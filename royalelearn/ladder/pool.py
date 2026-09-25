@@ -266,19 +266,24 @@ class LadderPool:
             self.state.residency_epoch += 1
         return tuple(removed)
 
-    def apply(self, decision: GateDecision) -> None:
+    def apply(self, decision: GateDecision, *, step: int) -> None:
         """Act on one gate's verdict, and count it.
 
         Admission and promotion are separate because a pool that only ever admits champions
         forgets everything it beat: a candidate that beats the champion but collapses against
         the wider pool is a useful, diverse opponent and a detected cycle, not progress.
+
+        ``step`` is the env step the candidate was snapshotted at, and it is required. This used
+        to look the step up in the registry the candidate was about to be added to, where a new
+        candidate never is, so every admission was filed at 0 and ``ladder/champion_step`` read 0
+        in every row of hog26-10. The caller took the snapshot; the caller says when.
         """
         self.state.gate_attempts += 1
         if decision.admit:
             self.state.gate_passes += 1
             self.state.consecutive_gate_failures = 0
             meta: dict[str, Any] = {"cycle": decision.cycle}
-            self.add(decision.candidate, step=self.step_of(decision.candidate), meta=meta)
+            self.add(decision.candidate, step=int(step), meta=meta)
             if decision.promote:
                 self.promote(decision.candidate)
         else:

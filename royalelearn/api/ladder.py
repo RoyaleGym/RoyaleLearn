@@ -118,6 +118,10 @@ class ConditionResult(msgspec.Struct):
     #: the decision was already settled, or there was nothing to measure it against. Empty on a
     #: condition that was played, and on every record written before this field existed.
     reason: str = ""
+    #: The paired-seed correlation of the comparison this condition played, or None where it is
+    #: undefined or was not played. Kept here because ``ladder/paired_rho`` is the CHAMPION
+    #: comparison's, and it used to be read off whichever comparison the runner made last.
+    rho: float | None = None
 
 
 class GateDecision(msgspec.Struct):

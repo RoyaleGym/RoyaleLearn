@@ -251,6 +251,7 @@ class WilsonGate(PromotionGate):
             observed=comparison.score_a,
             bound=lower,
             reference=self.config.champion_lower_bound,
+            rho=comparison.rho,
         )
 
     def _anchor(
