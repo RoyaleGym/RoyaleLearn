@@ -55,7 +55,7 @@ jobs:
         run: |
           python tools/extract_arena.py
           python tools/extract_cards.py --vintage 2018
-          python tools/extract_cards.py --vintage 2018 --out data/derived/cards.json
+          cp data/derived/cards-15.535.json data/derived/cards.json
           python tools/extract_globals.py
 
       - name: install

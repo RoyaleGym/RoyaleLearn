@@ -80,10 +80,14 @@ jobs:
       - name: install torch (cpu)
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      # The README's Stage 3, verbatim. RoyaleSim's data tables are GENERATED rather than stored,
-      # so a fresh clone does not have them, and the second run of this workflow is how that was
-      # learnt: `data/derived/arena.json is absent` on 295 tests. Seconds, and it has to happen
-      # before anything constructs an environment.
+      # The README's Stage 3. RoyaleSim's data tables are GENERATED rather than stored, so a fresh
+      # clone does not have them, and the second run of this workflow is how that was learnt:
+      # `data/derived/arena.json is absent` on 295 tests. Seconds, and it has to happen before
+      # anything constructs an environment.
+      #
+      # The engine reads the 15.535 card table, by copy, as the README installs it. Until
+      # 2026-09-25 this step wrote the 2018 table into cards.json instead, so every run of this
+      # workflow tested a card table no reader gets while this comment called it verbatim.
       - name: generate RoyaleSim's data tables
         working-directory: RoyaleSim
         # bash on both platforms: the four commands are identical and the forward slashes work
@@ -92,7 +96,7 @@ jobs:
         run: |
           python tools/extract_arena.py
           python tools/extract_cards.py --vintage 2018
-          python tools/extract_cards.py --vintage 2018 --out data/derived/cards.json
+          cp data/derived/cards-15.535.json data/derived/cards.json
           python tools/extract_globals.py
 
       - name: install
