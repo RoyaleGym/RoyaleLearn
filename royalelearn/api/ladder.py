@@ -114,6 +114,10 @@ class ConditionResult(msgspec.Struct):
     #: anchors" and "nobody asked" are different findings. ``passed`` is False and ``n`` is 0 on
     #: a skipped condition, so anything reading either without reading this reads a refusal.
     skipped: bool = False
+    #: Why a skipped condition was not played. Two reasons, and they are different findings:
+    #: the decision was already settled, or there was nothing to measure it against. Empty on a
+    #: condition that was played, and on every record written before this field existed.
+    reason: str = ""
 
 
 class GateDecision(msgspec.Struct):

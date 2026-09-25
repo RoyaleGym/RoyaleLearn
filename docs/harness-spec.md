@@ -2556,7 +2556,12 @@ rating, and conflating the two is what makes a pool unbounded.
    `RandomLegalOpponent(0.9)`, 200 battles each, is not more than
    `gate.anchor_tolerance_pp = 2` percentage points below the champion's. This catches the specific
    failure where a policy beats its recent ancestors by exploiting a shared blind spot and loses basic
-   competence.
+   competence. The champion's score is its RECORD against that anchor. A champion that came through a
+   gate has one. One that did not -- the first snapshot of a run, admitted free -- plays the anchor
+   once, at the same count on the same frozen seeds, and every later gate reads that record. Until
+   2026-09-24 such a champion fell back to the rater's prediction, which for a snapshot nobody had
+   rated is the prior 0.5: the bound was 0.48, any policy cleared it, and hog26-10's first real gate
+   ran a regression check that could not fail.
 3. **No pool-wide collapse.** The candidate's **observed** mean score against a `variance`-weighted
    stratified sample of 8 pool snapshots, 100 battles each, is at least the champion's **fitted**
    mean predicted score against the same eight, less one standard error of the candidate's observed
@@ -2564,7 +2569,10 @@ rating, and conflating the two is what makes a pool unbounded.
    played those eight on those seeds, and a condition that silently skipped the snapshots it had no
    games against would be weakest exactly where the pool is most diverse. The rater's prediction is
    defined for every pair from the whole result matrix, and its use here is the same one the PFSP
-   weights make of it (section 11.3). The cost stays at 800 battles.
+   weights make of it (section 11.3). The cost stays at 800 battles. With no pool member besides the
+   champion and the anchors there is nothing to sample and nothing to have collapsed against: the
+   condition is recorded SKIPPED with that reason, and promotion rests on (1) and (2). It used to be
+   recorded as passed with n=0, which is how a gate of 1,400 battles read as a full one of 2,200.
 
 Outcomes: all three pass, admit and promote to champion. (1) and (2) pass and (3) fails, **admit to the
 pool but leave the champion unchanged**, with `meta["cycle"] = true`. That is a useful diverse

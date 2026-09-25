@@ -93,7 +93,9 @@ def floor_decision(candidate: str, champion: str | None) -> GateDecision:
 EVAL_BATTLE_SECONDS = 8.0
 
 
-def gate_battles(config: GateConfig, *, anchors: int) -> int:
+def gate_battles(
+    config: GateConfig, *, anchors: int, unmeasured_champion_anchors: int = 0
+) -> int:
     """How many battles one full gate plays, from the four fields that decide it.
 
     Published because nothing printed it and the multiplication is not obvious: at the shipped
@@ -102,18 +104,33 @@ def gate_battles(config: GateConfig, *, anchors: int) -> int:
     of it was a measurement on 2026-09-23, because no run had ever reached a second candidate.
 
     A gate that stops early plays fewer; this is the full price, which is what a plan needs.
+
+    ``unmeasured_champion_anchors`` is the one-time extra: a champion with no record against an
+    anchor -- the first snapshot of a run, admitted free -- plays that anchor once, at the
+    candidate's count, so the regression check has a real reference. Its games are logged and
+    every later gate on that champion reads them instead.
     """
     return (
         config.champion_games
         + anchors * config.anchor_games
+        + unmeasured_champion_anchors * config.anchor_games
         + config.stratified_snapshots * config.stratified_games
     )
 
 
-def _skipped() -> ConditionResult:
-    """A condition that was not played because the decision was already settled."""
+#: A condition not played because an earlier one already fixed the outcome.
+SKIP_SETTLED = "not played: the decision was already settled by an earlier condition"
+#: The collapse check with nothing to sample: the pool holds only the champion and the anchors.
+SKIP_NO_POPULATION = (
+    "not played: the pool holds no snapshot besides the champion and the anchors, so there is "
+    "nothing to have collapsed against"
+)
+
+
+def _skipped(reason: str = SKIP_SETTLED) -> ConditionResult:
+    """A condition that was not played, and why."""
     return ConditionResult(
-        passed=False, n=0, observed=0.0, bound=0.0, reference=0.0, skipped=True
+        passed=False, n=0, observed=0.0, bound=0.0, reference=0.0, skipped=True, reason=reason
     )
 
 
@@ -202,7 +219,12 @@ class WilsonGate(PromotionGate):
         conditions[CONDITION_POOL] = (
             self._pool_collapse(candidate, champion, pool, runner) if admit else _skipped()
         )
-        no_collapse = conditions[CONDITION_POOL].passed
+        collapse = conditions[CONDITION_POOL]
+        # With nothing to sample there is nothing to have collapsed against, so promotion rests on
+        # the two conditions that could be measured. The record says the third could not be; it
+        # used to say it PASSED, with n=0.
+        nothing_to_collapse = collapse.skipped and collapse.reason == SKIP_NO_POPULATION
+        no_collapse = collapse.passed or nothing_to_collapse
         return self._record(
             GateDecision(
                 candidate=candidate,
@@ -240,7 +262,7 @@ class WilsonGate(PromotionGate):
         runner: EvalRunner,
     ) -> ConditionResult:
         comparison = runner.compare(candidate, anchor, games=self.config.anchor_games)
-        reference = self._champion_vs_anchor(champion, anchor, pool)
+        reference = self._champion_vs_anchor(champion, anchor, pool, runner)
         bound = reference - self.config.anchor_tolerance_pp / 100.0
         return ConditionResult(
             passed=comparison.score_a >= bound,
@@ -250,21 +272,30 @@ class WilsonGate(PromotionGate):
             reference=reference,
         )
 
-    def _champion_vs_anchor(self, champion: str, anchor: str, pool: LadderPool) -> float:
-        """What the champion scores against an anchor: its record if it has one, the fit
-        otherwise. Every champion was gated against the anchors, so the record is the usual
-        case and the fit covers a pool loaded from somewhere else."""
+    def _champion_vs_anchor(
+        self, champion: str, anchor: str, pool: LadderPool, runner: EvalRunner
+    ) -> float:
+        """What the champion scores against an anchor: its record, or a measurement of it now.
+
+        A champion that came through a gate played the anchors there, and its record is read.
+        One that did not -- the first snapshot of a run, admitted free -- has no record, and this
+        used to fall back to the rater's prediction. For a champion nobody had rated that is the
+        prior, 0.5, so the bound was 0.48 and any policy cleared it against a scripted anchor:
+        hog26-10's first real gate had a regression check that could not fail. Now the champion
+        plays the anchor, on the same frozen seeds and the same count as a candidate, and the
+        games go into the log, so the next gate reads the record instead of playing it again.
+        """
         record = pool.eval_view().record(champion, anchor)
         if record.games:
             return record.score_a
-        return self.rater.predict(champion, anchor)
+        return runner.compare(champion, anchor, games=self.config.anchor_games).score_a
 
     def _pool_collapse(
         self, candidate: str, champion: str, pool: LadderPool, runner: EvalRunner
     ) -> ConditionResult:
         members = self.stratified_sample(champion, pool)
         if not members:
-            return ConditionResult(passed=True, n=0, observed=0.0, bound=0.0, reference=0.0)
+            return _skipped(SKIP_NO_POPULATION)
         observed: list[float] = []
         per_seed: list[float] = []
         for member in members:
@@ -331,8 +362,13 @@ class WilsonGate(PromotionGate):
 
 
 def failed_condition(decision: GateDecision) -> str:
-    """Which condition a decision turned on, for the metric row. ``"none"`` when all held."""
+    """Which condition a decision turned on, for the metric row. ``"none"`` when all held.
+
+    A skipped condition is not one that failed: a settled skip always follows the condition that
+    really failed, and a no-population skip decided nothing. Counting either would name a
+    condition a promoted candidate never turned on.
+    """
     for name, result in decision.conditions.items():
-        if not result.passed:
+        if not result.passed and not result.skipped:
             return name
     return "none"

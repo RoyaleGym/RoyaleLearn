@@ -17,6 +17,7 @@ from royalelearn.config import GateConfig
 from royalelearn.errors import PreflightError
 from royalelearn.ladder.evaluate import EvalRunner, SeedSet, bootstrap_interval, eval_seed_set
 from royalelearn.ladder.gate import (
+    CONDITION_ANCHORS,
     CONDITION_CHAMPION,
     CONDITION_POOL,
     WilsonGate,
@@ -119,6 +120,20 @@ def _pool(tmp_path) -> LadderPool:
             converged=True,
             iterations=3,
         )
+    )
+    return pool
+
+
+def _gated_pool(tmp_path) -> LadderPool:
+    """A pool whose champion came through a gate, so it has a record against every anchor.
+
+    What the stopping-logic tests always assumed without saying so. Until 2026-09-24 a champion
+    with no record was held to the rater's prior instead, and these tests passed on that 0.5.
+    """
+    pool = _pool(tmp_path)
+    pool.record(
+        _anchor_games(CHAMPION, SCRIPTED_NOOP, wins=50, losses=50)
+        + _anchor_games(CHAMPION, SCRIPTED_RANDOM_LEGAL, wins=50, losses=50)
     )
     return pool
 
@@ -496,7 +511,7 @@ def test_a_skipped_condition_says_so_rather_than_being_absent(tmp_path) -> None:
 
 def test_a_candidate_that_beats_everything_still_plays_everything(tmp_path) -> None:
     """The other half. Without it, "stop early" would pass by never playing anything."""
-    pool = _pool(tmp_path)
+    pool = _gated_pool(tmp_path)
     player = QuotaPlayer(_rates(0.7))
     decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(player, tmp_path))
 
@@ -510,7 +525,7 @@ def test_a_failed_anchor_stops_before_the_pool(tmp_path) -> None:
 
     So the pool-collapse check, which is 800 of the 2,200, is spent on a settled decision too.
     """
-    pool = _pool(tmp_path)
+    pool = _gated_pool(tmp_path)
     player = QuotaPlayer(_rates(0.7, anchors=0.0))
     decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(player, tmp_path))
 
@@ -532,7 +547,7 @@ def test_stopping_early_does_not_change_any_decision(tmp_path) -> None:
         for anchor_rate, anchors_held in ((1.0, True), (0.0, False)):
             for member_rate in (0.9, 0.1):
                 name = f"{champion_rate}-{anchor_rate}-{member_rate}"
-                pool = _pool(tmp_path / name)
+                pool = _gated_pool(tmp_path / name)
                 player = QuotaPlayer(
                     _rates(champion_rate, anchors=anchor_rate, members=member_rate)
                 )
@@ -572,12 +587,21 @@ def test_the_cost_it_reports_is_the_cost_it_pays(tmp_path) -> None:
     """
     from royalelearn.ladder.gate import gate_battles
 
-    pool = _pool(tmp_path)
+    # A champion that came through a gate: the full price is the nominal one.
+    pool = _gated_pool(tmp_path / "gated")
     player = QuotaPlayer(_rates(0.7))
-    gate = _gate(tmp_path)
+    gate = _gate(tmp_path / "gated")
     gate.evaluate(CANDIDATE, pool, _runner(player, tmp_path))
-
     assert len(player.played) == gate_battles(gate.config, anchors=len(gate.anchors))
+
+    # A champion admitted free, never measured: it plays each anchor once, and the report says so.
+    pool = _pool(tmp_path / "free")
+    player = QuotaPlayer(_rates(0.7))
+    gate = _gate(tmp_path / "free")
+    gate.evaluate(CANDIDATE, pool, _runner(player, tmp_path))
+    assert len(player.played) == gate_battles(
+        gate.config, anchors=len(gate.anchors), unmeasured_champion_anchors=len(gate.anchors)
+    )
 
 
 def test_the_preflight_says_which_side_of_the_boundary_a_run_falls_on() -> None:
@@ -625,3 +649,94 @@ def test_a_run_that_never_gates_says_that_instead() -> None:
     line = _ladder_cost_line(config, geometry(config))
     assert "no candidates" in line
     assert "h at" not in line
+
+
+# -- the two conditions that could not fail ------------------------------------------------
+
+
+class PairPlayer:
+    """Scores by (a, b), so the champion and a candidate can score differently on one anchor.
+
+    ``QuotaPlayer`` keys by the opponent alone, which makes a champion's score against an anchor
+    the candidate's by construction -- and a test built on it could not tell a measured reference
+    from an assumed one.
+    """
+
+    def __init__(self, rates: dict[tuple[str, str], float], default: float = 0.5) -> None:
+        self.rates = rates
+        self.default = default
+        self.calls: dict[tuple[str, str], int] = {}
+
+    def play(self, *, a: str, b: str, seed: int, a_seat: int, act_path: str) -> float:
+        rate = self.rates.get((a, b), self.default)
+        index = self.calls.get((a, b), 0)
+        self.calls[(a, b)] = index + 1
+        return 1.0 if math.floor((index + 1) * rate) > math.floor(index * rate) else 0.0
+
+
+def _pair_rates(candidate_vs_anchor: float, champion_vs_anchor: float) -> dict:
+    rates = {(CANDIDATE, CHAMPION): 0.60}
+    for anchor in (SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL):
+        rates[(CANDIDATE, anchor)] = candidate_vs_anchor
+        rates[(CHAMPION, anchor)] = champion_vs_anchor
+    for member in POOL_MEMBERS:
+        rates[(CANDIDATE, member)] = 0.6
+    return rates
+
+
+def test_an_unmeasured_champion_is_measured_against_the_anchor_not_assumed(tmp_path) -> None:
+    """hog26-10's first real gate: a champion admitted free, never rated, never played an anchor.
+
+    Its reference fell back to the rater's prior, 0.5, so the bound was 0.48 and any policy
+    cleared it. Here the champion really scores 0.95 against the anchors and the candidate 0.70:
+    measured, that is a regression; assumed, it was a pass.
+    """
+    pool = _pool(tmp_path)
+    assert pool.eval_view().record(CHAMPION, SCRIPTED_NOOP).games == 0
+    player = PairPlayer(_pair_rates(candidate_vs_anchor=0.70, champion_vs_anchor=0.95))
+    # The pool's own log, as a real run wires it, so what the gate measures is where it looks.
+    runner = _runner(player, tmp_path, log=pool.results)
+    decision = _gate(tmp_path).evaluate(CANDIDATE, pool, runner)
+
+    condition = decision.conditions[f"{CONDITION_ANCHORS}:{SCRIPTED_NOOP}"]
+    assert condition.reference == pytest.approx(0.95, abs=0.01), "the reference was assumed"
+    assert not condition.passed
+    assert not decision.admit
+    # measured once, and kept: the next gate reads the record instead of playing it again
+    assert pool.eval_view().record(CHAMPION, SCRIPTED_NOOP).games == 200
+
+
+def test_a_champion_with_a_record_is_not_played_against_the_anchor_again(tmp_path) -> None:
+    pool = _pool(tmp_path)
+    pool.record(
+        _anchor_games(CHAMPION, SCRIPTED_NOOP, wins=95, losses=5)
+        + _anchor_games(CHAMPION, SCRIPTED_RANDOM_LEGAL, wins=95, losses=5)
+    )
+    player = PairPlayer(_pair_rates(candidate_vs_anchor=0.99, champion_vs_anchor=0.95))
+    _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(player, tmp_path))
+    assert (CHAMPION, SCRIPTED_NOOP) not in player.calls
+    assert (CHAMPION, SCRIPTED_RANDOM_LEGAL) not in player.calls
+
+
+def test_an_empty_pool_skips_the_collapse_check_and_says_why(tmp_path) -> None:
+    """Nothing besides the champion and the anchors: there is nothing to have collapsed against.
+
+    It used to record passed=True with n=0 -- a pass with no population, which is how "1,400 of
+    2,200 battles" read as a full gate. Promotion still rests on the two conditions that could be
+    measured; the record now says the third could not be.
+    """
+    pool = LadderPool(ResultLog(tmp_path / "ladder" / "games.jsonl"), context="ctx")
+    pool.add(CHAMPION, step=1000)
+    pool.promote(CHAMPION)
+    pool.record(
+        _anchor_games(CHAMPION, SCRIPTED_NOOP, wins=50, losses=50)
+        + _anchor_games(CHAMPION, SCRIPTED_RANDOM_LEGAL, wins=50, losses=50)
+    )
+    player = PairPlayer(_pair_rates(candidate_vs_anchor=0.9, champion_vs_anchor=0.5))
+    decision = _gate(tmp_path).evaluate(CANDIDATE, pool, _runner(player, tmp_path))
+
+    collapse = decision.conditions[CONDITION_POOL]
+    assert collapse.skipped and not collapse.passed and collapse.n == 0
+    assert "no" in collapse.reason and "pool" in collapse.reason, collapse.reason
+    assert decision.admit and decision.promote and not decision.cycle
+    assert failed_condition(decision) == "none", "a promoted candidate named a failed condition"
