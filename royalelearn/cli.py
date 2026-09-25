@@ -163,6 +163,20 @@ def build_parser() -> argparse.ArgumentParser:
     digest.add_argument("folder", type=Path)
     digest.set_defaults(handler=_artifact_digest)
 
+    fit = commands.add_parser(
+        "fit-field-reference",
+        help="fit the play/wait model a field_mlp reference loads (section 19.12)",
+    )
+    fit.add_argument("--rows", type=Path, required=True, help="an .npz of field columns")
+    fit.add_argument(
+        "--fields", required=True, help="comma-separated observation vector field names"
+    )
+    fit.add_argument("--out", type=Path, required=True, help="a new folder for the artifact")
+    fit.add_argument("--hidden", default="32,32", help="hidden layer widths, comma-separated")
+    fit.add_argument("--epochs", type=int, default=20)
+    fit.add_argument("--seed", type=int, default=20260924)
+    fit.set_defaults(handler=_fit_field_reference)
+
     return parser
 
 
@@ -262,6 +276,21 @@ def _config(args: argparse.Namespace) -> int:
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(text + "\n", encoding="utf-8")
     print(f"wrote {args.output}")
+    return 0
+
+
+def _fit_field_reference(args: argparse.Namespace) -> int:
+    """Fit the play/wait model and write it as a field-model artifact."""
+    from .imitation.fit import FitConfig, fit_field_reference
+
+    fields = [name.strip() for name in args.fields.split(",") if name.strip()]
+    hidden = [int(width) for width in args.hidden.split(",") if width.strip()]
+    fit_field_reference(
+        args.rows,
+        fields,
+        args.out,
+        config=FitConfig(hidden=hidden, epochs=args.epochs, seed=args.seed),
+    )
     return 0
 
 

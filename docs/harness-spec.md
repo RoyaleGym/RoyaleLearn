@@ -4398,7 +4398,10 @@ built by the run's network factory from the run's `net`, so its `arch_digest` is
 **`royalelearn fit-field-reference --rows <file.npz> --fields a,b,c --out <folder>`** fits the
 `field_mlp` reference: weighted binary cross-entropy of a play label on named field columns, CPU.
 The rows file holds one column per field (`[N, width]`), `label`, `weight` and `group`; validation
-is by group as in 19.10. It reports NLL, Brier score and AUC on validation.
+is by group as in 19.10. It reports NLL, Brier score and AUC on validation. Each input is rounded to
+float16 before fitting, which is the codec's rule for the vector, so the model is fitted at the
+precision a run reads it at. `--hidden`, `--epochs` and `--seed` set the fit; they, the metrics and
+the rows file's sha256 go into the artifact's `meta`.
 
 **`demo_bc`** is a regulariser: the BC cross-entropy on a batch of demonstration rows, added to the
 actor's loss each minibatch with a scheduled coefficient. Its shards must carry the run's engine
