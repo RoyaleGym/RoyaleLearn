@@ -22,6 +22,13 @@ The rule, per key:
     anything the policy can act on.
 ``action_mask``
     Bit-packed, least significant bit first, and exact.
+``card_ids`` (only when the builder was asked for card identity)
+    ``uint8``, exact, in a region of its own after the mask. It is never a plane of ``spatial``:
+    a card id stored as a scaled half and read back as 6.997 would be embedded as card 6. Absent,
+    the row is byte-for-byte what it always was.
+
+Any other key is REFUSED at bind. The codec used to take the keys it knew and ignore the rest,
+which would have dropped card identity on the floor the day the builder started sending it.
 
 Existence is decided from the declaration and storage from the sample, and the two must not be
 confused. The tower planes are constant across any sample in which no tower falls, so a rule that
@@ -78,6 +85,11 @@ STORAGE: tuple[str, ...] = (STORAGE_UINT8, STORAGE_FLOAT16, STORAGE_STATIC, STOR
 
 #: The largest value one byte holds. The range of the storage type, not a fact about the arena.
 _UINT8_MAX = 255
+#: The key card identity arrives under, and every key this codec stores or derives.
+CARD_IDS = "card_ids"
+KNOWN_KEYS: frozenset[str] = frozenset(
+    {"spatial", "vector", "action_mask", "mask_planes", CARD_IDS}
+)
 _BITS_PER_BYTE = 8
 
 _F16 = np.dtype("<f2")
@@ -152,6 +164,11 @@ class RowLayout(NamedTuple):
     vector_size: int
     hand_size: int
     frame_stack: int
+    #: The card-identity region: ``ids_planes`` bytes per cell, after the mask. Zero planes and
+    #: an empty span when the observation carries none.
+    ids_planes: int = 0
+    ids_start: int = 0
+    ids_stop: int = 0
 
 
 class SpatialObsCodec(ObsCodec):
@@ -215,7 +232,12 @@ class SpatialObsCodec(ObsCodec):
                 rows.append((name, STORAGE_UINT8, 1.0))
             else:
                 rows.append((name, STORAGE_FLOAT16, 1.0))
-        table = CodecTable(plane=tuple(rows), vector=STORAGE_FLOAT16, mask="bitpack")
+        table = CodecTable(
+            plane=tuple(rows),
+            vector=STORAGE_FLOAT16,
+            mask="bitpack",
+            ids=STORAGE_UINT8 if CARD_IDS in spec.obs_space else None,
+        )
         self.bind(spec, table)
         return table
 
@@ -245,6 +267,31 @@ class SpatialObsCodec(ObsCodec):
                 "this codec has no table; compute one with table(spec, sample) at preflight or "
                 "construct the codec with the table the learner decided"
             )
+        unknown = sorted(set(spec.obs_space) - KNOWN_KEYS)
+        if unknown:
+            raise PreflightError(
+                f"the observation carries {', '.join(unknown)}, which this codec does not store. "
+                "It would have been dropped from every row and never reached the network; teach "
+                "the codec the key, or build the observation without it."
+            )
+        has_ids = CARD_IDS in spec.obs_space
+        if has_ids != (bound.ids is not None):
+            raise PreflightError(
+                f"the observation {'carries' if has_ids else 'has no'} {CARD_IDS} and the codec "
+                f"table says {bound.ids!r}; a worker and the learner handed these would disagree "
+                "about every row"
+            )
+        if has_ids:
+            if bound.ids != STORAGE_UINT8:
+                raise PreflightError(
+                    f"{CARD_IDS} is stored as {bound.ids!r}; only 'uint8' is exact"
+                )
+            vocabulary = int(np.max(np.asarray(spec.obs_space[CARD_IDS].high))) + 1
+            if vocabulary > _UINT8_MAX + 1:
+                raise PreflightError(
+                    f"{CARD_IDS} has a vocabulary of {vocabulary}, which does not fit one byte. "
+                    "A wider id would wrap silently into another card; widen the region first."
+                )
         if len(bound.plane) != spec.n_planes:
             raise PreflightError(
                 f"the codec table describes {len(bound.plane)} planes and the observation space "
@@ -289,6 +336,9 @@ class SpatialObsCodec(ObsCodec):
         mask_bytes = math.ceil(spec.n_actions / _BITS_PER_BYTE)
         mask_start = vector_stop
         mask_stop = mask_start + mask_bytes
+        ids_planes = spec.obs_space[CARD_IDS].shape[0] if CARD_IDS in spec.obs_space else 0
+        ids_start = mask_stop
+        ids_stop = ids_start + ids_planes * cells
         return RowLayout(
             u8_planes=u8,
             f16_planes=f16,
@@ -303,7 +353,7 @@ class SpatialObsCodec(ObsCodec):
             vector_stop=vector_stop,
             mask_start=mask_start,
             mask_stop=mask_stop,
-            row_bytes=mask_stop,
+            row_bytes=ids_stop,
             mask_bytes=mask_bytes,
             n_actions=spec.n_actions,
             planes=spec.n_planes,
@@ -311,6 +361,9 @@ class SpatialObsCodec(ObsCodec):
             vector_size=spec.vector_size,
             hand_size=spec.hand_size,
             frame_stack=spec.frame_stack,
+            ids_planes=ids_planes,
+            ids_start=ids_start,
+            ids_stop=ids_stop,
         )
 
     @property
@@ -402,6 +455,16 @@ class SpatialObsCodec(ObsCodec):
         mask = np.asarray(obs["action_mask"]).astype(bool, copy=False).reshape(-1)
         target[layout.mask_start : layout.mask_stop] = np.packbits(mask, bitorder="little")
 
+        if layout.ids_planes:
+            ids = np.asarray(obs[CARD_IDS])
+            if ids.dtype != np.uint8:
+                # bind() proved the vocabulary fits a byte; a value outside it is a bug report.
+                over = int(np.count_nonzero((ids < 0) | (ids > _UINT8_MAX)))
+                if over:
+                    self._clipped += over
+                ids = np.clip(ids, 0, _UINT8_MAX).astype(np.uint8)
+            target[layout.ids_start : layout.ids_stop] = ids.reshape(-1)
+
     def static_planes(self, obs: dict[str, np.ndarray]) -> np.ndarray:
         """The declared-static planes of one observation, as ``float32``.
 
@@ -472,6 +535,18 @@ class SpatialObsCodec(ObsCodec):
         )
 
         out.vector.copy_(_half(raw[:, 0, layout.vector_start : layout.vector_stop]))
+
+        if layout.ids_planes:
+            if out.card_ids is None:
+                raise ValueError(
+                    f"this batch was allocated without {CARD_IDS} and its rows carry them; the "
+                    "planes would be read and thrown away"
+                )
+            out.card_ids.view(batch, frames, layout.ids_planes, tiles_y, tiles_x).copy_(
+                raw[:, :, layout.ids_start : layout.ids_stop].reshape(
+                    batch, frames, layout.ids_planes, tiles_y, tiles_x
+                )
+            )
 
         live = (raw != 0).any(dim=-1).view(batch, frames, 1, 1, 1)
         spatial.mul_(live.to(spatial.dtype))

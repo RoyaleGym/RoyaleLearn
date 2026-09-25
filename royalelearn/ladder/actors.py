@@ -107,7 +107,7 @@ class EvalActors:
         from ..learn.distribution import MaskedCategorical
 
         # This policy's own frames, not the resolver's. See the module docstring.
-        history: list[np.ndarray] = []
+        history: list[dict[str, np.ndarray]] = []
 
         def act(obs: Mapping[str, Any], uniform: float, _rng: Any) -> int:
             batch = self.obs_batch(obs, history)
@@ -120,7 +120,9 @@ class EvalActors:
 
         return act
 
-    def obs_batch(self, obs: Mapping[str, Any], history: list[np.ndarray] | None = None) -> Any:
+    def obs_batch(
+        self, obs: Mapping[str, Any], history: list[dict[str, np.ndarray]] | None = None
+    ) -> Any:
         """One environment observation as the batch of one the networks take.
 
         Frames are stacked the way the rectangle stacks them -- the current frame first -- and an
@@ -131,6 +133,12 @@ class EvalActors:
 
         ``history`` is the caller's list and is mutated in place. Passing None is a single frame's
         worth of context and is what a caller with no stacking wants.
+
+        A history entry is a whole FRAME -- the board, that frame's own mask planes and, with card
+        identity on, its own card ids -- because that is what the rectangle decodes for an older
+        frame. This used to keep the board alone and give every older frame an all-zero mask, so
+        with a frame stack above one an evaluated policy was shown inputs no training row ever
+        carried. No shipped config stacks frames, which is why it never showed.
         """
         import torch
 
@@ -139,18 +147,23 @@ class EvalActors:
         spatial = np.asarray(obs["spatial"], dtype=np.float32)
         mask = np.asarray(obs["action_mask"]).astype(bool)
         planes = mask[1:].reshape(self.spec.hand_size, *self.spec.tiles).astype(np.float32)
+        frame = {"spatial": spatial, "planes": planes}
+        if "card_ids" in obs:
+            frame["ids"] = np.asarray(obs["card_ids"]).astype(np.int64)
         frames = self.spec.frame_stack
+        stack = [frame]
         if frames > 1 and history is not None:
-            if not history or history[0].shape != spatial.shape:
-                history[:] = [np.zeros_like(spatial) for _ in range(frames - 1)]
-            spatial_stack = np.concatenate([spatial, *history], axis=0)
-            plane_stack = np.concatenate(
-                [planes, *[np.zeros_like(planes) for _ in history]], axis=0
-            )
-            history.insert(0, spatial)
+            if not history or history[0]["spatial"].shape != spatial.shape:
+                history[:] = [
+                    {key: np.zeros_like(value) for key, value in frame.items()}
+                    for _ in range(frames - 1)
+                ]
+            stack = [frame, *history]
+            history.insert(0, frame)
             del history[frames - 1 :]
-        else:
-            spatial_stack, plane_stack = spatial, planes
+        spatial_stack = np.concatenate([f["spatial"] for f in stack], axis=0)
+        plane_stack = np.concatenate([f["planes"] for f in stack], axis=0)
+        ids_stack = np.concatenate([f["ids"] for f in stack], axis=0) if "ids" in frame else None
 
         def tensor(array: np.ndarray, dtype: Any) -> Any:
             return torch.from_numpy(np.ascontiguousarray(array)).to(
@@ -162,4 +175,5 @@ class EvalActors:
             mask_planes=tensor(plane_stack, torch.float32),
             vector=tensor(np.asarray(obs["vector"], dtype=np.float32), torch.float32),
             mask=tensor(mask, torch.bool),
+            card_ids=None if ids_stack is None else tensor(ids_stack, torch.int64),
         )

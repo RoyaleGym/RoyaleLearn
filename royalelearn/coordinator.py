@@ -1431,6 +1431,15 @@ class LearningCoordinator:
             mask_planes=torch.zeros((rows, *planes), device=self.device),
             vector=torch.zeros((rows, spec.vector_size), device=self.device),
             mask=mask,
+            # The probe measures what a real minibatch costs, and with card identity on a real
+            # minibatch carries the id planes and their embedding.
+            card_ids=(
+                torch.zeros(
+                    (rows, *spec.obs_space["card_ids"].shape), dtype=torch.int64, device=self.device
+                )
+                if "card_ids" in spec.obs_space
+                else None
+            ),
         )
         actions = torch.zeros((rows,), dtype=torch.int64, device=self.device)
         result = self.model.backprop(batch, actions)

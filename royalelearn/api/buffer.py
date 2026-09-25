@@ -34,7 +34,7 @@ __all__ = ["MIN_TABLE_STATES", "CodecTable", "ExperienceBuffer", "ObsCodec"]
 MIN_TABLE_STATES = 1000
 
 
-class CodecTable(msgspec.Struct, frozen=True):
+class CodecTable(msgspec.Struct, frozen=True, omit_defaults=True):
     """How each observation key is stored, decided from ``EnvSpec.obs_space`` at preflight
     rather than from a list of plane indices. Logged, hashed and written into every snapshot.
 
@@ -47,6 +47,10 @@ class CodecTable(msgspec.Struct, frozen=True):
     plane: tuple[tuple[str, str, float], ...]
     vector: str
     mask: str
+    #: How ``card_ids`` is stored: "uint8", exact, or None when the observation has none. It is
+    #: omitted from the encoding when None (``omit_defaults``), so every table decided before
+    #: card identity existed hashes exactly as it did and no saved run's digest moves.
+    ids: str | None = None
 
     def digest(self) -> str:
         """sha256 of the canonical JSON of this table."""

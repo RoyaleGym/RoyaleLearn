@@ -711,6 +711,15 @@ class RectBuffer(ExperienceBuffer):
             ),
             vector=torch.empty((count, spec.vector_size), dtype=torch.float32, device=self.device),
             mask=torch.empty((count, spec.n_actions), dtype=torch.bool, device=self.device),
+            card_ids=(
+                torch.empty(
+                    (count, frames * spec.obs_space["card_ids"].shape[0], tiles_y, tiles_x),
+                    dtype=torch.int64,
+                    device=self.device,
+                )
+                if "card_ids" in spec.obs_space
+                else None
+            ),
         )
 
     def _statics(self) -> Tensor:

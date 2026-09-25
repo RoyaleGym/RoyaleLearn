@@ -1342,6 +1342,19 @@ The rule, applied per key:
 | `mask_planes` | equal to `action_mask[1:]` reshaped, by construction | **never stored**; the learner reshapes the stored mask at unpack |
 | `vector` | bounded in [0, 1] by the builder | `float16`, 2 B per element |
 | `action_mask` | | bit-packed `uint8`, LSB first, `ceil(n_actions / 8)` B, **exact** |
+| `card_ids` | only with `SpatialObsBuilder(card_identity=True)`; vocabulary `high + 1` must fit a byte | `uint8`, **exact**, its own region after the mask, `ids_planes * H * W` B |
+| anything else | | **refused at bind**, naming the key |
+
+`card_ids` is D2's learner half. It is never a plane of `spatial`, because a card id stored as a scaled
+half and read back as 6.997 would be embedded as card 6. It gets a region of its own, after everything
+that was already in the row, and `CodecTable.ids` records it as `"uint8"`. With the switch off the
+table has no `ids` field in its encoding at all (`omit_defaults`), so every table decided before D2
+hashes exactly as it did, and the row is byte-for-byte the same length. A table and a space that
+disagree about `card_ids`, in either direction, are refused, as is a vocabulary over 256.
+
+Any other key is refused too, and that is new. The codec used to read the three keys it knew and
+ignore the rest, so the day a builder started sending card identity, the planes would have been
+dropped from every row before the network saw them.
 
 On today's 95-card catalogue with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
 `uint8` planes, the two hit-point planes as `float16`, and the two static planes. The hit-point planes
@@ -1655,6 +1668,17 @@ Their results go into the run identity and the checkpoint.
 
 ### 8.1 Exact shapes
 
+**Card identity (D2), when the builder carries it.** Each tile's `card_ids` go through
+`nn.Embedding(vocabulary, 8, padding_idx=0)` and are concatenated before the stem, as the hand slots'
+cards are embedded for the head. The vocabulary is the space's own `high + 1`, `num_cards + 2`, never
+a literal (it was 100, then 101, since the spec was written). Index 0 is an empty tile and is fixed at
+zero. The stem gains `k * 2 * 8` input channels. The width 8 is a module constant, `CARD_ID_EMBED`,
+and not a `NetConfig` field, because a new field would change every run's `arch_digest` and so refuse
+every checkpoint and snapshot on disk for a feature most never switched on. It enters `arch_digest`
+only when `card_ids` exists. A renumbered catalogue changes the space's bound, so it changes
+`arch_digest` and a trained table meeting the wrong vocabulary is refused rather than reinterpreted.
+That is the network's half of the positional-id trap; the builder's `card_names` check is the other.
+
 Every shape is written in the environment's own terms, because that is how the code computes them.
 `B` batch; `C = net.channels`; `E = net.vector_embed`; `S`, `V` and `A` the spatial plane count,
 vector width and action count from `EnvSpec.obs_space`; `P = spec.hand_size` hand slots;
@@ -1667,6 +1691,8 @@ ObsBatch (device tensors, from ObsCodec.unpack_to_device):
     mask_planes  (B, k*P, H, W)  float32   derived from mask, never stored
     vector       (B, V)          float32   the current frame only
     mask         (B, A)          bool
+    card_ids     (B, k*2, H, W)  int64     only with card identity: own then enemy, per frame;
+                                           0 empty, 1 crown tower, 2 + card id; else None
 
 trunk input assembly:
     coords   (2, H, W)        constant buffer, y/(H-1) and x/(W-1) in [0,1]

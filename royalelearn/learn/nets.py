@@ -67,6 +67,11 @@ HEAD_GAIN: float = 0.01
 VALUE_GAIN: float = 1.0
 #: The standard deviation of the card table at initialisation.
 EMBED_STD: float = 0.02
+#: Width of the embedding each tile's card id is given before the stem, per side and per frame.
+#: A constant rather than a config field on purpose: a new ``NetConfig`` field would change the
+#: architecture digest of every run, and so refuse every checkpoint and snapshot on disk, for a
+#: feature most of them never switched on. It enters the digest only when ``card_ids`` exists.
+CARD_ID_EMBED: int = 8
 
 #: What ``NetConfig.autocast_dtype`` may name. float32 means no autocast at all.
 DTYPES: dict[str, torch.dtype] = {
@@ -172,6 +177,13 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
     _logit_scale(arch)
 
 
+def _flat(value: Any) -> list[Any]:
+    """A bound as a flat list, whether the space recorded it as a scalar or nested lists."""
+    if isinstance(value, list | tuple):
+        return [leaf for item in value for leaf in _flat(item)]
+    return [value]
+
+
 class ResBlock(nn.Module):
     """Conv-norm-ReLU twice, plus the identity. The body is ``net.blocks`` of these."""
 
@@ -212,6 +224,15 @@ class ClashTrunk(nn.Module):
         stacked = spec.frame_stack * (spec.n_planes + spec.obs_space["mask_planes"].shape[0])
         self.in_channels = stacked + (2 if arch.coord_conv else 0) + arch.vector_embed
         self.vector_embed = nn.Linear(spec.vector_size, arch.vector_embed)
+        # D2: the card on each tile, embedded before the stem, as the hand slots are. Sized from
+        # the space's own bound so the table follows the catalogue, and index 0 -- an empty tile
+        # -- is fixed at zero: no card there, and nothing to learn about it.
+        self.card_ids_embed: nn.Embedding | None = None
+        if "card_ids" in spec.obs_space:
+            ids = spec.obs_space["card_ids"]
+            vocabulary = int(max(float(h) for h in _flat(ids.high))) + 1
+            self.card_ids_embed = nn.Embedding(vocabulary, CARD_ID_EMBED, padding_idx=0)
+            self.in_channels += spec.frame_stack * ids.shape[0] * CARD_ID_EMBED
         self.stem = nn.Conv2d(self.in_channels, arch.channels, 3, padding=1)
         self.stem_norm = nn.GroupNorm(arch.norm_groups, arch.channels)
         self.body = nn.ModuleList(
@@ -230,6 +251,14 @@ class ClashTrunk(nn.Module):
             parts.append(self.coords.expand(batch, -1, -1, -1).to(spatial.dtype))
         embedded = self.vector_embed(obs.vector).to(spatial.dtype)
         parts.append(embedded[:, :, None, None].expand(-1, -1, *self.tiles))
+        if self.card_ids_embed is not None:
+            if obs.card_ids is None:
+                raise ValueError(
+                    "this network reads card_ids and the batch carries none; it was built for an "
+                    "observation with card identity switched on"
+                )
+            ids = self.card_ids_embed(obs.card_ids.long())  # (B, k*2, H, W, E)
+            parts.append(ids.permute(0, 1, 4, 2, 3).flatten(1, 2).to(spatial.dtype))
         x = torch.cat(parts, dim=1)
         if x.shape[1] != self.in_channels:
             raise ValueError(
@@ -249,6 +278,11 @@ class ClashTrunk(nn.Module):
         _zero_bias(self.stem)
         for block in self.body:
             block.initialise(generator)
+        if self.card_ids_embed is not None:
+            # Drawn last, so a network without card identity draws exactly what it always drew.
+            with torch.no_grad():
+                self.card_ids_embed.weight.normal_(0.0, EMBED_STD, generator=generator)
+                self.card_ids_embed.weight[0].zero_()
 
 
 class PointerPolicyHead(nn.Module):
@@ -437,6 +471,8 @@ class DefaultNetworkFactory(NetworkFactory):
                     if arch.separate_trunks
                     else SharedTrunkActorCritic.__name__
                 ),
+                # Only when there are card ids to embed, so every digest before D2 is unchanged.
+                **({"card_id_embed": CARD_ID_EMBED} if "card_ids" in spec.obs_space else {}),
             }
         )
 

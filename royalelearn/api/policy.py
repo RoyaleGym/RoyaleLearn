@@ -49,6 +49,9 @@ class ObsBatch(NamedTuple):
     mask_planes: Tensor
     vector: Tensor
     mask: Tensor
+    #: ``(B, k*2, H, W)`` int64 card ids per tile, own then enemy, per frame: 0 empty, 1 crown
+    #: tower, 2 + card id. None unless the observation builder was asked for card identity.
+    card_ids: Tensor | None = None
 
 
 class ActionDistribution(ABC):

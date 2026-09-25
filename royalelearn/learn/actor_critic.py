@@ -244,7 +244,9 @@ class SeparateActorCritic(_BaseActorCritic):
         asks for this method by name when ``ppo.forced_rows`` skips rows, and
         ``check_consistency`` is what makes the shipped pairings reach it.
         """
-        return self.actor.distribution(ObsBatch(*(t.index_select(0, rows) for t in obs)))
+        return self.actor.distribution(
+            ObsBatch(*(None if t is None else t.index_select(0, rows) for t in obs))
+        )
 
     def critic_parameters(self) -> Iterator[Parameter]:
         return self.critic.parameters()
