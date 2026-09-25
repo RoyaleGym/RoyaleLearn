@@ -145,15 +145,17 @@ print({k: v.shape for k, v in obs.items()})
 ```
 8
 Discrete(2305)
-{'action_mask': (8, 2305), 'mask_planes': (8, 4, 32, 18), 'spatial': (8, 20, 32, 18), 'vector': (8, 1177)}
+{'action_mask': (8, 2305), 'mask_planes': (8, 4, 32, 18), 'spatial': (8, 20, 32, 18), 'vector': (8, 1249)}
 ```
 
 Eight rows, because four battles have two players each and both feed one bot. Each row sees its own
 king tower at the bottom, so the bot never has to learn the board twice.
 
-`action_mask` marks the legal card-and-tile moves for that row. How many are legal depends on
-the deck and on what is in hand, and it differs between the two seats when their decks do: on
-the first step with randomly dealt decks it was 691 for one seat and 1259 for the other.
+`action_mask` marks the legal card-and-tile moves for that row. For the first nine decisions it
+is 1 on every row, the wait, because a match refuses every deploy for its opening seconds. After
+that, how many are legal depends on the deck and on what is in hand, so it differs between rows:
+when play opened in this program, with randomly dealt decks, it ranged from 691 to 1277 across the
+eight rows (2026-09-24, engine build `cb784bb583586789`).
 
 One step is one decision, and a decision is half a second of game time by default. That is the
 `decision_ms` setting. Waiting is a legal choice, and it is the no-op.
@@ -166,7 +168,7 @@ To watch it, set `ROYALEVISER=127.0.0.1:9870` and run
 top left of the grid was made.
 
 Those widths are not constants. Every shape, every width and every field's place in the vector is
-read off the running environment when the harness starts, and none of them is typed into the code. The `1177` above
+read off the running environment when the harness starts, and none of them is typed into the code. The `1249` above
 comes from the card catalogue this checkout built, and a checkout that built a different card table
 prints a different number. The catalogue grew again recently and nothing in the code needed
 editing. A page that quotes a vector width or a plane count as a fixed number is already wrong,
