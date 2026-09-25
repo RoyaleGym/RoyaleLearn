@@ -67,14 +67,15 @@ WHAT A COMPARISON SEES (every column of ``diff``):
   file.
 - rename_problems (never waivable): an expect rename that matched nothing on side A.
 
-WHAT IT CANNOT SEE: anything the tiny config does not run (rollout workers, snapshot opponents,
-the ladder refit, eval and gate, the probe, CUDA and bfloat16, frame stacks, the recorder, long
+WHAT IT CANNOT SEE: anything the tiny config does not run (rollout workers, snapshot opponents, the
+ladder refit, eval and gate, the probe, CUDA and bfloat16, frame stacks, the recorder, long
 schedules); the values of clock and machine keys; rng.json's python_random, which differs between
 two identical runs; files the Rust engine reads natively outside the fixed data list; installed
-distribution metadata and entry points, which still come from the venv (royalegym_version, and
-extension discovery from S4 on: ``--imitate`` pins the module, not its entry point); the BLAS
-thread variables of the operator's shell (inherited, not recorded); a hash-order dependence the two
-seeds happen to order alike (a different seed per process gives a chance, not a guarantee); the
+distribution metadata, which still comes from the venv (royalegym_version; ``--imitate`` writes the
+pinned clone's own entry points and ``direct_url.json`` beside it, which RoyaleLearn's discovery
+takes, and a copy installed in the venv that declares the same entry points is merged with it); the
+BLAS thread variables of the operator's shell (inherited, not recorded); a hash-order dependence the
+two seeds happen to order alike (a different seed per process gives a chance, not a guarantee); the
 content of the IL artifacts' writer (both sides read the same bytes, pinned by sha256 in the
 config). A resumed AlarmSet restarts its patience counters by design, so a firing that needs more
 than two rows of patience cannot happen in the resumed process.
@@ -192,6 +193,38 @@ def _clone_imitate(sha: str, into: Path) -> None:
             f"RoyaleImitate at {sha[:12]} has no royaleimitate package (step S4 has not landed "
             "there): --imitate has nothing to pin"
         )
+    _write_install_metadata(into)
+
+
+def _write_install_metadata(root: Path) -> None:
+    """The install metadata ``pip install -e`` would leave for the pinned clone, written beside
+    its package: the entry points its own pyproject.toml declares, and a ``direct_url.json``
+    naming the clone, so RoyaleLearn's discovery finds the sections in the pinned code and not in
+    whatever the venv has installed."""
+    import json
+    import tomllib
+
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    info = root / f"{project['name']}-{project['version']}.dist-info"
+    info.mkdir(exist_ok=True)
+    (info / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {project['name']}\nVersion: {project['version']}\n",
+        encoding="utf-8",
+    )
+    groups = project.get("entry-points", {})
+    lines = []
+    for group, points in groups.items():
+        lines.append(f"[{group}]")
+        lines.extend(f"{name} = {value}" for name, value in points.items())
+    (info / "entry_points.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    direct = {"url": root.resolve().as_uri(), "dir_info": {"editable": True}}
+    (info / "direct_url.json").write_text(json.dumps(direct), encoding="utf-8")
+    # Written into the clone, so it would read as an uncommitted edit of the package's checkout:
+    # the clone's own exclude file keeps it out of git status, as a venv's copy lives elsewhere.
+    exclude = root / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with exclude.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n/{info.name}/\n")
 
 
 def _refuse_inside_a_repo(out: Path) -> None:
