@@ -93,7 +93,7 @@ def test_a_misspelt_key_inside_a_section_is_refused(monkeypatch: pytest.MonkeyPa
 
 def test_a_null_section_loads_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """A claimed key that is null is an absent section; so is the ``"imitation": null`` every
-    config of 0ab7a29..S2 carries, dropped by the shim with nothing installed to claim it."""
+    config of 7e93217..S2 carries, dropped by the shim with nothing installed to claim it."""
     use_extensions(monkeypatch, {"stubsec": StubExtension("stubsec")})
     loaded = cfg.load_config({"imitation": None, "stubsec": None}, say=None)
     assert type(loaded) is cfg.RunConfig
@@ -275,11 +275,11 @@ def test_a_resume_refuses_an_identity_field_this_build_does_not_know(tmp_path: P
 
 
 def test_a_config_an_older_build_wrote_loads_to_the_same_run() -> None:
-    """``examples/configs/laptop.json`` as 490c74c shipped it: ``"imitation": null`` and six
+    """``examples/configs/laptop.json`` as 61621bb shipped it: ``"imitation": null`` and six
     ``alarms.imitation_*`` keys at their defaults. They are dropped with a notice, and the hash is
     the one the profile has now."""
     said: list[str] = []
-    loaded = cfg.load_config(DATA / "config-490c74c-laptop.json", say=said.append)
+    loaded = cfg.load_config(DATA / "config-61621bb-laptop.json", say=said.append)
     assert cfg.config_hash(loaded) == cfg.config_hash(cfg.laptop())
     # The laptop profile's hash, which moves whenever a field joins the tree: 9b55b7465c98 until
     # ladder.scripted_opponents was added.
@@ -461,7 +461,7 @@ def test_a_checkpoint_this_build_cannot_read_is_still_found_without_an_index(
 def test_a_resume_does_not_report_keys_the_shim_dropped(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A run made between 0ab7a29 and S2 stored the six retired alarm keys and a null imitation
+    """A run made between 7e93217 and S2 stored the six retired alarm keys and a null imitation
     in its checkpoint's config; resumed now, they are not 'config differs' lines."""
     config = tiny_config(tmp_path / "run")
     with coordinator(config) as run:

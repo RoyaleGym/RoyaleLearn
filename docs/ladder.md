@@ -187,7 +187,7 @@ predicts the champion would score against those same 8, less one standard error.
 Early in a run the pool may hold nothing besides the champion and the two anchors. Then there is
 nothing to sample, and the gate records condition 3 as skipped, with that reason. The verdict
 rests on conditions 1 and 2, so a candidate that passes both is admitted and becomes champion.
-Until the fix of 2026-09-24 (`3077d87`) the same case was recorded as a pass with `n` of 0.
+Until the fix of 2026-09-24 (`9468b86`) the same case was recorded as a pass with `n` of 0.
 
 That is 1,000 + 400 + 800 = **2,200 battles per gate** at most. A gate stops as soon as its
 outcome is settled and records the conditions it did not play as skipped: when condition 1 fails
@@ -361,7 +361,7 @@ the id `learner` never appears in the evaluation results, and anything looked up
 id comes back empty.
 
 **`ladder/score_vs_noop` and `ladder/score_vs_random_legal` appear on probe iterations, and
-nowhere else.** Until commit `b106aa1` on 2026-09-22 they were published as 0.5 in every row,
+nowhere else.** Until commit `72c1215` on 2026-09-22 they were published as 0.5 in every row,
 which was indistinguishable from a genuine even contest; then they were omitted, because the
 pair they asked about had no games and never could. Measured 2026-09-22 across the metrics rows
 in `runs/`: 127 rows written before that fix carry a flat 0.5. If you are reading an older run's

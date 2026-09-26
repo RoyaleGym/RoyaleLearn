@@ -58,7 +58,7 @@ So 15% is a property of the board, not of this agent. If its favoured building t
 smaller and this arm would spend eight hours on a non-effect.
 
 `TraceStep` now carries `landed` — the RESOLVED deploy position, parallel to `commands` — as of
-RoyaleGym 92f8a49. So the measurement is: record a trace from hog26-8's final checkpoint, compare
+RoyaleGym 220c3b3. So the measurement is: record a trace from hog26-8's final checkpoint, compare
 each command against its `landed`, and get the loss rate on the distribution the policy actually
 taps. That is minutes against this run's eight hours.
 

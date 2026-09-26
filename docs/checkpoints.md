@@ -178,7 +178,7 @@ A checkpoint is also written when:
 
 ## The save a crashing run refuses to make
 
-This landed on 2026-09-22, in commit `0839758`.
+This landed on 2026-09-22, in commit `8db7e0d`.
 
 The rule is that a checkpoint's weights must be weights that some row of `metrics.jsonl` reports.
 There is a window in every iteration where that is not true: from the moment the optimizer first

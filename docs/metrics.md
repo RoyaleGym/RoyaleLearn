@@ -197,7 +197,7 @@ every row they appear in. As of 2026-09-22 there were 56 metric files and 249 ro
 | `time/codec` | 0.0 in every row on disk | Time spent packing observations in the workers. It reads `codec_ms` out of the rollout source's stats, and no shipped source reports it yet. |
 | `ladder/champion_step` | 0 in every row on disk | The env step the champion was snapshotted at. Every admission was filed at step 0 until 2026-09-24, because the pool looked the step up in the registry the candidate was about to be added to. New runs carry the real step. |
 | `ladder/paired_rho` | 0.0 in every row on disk | The champion comparison's paired-seed correlation. It was read off whichever comparison ran last, and an undefined correlation was written as 0.0; both fixed 2026-09-24. It is now absent when there is nothing to report. |
-| `env/reward_terminal_abs` | 0.0 in every row written before the 2026-09-22 fix | How much of the reward came from actually winning. A fix landed on 2026-09-22 (commit `c38dc82`) that files the win/loss term under the fixed name `terminal` rather than under its Python class name. Rows written before it read 0.0. Runs since carry a real number. |
+| `env/reward_terminal_abs` | 0.0 in every row written before the 2026-09-22 fix | How much of the reward came from actually winning. A fix landed on 2026-09-22 (commit `dc7f7a1`) that files the win/loss term under the fixed name `terminal` rather than under its Python class name. Rows written before it read 0.0. Runs since carry a real number. |
 
 Some other rows are zero simply because nothing has happened yet, and those are fine:
 `health/worker_restarts`, `health/nan_guard_trips`, `health/obs_codec_clipped`,
@@ -230,7 +230,7 @@ Two design choices are worth knowing about:
 1. **A missing key never fires an alarm.** If a row does not carry a key an alarm reads, the alarm
    is simply not asked. An iteration where no battle finished cannot trip the draw-rate alarm.
 2. **The batch is judged before the update learns from it.** As of 2026-09-22, the invariant checks
-   run before the PPO update, not after (commit `0839758`). A batch that fails them is refused
+   run before the PPO update, not after (commit `8db7e0d`). A batch that fails them is refused
    before it can train anything.
 
 You can see the whole table, with names and severities, without starting a run:

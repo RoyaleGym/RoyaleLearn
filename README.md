@@ -13,7 +13,7 @@ piece of Python that scores what just happened in a battle. The bot plays itself
 keeps what wins. A ladder of its own older versions decides whether the new bot is actually better
 than the last one.
 
-**You can start a run.** The training loop has worked since 2026-09-22 (commit 5685cad). Every
+**You can start a run.** The training loop has worked since 2026-09-22 (commit 6ae7a71). Every
 command block on this page is written for Windows PowerShell, the shell that opens by default on
 Windows 10 and 11. One command trains:
 
@@ -94,7 +94,7 @@ end, but nobody has trained a bot with them yet, so there is no evidence yet tha
 good one, and there is more to say than that. On 2026-09-22 we found that a reward reached the
 buffer one cycle late, so it sat beside the action after the one that earned it. Every training
 number this project had produced to that point described a different objective than the one we
-meant. A fix landed the same evening (`87c97ae`) and a run on it started the same day. The fix has since
+meant. A fix landed the same evening (`44e3e6e`) and a run on it started the same day. The fix has since
 been checked by someone who did not write it, against the environment rather than against our own
 tests: a harness that records what each environment step produced and asks whether row t of the
 rectangle holds it, run with the old mistake planted back in to make sure the check could go red.
@@ -428,7 +428,7 @@ cd RoyaleLearn
 ..\.venv\Scripts\ruff check .
 ```
 
-With torch installed, on 2026-09-22 at bd6db80, pytest printed `693 passed, 25 deselected` and
+With torch installed, on 2026-09-22 at a1d9c56, pytest printed `693 passed, 25 deselected` and
 ruff printed `All checks passed!`.
 
 That run took 67 seconds on a laptop. The count is pinned to a commit because it moves whenever

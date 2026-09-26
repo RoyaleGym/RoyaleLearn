@@ -1,12 +1,12 @@
 {
  "format": 2,
- "why": "S4 on the IL arm, MockEngine: side A is 3ff1f22 with --il-shape sections, its warm_start and imitation sections provided by the TRANSITIONAL built-ins (3ff1f22 extensions.py:187-190, royalelearn.imitation.*); side B is c5a745e with --il-shape sections and --imitate 0c85464, the same sections provided by royaleimitate through its royalelearn.extensions entry points (RoyaleImitate b38929f pyproject.toml:33-35), c5a745e extensions.py:185 _BUILTINS = {}. RoyaleImitate b38929f moved every module one-to-one from 3ff1f22 with only its imports rewritten to royalelearn.extensions, __version__ = '0.1.0' added (royaleimitate/__init__.py:18), each Extension.package returning royaleimitate (extension.py:43-47, warm_start.py:32-36), and shards' provenance (not run here) naming royaleimitate. So weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, config bytes and config_hash, the section digests and every checkpoint file are identical. What moves: the sections are no longer built-in, so c5a745e identity.py:243-255 records distribution, version and git beside each digest; the identity hash, and with it run_id, resumed_run_id and the manifest's run_id copies, move; and the royaleimitate modules the discovery imports appear in other_modules (on side A the same code was royalelearn.imitation.*, which the column does not list). Measured 2026-09-25 03:50-03:51 with RoyaleGym e09b1bd pinned, RoyaleSim 5ec2b6e, royalesim.pyd e4364b01f3e8, artifacts made at 490c74c (ab2/final/il-artifacts).",
+ "why": "S4 on the IL arm, MockEngine: side A is f4a7769 with --il-shape sections, its warm_start and imitation sections provided by the TRANSITIONAL built-ins (f4a7769 extensions.py:187-190, royalelearn.imitation.*); side B is d23ce4f with --il-shape sections and --imitate 0c85464, the same sections provided by royaleimitate through its royalelearn.extensions entry points (RoyaleImitate b38929f pyproject.toml:33-35), d23ce4f extensions.py:185 _BUILTINS = {}. RoyaleImitate b38929f moved every module one-to-one from f4a7769 with only its imports rewritten to royalelearn.extensions, __version__ = '0.1.0' added (royaleimitate/__init__.py:18), each Extension.package returning royaleimitate (extension.py:43-47, warm_start.py:32-36), and shards' provenance (not run here) naming royaleimitate. So weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, config bytes and config_hash, the section digests and every checkpoint file are identical. What moves: the sections are no longer built-in, so d23ce4f identity.py:243-255 records distribution, version and git beside each digest; the identity hash, and with it run_id, resumed_run_id and the manifest's run_id copies, move; and the royaleimitate modules the discovery imports appear in other_modules (on side A the same code was royalelearn.imitation.*, which the column does not list). Measured 2026-09-25 03:50-03:51 with RoyaleGym f8b2fe2 pinned, RoyaleSim e86bb4e, royalesim.pyd e4364b01f3e8, artifacts made at 61621bb (ab2/final/il-artifacts).",
  "may_differ": {
   "commit": {
-   "why": "side A is 3ff1f22 (S3 with both review rounds), side B is c5a745e (S4); pinned so the file holds only this pair of commits",
+   "why": "side A is f4a7769 (S3 with both review rounds), side B is d23ce4f (S4); pinned so the file holds only this pair of commits",
    "values": [
-    "3ff1f2232d0e9979ba7e1346884407469154baf5",
-    "c5a745e8f92b9e215b14bf4ec9febb137a67ba3f"
+    "f4a776923cab8596b4495dedcd4f3c3bef738de9",
+    "d23ce4fa4e7bdd4cfcdd0f7ec19942bbeb57fe77"
    ]
   },
   "imitate_commit": {
@@ -17,7 +17,7 @@
    ]
   },
   "run_id": {
-   "why": "the identity gains the six extensions.<name>.{distribution,version,git} leaves below (c5a745e identity.py:250-255, the non-built-in branch), so its hash moves; side A's value equals s3-il-mock.json's side B (3ff1f22); pinned; resumed_run_id equals run_id on each side",
+   "why": "the identity gains the six extensions.<name>.{distribution,version,git} leaves below (d23ce4f identity.py:250-255, the non-built-in branch), so its hash moves; side A's value equals s3-il-mock.json's side B (f4a7769); pinned; resumed_run_id equals run_id on each side",
    "values": [
     "a9c6a296d4d8b1a0",
     "e985c3559a639fa5"
@@ -35,15 +35,15 @@
   "identity_fields": {
    "only_b": {
     "extensions.imitation.distribution": {
-     "why": "c5a745e identity.py:252 distribution=entry.distribution, the canonical Name of the dist-info that declared the entry point (extensions.py:211, :319); 'royaleimitate' is RoyaleImitate pyproject.toml:6, written into the clone's dist-info by ab_digest --imitate; a built-in (3ff1f22) records the digest only (identity.py:243-245)",
+     "why": "d23ce4f identity.py:252 distribution=entry.distribution, the canonical Name of the dist-info that declared the entry point (extensions.py:211, :319); 'royaleimitate' is RoyaleImitate pyproject.toml:6, written into the clone's dist-info by ab_digest --imitate; a built-in (f4a7769) records the digest only (identity.py:243-245)",
      "value": "\"royaleimitate\""
     },
     "extensions.imitation.version": {
-     "why": "c5a745e identity.py:253 the package's __version__; royaleimitate/__init__.py:18 (b38929f) sets '0.1.0'",
+     "why": "d23ce4f identity.py:253 the package's __version__; royaleimitate/__init__.py:18 (b38929f) sets '0.1.0'",
      "value": "\"0.1.0\""
     },
     "extensions.imitation.git": {
-     "why": "c5a745e identity.py:247 package_provenance(royaleimitate): the clone's HEAD, 0c85464 in full, clean (the dist-info sits outside the package folder and in the clone's info/exclude)",
+     "why": "d23ce4f identity.py:247 package_provenance(royaleimitate): the clone's HEAD, 0c85464 in full, clean (the dist-info sits outside the package folder and in the clone's info/exclude)",
      "value": "\"0c854645a1d3260564329df0a4a8a5e606a0f66e\""
     },
     "extensions.warm_start.distribution": {
@@ -81,7 +81,7 @@
   "entry_points": {
    "only_b": {
     "royalelearn.extensions:imitation": {
-     "why": "side B's install metadata declares the imitation section (RoyaleImitate pyproject.toml:34) from the pinned clone's dist-info that ab_digest --imitate writes, one copy; side A declares none, its sections are the built-ins (3ff1f22 extensions.py:187-190)",
+     "why": "side B's install metadata declares the imitation section (RoyaleImitate pyproject.toml:34) from the pinned clone's dist-info that ab_digest --imitate writes, one copy; side A declares none, its sections are the built-ins (f4a7769 extensions.py:187-190)",
      "value": "[\"royaleimitate.extension:EXTENSION | royaleimitate 0.1.0 | <royaleimitate>/royaleimitate-0.1.0.dist-info\"]"
     },
     "royalelearn.extensions:warm_start": {
@@ -93,47 +93,47 @@
   "other_modules": {
    "only_b": {
     "royaleimitate": {
-     "why": "the package itself, imported first by the entry points' modules; 3ff1f22's royalelearn/imitation/__init__.py",
+     "why": "the package itself, imported first by the entry points' modules; f4a7769's royalelearn/imitation/__init__.py",
      "value": "[\"<royaleimitate>/royaleimitate/__init__.py\"]"
     },
     "royaleimitate.alarms": {
-     "why": "3ff1f22's royalelearn/imitation/alarms.py, imported by the sections' alarms",
+     "why": "f4a7769's royalelearn/imitation/alarms.py, imported by the sections' alarms",
      "value": "[\"<royaleimitate>/royaleimitate/alarms.py\"]"
     },
     "royaleimitate.artifacts": {
-     "why": "3ff1f22's royalelearn/artifacts.py (the actor artifact format), which S4 moves into the package",
+     "why": "f4a7769's royalelearn/artifacts.py (the actor artifact format), which S4 moves into the package",
      "value": "[\"<royaleimitate>/royaleimitate/artifacts.py\"]"
     },
     "royaleimitate.config": {
-     "why": "3ff1f22's royalelearn/imitation/config.py, the two section types",
+     "why": "f4a7769's royalelearn/imitation/config.py, the two section types",
      "value": "[\"<royaleimitate>/royaleimitate/config.py\"]"
     },
     "royaleimitate.extension": {
-     "why": "the imitation entry point (pyproject.toml:34), loaded by c5a745e extensions.py:304 (_load, :188-190); 3ff1f22's royalelearn/imitation/extension.py",
+     "why": "the imitation entry point (pyproject.toml:34), loaded by d23ce4f extensions.py:304 (_load, :188-190); f4a7769's royalelearn/imitation/extension.py",
      "value": "[\"<royaleimitate>/royaleimitate/extension.py\"]"
     },
     "royaleimitate.field_model": {
-     "why": "3ff1f22's royalelearn/imitation/artifacts.py (the field-model format) under its new name, imported by references",
+     "why": "f4a7769's royalelearn/imitation/artifacts.py (the field-model format) under its new name, imported by references",
      "value": "[\"<royaleimitate>/royaleimitate/field_model.py\"]"
     },
     "royaleimitate.init": {
-     "why": "3ff1f22's royalelearn/imitation/init.py, the actor init warm_start loads",
+     "why": "f4a7769's royalelearn/imitation/init.py, the actor init warm_start loads",
      "value": "[\"<royaleimitate>/royaleimitate/init.py\"]"
     },
     "royaleimitate.references": {
-     "why": "3ff1f22's royalelearn/imitation/references.py, the snapshot reference 'bc' this config names",
+     "why": "f4a7769's royalelearn/imitation/references.py, the snapshot reference 'bc' this config names",
      "value": "[\"<royaleimitate>/royaleimitate/references.py\"]"
     },
     "royaleimitate.regularisers": {
-     "why": "3ff1f22's royalelearn/imitation/regularisers.py, the reference_kl term this config names",
+     "why": "f4a7769's royalelearn/imitation/regularisers.py, the reference_kl term this config names",
      "value": "[\"<royaleimitate>/royaleimitate/regularisers.py\"]"
     },
     "royaleimitate.schema": {
-     "why": "3ff1f22's royalelearn/imitation/schema.py, the sections' metric keys",
+     "why": "f4a7769's royalelearn/imitation/schema.py, the sections' metric keys",
      "value": "[\"<royaleimitate>/royaleimitate/schema.py\"]"
     },
     "royaleimitate.warm_start": {
-     "why": "the warm_start entry point (pyproject.toml:35); 3ff1f22's royalelearn/imitation/warm_start.py",
+     "why": "the warm_start entry point (pyproject.toml:35); f4a7769's royalelearn/imitation/warm_start.py",
      "value": "[\"<royaleimitate>/royaleimitate/warm_start.py\"]"
     }
    }
@@ -202,5 +202,5 @@
    "why": "exactly the eleven royaleimitate modules; cli, fit, shards and split are not imported by a run"
   }
  },
- "note": "Pinned 2026-09-25 from the 03:47-03:51 sitting; the entry_points pins (that column added to ab_digest.py at about 04:00) from the 04:03-04:07 re-sitting (ab5/base2, RoyaleSim b77440b, whose calibration.json key renames moved the environment column only: every other column of both sides equals the 03:50-03:51 results). Cross-sitting: the S3 sitting's own 3ff1f22 IL result (ab4/base/3ff1f22-il-mock, same environment as ab5/base) against ab5/base/c5a745e-il-mock met this file's other requirements before entry_points was required, so the S4 IL side reproduces the S3 result itself, not only a same-sitting rerun of 3ff1f22.Asserted before the pins were written: state_digest (ac533f31...), resumed_state_digest (96e6dd3f...), config_json_sha256 (7200372a...) and config_hash (c7bcbedf...) are equal on both sides and equal s3-il-mock.json's 3ff1f22 values; both section digests (imitation b92325f5..., warm_start 2d8da3fa...) are equal and equal s3-il-mock.json's; side A's run_id equals s3-il-mock.json's side B; the git leaves are the clone's HEAD with no -dirty. That side A loaded the same eleven modules under royalelearn.imitation.* and royalelearn.artifacts is traced from the diff (b38929f's one-to-one move), not measured: other_modules does not list royalelearn modules. Control run in the same sitting: c5a745e with --il-shape sections and no --imitate is refused at load_config ('imitation' and 'warm_start' are not RoyaleLearn config keys, and no installed package provides them), so side B's sections come from the clone's dist-info and nowhere in the venv."
+ "note": "Pinned 2026-09-25 from the 03:47-03:51 sitting; the entry_points pins (that column added to ab_digest.py at about 04:00) from the 04:03-04:07 re-sitting (ab5/base2, RoyaleSim f7248f8, whose calibration.json key renames moved the environment column only: every other column of both sides equals the 03:50-03:51 results). Cross-sitting: the S3 sitting's own f4a7769 IL result (ab4/base/f4a7769-il-mock, same environment as ab5/base) against ab5/base/d23ce4f-il-mock met this file's other requirements before entry_points was required, so the S4 IL side reproduces the S3 result itself, not only a same-sitting rerun of f4a7769.Asserted before the pins were written: state_digest (ac533f31...), resumed_state_digest (96e6dd3f...), config_json_sha256 (7200372a...) and config_hash (c7bcbedf...) are equal on both sides and equal s3-il-mock.json's f4a7769 values; both section digests (imitation b92325f5..., warm_start 2d8da3fa...) are equal and equal s3-il-mock.json's; side A's run_id equals s3-il-mock.json's side B; the git leaves are the clone's HEAD with no -dirty. That side A loaded the same eleven modules under royalelearn.imitation.* and royalelearn.artifacts is traced from the diff (b38929f's one-to-one move), not measured: other_modules does not list royalelearn modules. Control run in the same sitting: d23ce4f with --il-shape sections and no --imitate is refused at load_config ('imitation' and 'warm_start' are not RoyaleLearn config keys, and no installed package provides them), so side B's sections come from the clone's dist-info and nowhere in the venv."
 }

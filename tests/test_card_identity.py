@@ -1,6 +1,6 @@
 """D2's learner half: the card on each tile reaches the network, exactly, and only when asked.
 
-RoyaleGym ef574ec added ``SpatialObsBuilder(card_identity=True)``: an integer plane per side,
+RoyaleGym 7dc16d5 added ``SpatialObsBuilder(card_identity=True)``: an integer plane per side,
 ``card_ids`` ``[2, H, W]`` uint8, 0 empty, 1 crown tower, 2 + card id for a unit of that card, and
 ``enemy_last_card`` at the end of the vector. Without it a policy cannot tell a Giant from a
 Knight on the same tile, and no throughput comparison would ever have shown that ceiling.
@@ -30,7 +30,7 @@ from royalelearn.errors import PreflightError
 from royalelearn.rollout.codec import SpatialObsCodec
 from royalelearn.rollout.envspec import ComponentSpec, canonical_json, read_env_spec
 
-#: Taken on 011960d, before any of this existed: the flag-off architecture must not move.
+#: Taken on a93ace4, before any of this existed: the flag-off architecture must not move.
 GOLDEN_ARCH_DIGEST = "f244fcb743483eac65b728eae118ffae7ebea5198da351890d13e4734169772f"
 GOLDEN_PARAMETERS = 767301
 

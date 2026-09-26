@@ -1,12 +1,12 @@
 {
  "format": 2,
- "why": "S4 installed but unused: c5a745e with RoyaleImitate 0c85464 on the path (ab_digest --imitate: a clone first on PYTHONPATH with its royaleimitate-0.1.0.dist-info, entry points and direct_url.json, beside it) against 3ff1f22, plain arm on MockEngine, side B run with --forbid-module royaleimitate. The plan's S4 verification 2: installed but unused equals absent. A plain config names no extension section, so no entry point is loaded and neither child imports royaleimitate. Everything is identical except which code ran: config bytes and hashes, run_id and every identity field (no extensions record), weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, the checkpoint and other_modules (royaleimitate absent from it). Measured 2026-09-25 03:50 with RoyaleGym e09b1bd pinned, RoyaleSim 5ec2b6e, royalesim.pyd e4364b01f3e8.",
+ "why": "S4 installed but unused: d23ce4f with RoyaleImitate 0c85464 on the path (ab_digest --imitate: a clone first on PYTHONPATH with its royaleimitate-0.1.0.dist-info, entry points and direct_url.json, beside it) against f4a7769, plain arm on MockEngine, side B run with --forbid-module royaleimitate. The plan's S4 verification 2: installed but unused equals absent. A plain config names no extension section, so no entry point is loaded and neither child imports royaleimitate. Everything is identical except which code ran: config bytes and hashes, run_id and every identity field (no extensions record), weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, the checkpoint and other_modules (royaleimitate absent from it). Measured 2026-09-25 03:50 with RoyaleGym f8b2fe2 pinned, RoyaleSim e86bb4e, royalesim.pyd e4364b01f3e8.",
  "may_differ": {
   "commit": {
-   "why": "side A is 3ff1f22 (S3 with both review rounds), side B is c5a745e (S4); pinned so the file holds only this pair of commits",
+   "why": "side A is f4a7769 (S3 with both review rounds), side B is d23ce4f (S4); pinned so the file holds only this pair of commits",
    "values": [
-    "3ff1f2232d0e9979ba7e1346884407469154baf5",
-    "c5a745e8f92b9e215b14bf4ec9febb137a67ba3f"
+    "f4a776923cab8596b4495dedcd4f3c3bef738de9",
+    "d23ce4fa4e7bdd4cfcdd0f7ec19942bbeb57fe77"
    ]
   },
   "imitate_commit": {
@@ -49,5 +49,5 @@
    "why": "exactly the two sections the package declares, and no other royale* entry point on either side"
   }
  },
- "note": "Nothing else may differ: in particular an other_modules entry for royaleimitate would fail here, and --forbid-module royaleimitate on side B refuses it at import time as well. Until 2026-09-25 04:00 this file required only imitate_commit, which the parent writes from its own --imitate flag: a copy of the uninstalled c5a745e side with that one field set passed it (ab5/check-pi-uninstalled-labelled), so the file could not tell installed-but-unused from absent-against-absent. The entry_points column (ab_digest.py, added the same morning) records what each child's install metadata declares without loading it, and this file requires side B's two declarations, pinned. Re-measured 04:03-04:07 (ab5/base2, RoyaleSim b77440b, whose calibration.json key renames moved the environment column only: every other column of all nine sides equals the 03:47-03:51 sitting's). Requires results that record entry_points: an older result on either side fails the require (and one recorded against one not is entry_points_unrecorded, never allowed)."
+ "note": "Nothing else may differ: in particular an other_modules entry for royaleimitate would fail here, and --forbid-module royaleimitate on side B refuses it at import time as well. Until 2026-09-25 04:00 this file required only imitate_commit, which the parent writes from its own --imitate flag: a copy of the uninstalled d23ce4f side with that one field set passed it (ab5/check-pi-uninstalled-labelled), so the file could not tell installed-but-unused from absent-against-absent. The entry_points column (ab_digest.py, added the same morning) records what each child's install metadata declares without loading it, and this file requires side B's two declarations, pinned. Re-measured 04:03-04:07 (ab5/base2, RoyaleSim f7248f8, whose calibration.json key renames moved the environment column only: every other column of all nine sides equals the 03:47-03:51 sitting's). Requires results that record entry_points: an older result on either side fails the require (and one recorded against one not is entry_points_unrecorded, never allowed)."
 }

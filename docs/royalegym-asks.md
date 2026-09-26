@@ -184,7 +184,7 @@ What it needs from the base class is small: `get_reward(team, prev, state, resul
 breakdown the metrics use.
 
 Every shipped config now names `royalelearn.rewards.default_potential_reward`, not RoyaleGym's
-`default_reward`. That changed in commit `23d971c` on 2026-09-22. Before it, every real iteration
+`default_reward`. That changed in commit `a89570d` on 2026-09-22. Before it, every real iteration
 trained a different objective from the one the design specified, which is exactly the kind of
 mismatch this page exists to make visible. `rewards.py` gives the full argument. The short version
 is that RoyaleGym's elixir-trade term pays a player who never commits a card, and its tower term

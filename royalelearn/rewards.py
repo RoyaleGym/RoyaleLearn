@@ -190,7 +190,7 @@ class CommittedElixirPotential(PotentialReward):
     is priced only when it IS the unit its card's catalogue row describes: same hitpoints, same
     collision radius, same air or ground. Anything else a card produced scores zero. That is an
     understatement and it is deliberate, the rule RoyaleGym's ``ElixirTradeReward`` adopted in
-    4488a2f: a golemite is worth something, and this term says zero rather than eight. What it
+    2381149: a golemite is worth something, and this term says zero rather than eight. What it
     keeps true is the property the term needs. ONE PLAY OF A UNIT CARD PUTS EXACTLY THAT CARD'S
     ELIXIR ON THE BOARD: a card's summon count covers exactly the units its row describes, so a
     Goblin Gang still totals three. ``tests/test_elixir_pricing.py`` taps every card each engine

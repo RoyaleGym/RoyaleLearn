@@ -292,8 +292,8 @@ Run 2026-09-22 on the laptop this was written on. Your git hashes and your GPU l
 differ:
 
 ```
-royalelearn   0.1.0 (c6c2028-dirty)
-royalegym     0.1.0 (6299ade-dirty)
+royalelearn   0.1.0 (4874c2e-dirty)
+royalegym     0.1.0 (0b73269-dirty)
 torch         2.11.0+cu128 on cuda:NVIDIA GeForce RTX 3050 Laptop GPU:sm_86
 master seed   20260921
 determinism   run_exact

@@ -1,8 +1,8 @@
 {
  "format": 2,
- "why": "S3 as of 3ff1f22 against 490c74c, IL arm on MockEngine: side A runs --il-shape legacy (490c74c's imitation block, alarm thresholds at AlarmConfig.imitation_* defaults), side B --il-shape sections (3ff1f22's warm_start and imitation sections with the same values), artifacts made at 490c74c. The config keys move under the prefix renames below with every value equal and no key added or lost; the identity's imitation_digest becomes extensions.{imitation,warm_start}.digest, so run_id moves; the freeze metrics and alarms are renamed as in S2; the update state moves to 'freeze' plus 'extensions' as in S2 and misc.json is written at format_version 2 because it keeps a freeze and a term state (3ff1f22); the state digests move as in S2 (side B's equal 6f463d3's). Weights, moments, every other metric value, the alarm table, its parameters and its firings are identical. Measured 2026-09-25 02:44 with RoyaleGym e09b1bd pinned, RoyaleSim 5ec2b6e.",
+ "why": "S3 as of f4a7769 against 61621bb, IL arm on MockEngine: side A runs --il-shape legacy (61621bb's imitation block, alarm thresholds at AlarmConfig.imitation_* defaults), side B --il-shape sections (f4a7769's warm_start and imitation sections with the same values), artifacts made at 61621bb. The config keys move under the prefix renames below with every value equal and no key added or lost; the identity's imitation_digest becomes extensions.{imitation,warm_start}.digest, so run_id moves; the freeze metrics and alarms are renamed as in S2; the update state moves to 'freeze' plus 'extensions' as in S2 and misc.json is written at format_version 2 because it keeps a freeze and a term state (f4a7769); the state digests move as in S2 (side B's equal 352c4d9's). Weights, moments, every other metric value, the alarm table, its parameters and its firings are identical. Measured 2026-09-25 02:44 with RoyaleGym f8b2fe2 pinned, RoyaleSim e86bb4e.",
  "rename": {
-  "why": "metric and alarm renames: 6f463d3 metrics/schema.py:842 RENAMED and metrics/alarms.py:57 RENAMED_ALARMS. config prefixes: c7639d5 moves init and actor_lr_scale into WarmStartSection (imitation/config.py:62), the four freeze thresholds into WarmStartAlarms (imitation/config.py:53) and the two regulariser thresholds into ImitationAlarms (imitation/config.py:145), removing AlarmConfig.imitation_* (490c74c config.py:481-486)",
+  "why": "metric and alarm renames: 352c4d9 metrics/schema.py:842 RENAMED and metrics/alarms.py:57 RENAMED_ALARMS. config prefixes: a629b56 moves init and actor_lr_scale into WarmStartSection (imitation/config.py:62), the four freeze thresholds into WarmStartAlarms (imitation/config.py:53) and the two regulariser thresholds into ImitationAlarms (imitation/config.py:145), removing AlarmConfig.imitation_* (61621bb config.py:481-486)",
   "metric_keys": {
    "imitation/actor_lr_scale": "ppo/actor_lr_scale",
    "imitation/actor_frozen": "ppo/actor_frozen",
@@ -26,14 +26,14 @@
  },
  "may_differ": {
   "commit": {
-   "why": "side A is 490c74c, side B is 3ff1f22 (S3 plus both review rounds' fixes); pinned so the file holds only this pair of commits",
+   "why": "side A is 61621bb, side B is f4a7769 (S3 plus both review rounds' fixes); pinned so the file holds only this pair of commits",
    "values": [
-    "490c74caeb2e697f625da7ca103bfcbf88794767",
-    "3ff1f2232d0e9979ba7e1346884407469154baf5"
+    "61621bb6cde42f6ebc1b8efbe6413683f30a8e50",
+    "f4a776923cab8596b4495dedcd4f3c3bef738de9"
    ]
   },
   "il_shape": {
-   "why": "the two sides run the config shape their commit reads: legacy at 490c74c, sections at 3ff1f22; pinned to the two IL_SHAPES fragments this was measured with (sha256 of each)",
+   "why": "the two sides run the config shape their commit reads: legacy at 61621bb, sections at f4a7769; pinned to the two IL_SHAPES fragments this was measured with (sha256 of each)",
    "values": [
     {
      "name": "legacy",
@@ -67,7 +67,7 @@
    ]
   },
   "run_id": {
-   "why": "the identity's imitation_digest (490c74c identity.py:642) is replaced by extensions (c7639d5 identity.py:771), so the identity hash moves; pinned; resumed_run_id equals run_id on each side",
+   "why": "the identity's imitation_digest (61621bb identity.py:642) is replaced by extensions (a629b56 identity.py:771), so the identity hash moves; pinned; resumed_run_id equals run_id on each side",
    "values": [
     "15f2eccc02176300",
     "a9c6a296d4d8b1a0"
@@ -81,14 +81,14 @@
    ]
   },
   "state_digest": {
-   "why": "6f463d3 coordinator.py:2258 hashes each update.extra_state() entry by name, where 490c74c coordinator.py:2367 hashed update.imitation.state(); side B's digest equals 6f463d3's; pinned: side B's value is 6f463d3's (checked when this pin was written), so S3 moved nothing in the state",
+   "why": "352c4d9 coordinator.py:2258 hashes each update.extra_state() entry by name, where 61621bb coordinator.py:2367 hashed update.imitation.state(); side B's digest equals 352c4d9's; pinned: side B's value is 352c4d9's (checked when this pin was written), so S3 moved nothing in the state",
    "values": [
     "7f8b84e5734d81fc63036f49bca37375a4ad10796b85bc867fbeaf3760b420be",
     "ac533f31c13fb5ff629248e3945292054341fcd6d3b5fc591d83c22f9c318ca4"
    ]
   },
   "resumed_state_digest": {
-   "why": "the same digest after the resume; pinned: side B's value is 6f463d3's",
+   "why": "the same digest after the resume; pinned: side B's value is 352c4d9's",
    "values": [
     "7efedec659d3b18ae8ea082ddefb74d0d6be0dbd67eaa2f3a56cbd6fe5ab2915",
     "96e6dd3f364733ac487bfb000f53682e9ca3cd5a3d1b7a22f5041714b1bde2e0"
@@ -99,17 +99,17 @@
   "identity_fields": {
    "only_a": {
     "imitation_digest": {
-     "why": "490c74c identity.py:642 imitation_digest_of(config); c7639d5 removes the field",
+     "why": "61621bb identity.py:642 imitation_digest_of(config); a629b56 removes the field",
      "value": "\"aafde51e601ecd2c7e72ed47d16ffd00420d0fb02641fbed8f0a582758e098ab\""
     }
    },
    "only_b": {
     "extensions.imitation.digest": {
-     "why": "c7639d5 identity.py:771 extension_records: a built-in section records its digest only (distribution, version and git are None and omitted)",
+     "why": "a629b56 identity.py:771 extension_records: a built-in section records its digest only (distribution, version and git are None and omitted)",
      "value": "\"b92325f50bd6d92be864238d8f6ddef39ba111ba7f3f3c43f984d1276eefddb2\""
     },
     "extensions.warm_start.digest": {
-     "why": "c7639d5 identity.py:771 extension_records, as extensions.imitation.digest",
+     "why": "a629b56 identity.py:771 extension_records, as extensions.imitation.digest",
      "value": "\"2d8da3fa0a006a033fa44999d65354d54c992fc397670308ff464cc3ff6bec62\""
     }
    }
@@ -117,7 +117,7 @@
   "metric_values": {
    "changed": {
     "run/state_digest": {
-     "why": "the per-row copy of state_digest (6f463d3 coordinator.py:2258); every row; pinned with rows_sha: all 5 rows, and side B's rows are 6f463d3's",
+     "why": "the per-row copy of state_digest (352c4d9 coordinator.py:2258); every row; pinned with rows_sha: all 5 rows, and side B's rows are 352c4d9's",
      "value": [
       1,
       "\"3d0add0c5f99bbf5e4f64d9e5d1698c592e751235babad9395a6897952b6a9b8\"",
@@ -131,15 +131,15 @@
   "checkpoint": {
    "only_a": {
     "fresh:optimizers/misc.json:imitation.lambda.bc": {
-     "why": "490c74c learn/ppo.py:1088 writes the IL update state under 'imitation'; S2 (6f463d3 learn/ppo.py:1138-1152) writes 'freeze' and 'extensions'",
+     "why": "61621bb learn/ppo.py:1088 writes the IL update state under 'imitation'; S2 (352c4d9 learn/ppo.py:1138-1152) writes 'freeze' and 'extensions'",
      "value": "5.625"
     },
     "fresh:optimizers/misc.json:imitation.last_frozen": {
-     "why": "490c74c learn/ppo.py:1088, moved to freeze.state.last_frozen",
+     "why": "61621bb learn/ppo.py:1088, moved to freeze.state.last_frozen",
      "value": "false"
     },
     "fresh:optimizers/misc.json:imitation.unfrozen_at": {
-     "why": "490c74c learn/ppo.py:1088, moved to freeze.state.unfrozen_at",
+     "why": "61621bb learn/ppo.py:1088, moved to freeze.state.unfrozen_at",
      "value": "1"
     },
     "resumed:optimizers/misc.json:imitation.lambda.bc": {
@@ -199,7 +199,7 @@
    },
    "changed": {
     "fresh:optimizers/misc.json:format_version": {
-     "why": "3ff1f22 learn/ppo.py PPOUpdate.FORMAT_VERSION is 2 when a freeze or a term state is held, and save_checkpoint writes it",
+     "why": "f4a7769 learn/ppo.py PPOUpdate.FORMAT_VERSION is 2 when a freeze or a term state is held, and save_checkpoint writes it",
      "value": [
       "1",
       "2"
@@ -213,7 +213,7 @@
      ]
     },
     "fresh:manifest:component_versions.optimizers": {
-     "why": "3ff1f22: the checkpoint store records PPOUpdate.FORMAT_VERSION, the format the update wrote; 2 here because this run holds a freeze and a term state",
+     "why": "f4a7769: the checkpoint store records PPOUpdate.FORMAT_VERSION, the format the update wrote; 2 here because this run holds a freeze and a term state",
      "value": [
       "1",
       "2"
@@ -363,7 +363,7 @@
   },
   "checkpoint.only_a": {
    "n": 6,
-   "why": "exactly the three 490c74c leaves, in both checkpoints"
+   "why": "exactly the three 61621bb leaves, in both checkpoints"
   },
   "checkpoint.only_b": {
    "n": 10,
@@ -374,5 +374,5 @@
    "why": "format_version, component_versions.optimizers, the misc.json sha and the manifest's state_digest, config_hash and run_id copies, in both checkpoints"
   }
  },
- "note": "Pinned 2026-09-25: every allowance carries the value measured in the 02:41-02:44 sitting (ab_digest value pins), so an allowance admits that difference only, not any value at that name. The pins tie this file to this config, these artifacts and RoyaleGym e09b1bd; re-measuring with another pin means re-deriving them, not deleting them. Asserted before the pins were written: side B's state_digest, resumed_state_digest and all five run/state_digest rows equal 6f463d3's (s2-il-mock.json's side B), and side B's checkpoint leaves equal 6f463d3's except misc.json format_version, component_versions.optimizers, the misc.json sha and the manifest's config_hash and run_id; each moved misc.json leaf equals side A's; the manifest copies of state_digest, config_hash and run_id equal their columns; resumed_config_hash equals config_hash and resumed_run_id equals run_id on each side; the identity's extensions hold exactly the two digests."
+ "note": "Pinned 2026-09-25: every allowance carries the value measured in the 02:41-02:44 sitting (ab_digest value pins), so an allowance admits that difference only, not any value at that name. The pins tie this file to this config, these artifacts and RoyaleGym f8b2fe2; re-measuring with another pin means re-deriving them, not deleting them. Asserted before the pins were written: side B's state_digest, resumed_state_digest and all five run/state_digest rows equal 352c4d9's (s2-il-mock.json's side B), and side B's checkpoint leaves equal 352c4d9's except misc.json format_version, component_versions.optimizers, the misc.json sha and the manifest's config_hash and run_id; each moved misc.json leaf equals side A's; the manifest copies of state_digest, config_hash and run_id equal their columns; resumed_config_hash equals config_hash and resumed_run_id equals run_id on each side; the identity's extensions hold exactly the two digests."
 }

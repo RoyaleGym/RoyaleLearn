@@ -123,7 +123,7 @@ def test_the_config_default_draws_what_the_matchmaker_default_draws(tmp_path: Pa
 def test_the_default_draw_is_the_one_runs_made_before_the_field(tmp_path: Path) -> None:
     """Pinned, not compared with a second matchmaker running the same code.
 
-    The digest was recorded from 919406c, the commit before ``scripted_opponents`` existed, with
+    The digest was recorded from 35d9d33, the commit before ``scripted_opponents`` existed, with
     the same seed, rectangle and empty pool: 480 scripted draws, from the 14 scripted battles
     and the 34 pool battles standing in for them, ten episodes each. A change to the default list,
     its order or the way ``assign`` reads it hands resumed and repeated runs other opponents,

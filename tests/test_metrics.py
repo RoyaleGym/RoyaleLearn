@@ -515,7 +515,7 @@ def test_the_reward_shares_survive_a_zero_sum_reward(tmp_path) -> None:
 def test_the_objective_is_found_when_a_reward_names_its_terms_after_their_classes() -> None:
     """A composition assembled from RoyaleGym names every term after its class.
 
-    The shipped configs did exactly that until 23d971c, and a bot creator's own composition may.
+    The shipped configs did exactly that until a89570d, and a bot creator's own composition may.
     The objective then arrives as ``WinLossReward`` rather than under the declared name, and until
     2026-09-22 it was counted as shaping: a real run read shaping 1.475 against terminal 0.0, and
     the difference was exactly the 1.0 the objective contributed. ``shaping_dominates`` then holds

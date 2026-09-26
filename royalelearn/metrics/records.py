@@ -52,7 +52,7 @@ TERMINAL_REWARD_TERM = "terminal"
 
 #: The other names an objective arrives under. A composition names its own terminal term, but a
 #: reward assembled from RoyaleGym's ``CombinedReward`` names every term after its class, and a
-#: config is free to use one: the shipped configs did until 23d971c. Matching on a class name is
+#: config is free to use one: the shipped configs did until a89570d. Matching on a class name is
 #: fragile, which is why it is a fallback and why the list is here rather than inside the loop.
 TERMINAL_REWARD_CLASSES = ("WinLossReward",)
 

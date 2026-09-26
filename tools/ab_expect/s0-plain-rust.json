@@ -1,139 +1,139 @@
 {
  "format": 2,
- "why": "S0 step 3, 8bf6a67 against 490c74c, plain arm on RustEngine (past the opening lockout). Measured 2026-09-25 with RoyaleGym e09b1bd pinned on both sides. run_id, identity, weights, moments, state digests, every metric value, alarm parameters and firings are equal; the only differences are the seven config keys, the four imitation alarms and their parameters (none of them fires), the play-rate members and schedules/state.json's actor_lr_scale record.",
+ "why": "S0 step 3, 572ce13 against 61621bb, plain arm on RustEngine (past the opening lockout). Measured 2026-09-25 with RoyaleGym f8b2fe2 pinned on both sides. run_id, identity, weights, moments, state digests, every metric value, alarm parameters and firings are equal; the only differences are the seven config keys, the four imitation alarms and their parameters (none of them fires), the play-rate members and schedules/state.json's actor_lr_scale record.",
  "may_differ": {
-  "commit": "side A is 8bf6a67 (pre-IL, parent of 0ab7a29), side B is 490c74c",
-  "config_json_sha256": "config.json gains the seven keys: the seven config keys the IL commits added to every run (0ab7a29 L1 block, 7e40c8e L2 thresholds): imitation: null and alarms.imitation_*",
-  "config_hash": "the canonical config gains the seven keys: the seven config keys the IL commits added to every run (0ab7a29 L1 block, 7e40c8e L2 thresholds): imitation: null and alarms.imitation_*",
+  "commit": "side A is 572ce13 (pre-IL, parent of 7e93217), side B is 61621bb",
+  "config_json_sha256": "config.json gains the seven keys: the seven config keys the IL commits added to every run (7e93217 L1 block, 22fddf4 L2 thresholds): imitation: null and alarms.imitation_*",
+  "config_hash": "the canonical config gains the seven keys: the seven config keys the IL commits added to every run (7e93217 L1 block, 22fddf4 L2 thresholds): imitation: null and alarms.imitation_*",
   "resumed_config_hash": "the reloaded <run>/config.json carries the same seven keys"
  },
  "allow": {
   "config_keys": {
    "only_b": {
-    "imitation": "0ab7a29/7e40c8e: RunConfig.imitation, written as null on a run without the block",
-    "alarms.imitation_ref_kl_warn": "7e40c8e: AlarmConfig threshold of imitation_ref_kl_high",
-    "alarms.imitation_lambda_saturated_patience": "7e40c8e: AlarmConfig patience of imitation_lambda_saturated",
-    "alarms.imitation_handoff_window": "7e40c8e: AlarmConfig threshold of imitation_handoff",
-    "alarms.imitation_handoff_kl": "7e40c8e: AlarmConfig threshold of imitation_handoff",
-    "alarms.imitation_handoff_clip": "7e40c8e: AlarmConfig threshold of imitation_handoff",
-    "alarms.imitation_ev_at_unfreeze": "7e40c8e: AlarmConfig threshold of imitation_critic_unready"
+    "imitation": "7e93217/22fddf4: RunConfig.imitation, written as null on a run without the block",
+    "alarms.imitation_ref_kl_warn": "22fddf4: AlarmConfig threshold of imitation_ref_kl_high",
+    "alarms.imitation_lambda_saturated_patience": "22fddf4: AlarmConfig patience of imitation_lambda_saturated",
+    "alarms.imitation_handoff_window": "22fddf4: AlarmConfig threshold of imitation_handoff",
+    "alarms.imitation_handoff_kl": "22fddf4: AlarmConfig threshold of imitation_handoff",
+    "alarms.imitation_handoff_clip": "22fddf4: AlarmConfig threshold of imitation_handoff",
+    "alarms.imitation_ev_at_unfreeze": "22fddf4: AlarmConfig threshold of imitation_critic_unready"
    }
   },
   "alarms": {
    "only_b": {
-    "imitation_ref_kl_high": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_lambda_saturated": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_handoff": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_critic_unready": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
+    "imitation_ref_kl_high": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_lambda_saturated": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_handoff": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_critic_unready": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
    }
   },
   "resumed_alarms": {
    "only_b": {
-    "imitation_ref_kl_high": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_lambda_saturated": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_handoff": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_critic_unready": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
+    "imitation_ref_kl_high": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_lambda_saturated": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_handoff": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_critic_unready": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
    }
   },
   "metric_keys": {
    "only_b": {
-    "env/play_rate_by_elixir/1": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/2": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/3": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/4": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/7": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference"
+    "env/play_rate_by_elixir/1": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/2": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/3": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/4": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/7": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference"
    }
   },
   "checkpoint": {
    "only_b": {
-    "fresh:schedules/state.json:last.actor_lr_scale": "7e40c8e: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent",
-    "resumed:schedules/state.json:last.actor_lr_scale": "7e40c8e: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent"
+    "fresh:schedules/state.json:last.actor_lr_scale": "22fddf4: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent",
+    "resumed:schedules/state.json:last.actor_lr_scale": "22fddf4: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent"
    },
    "changed": {
-    "fresh:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (7e40c8e)",
-    "resumed:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (7e40c8e)",
+    "fresh:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (22fddf4)",
+    "resumed:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (22fddf4)",
     "fresh:manifest:config_hash": "the manifest's copy of config_hash; moves with the seven config keys",
     "resumed:manifest:config_hash": "the manifest's copy of config_hash; moves with the seven config keys"
    }
   },
   "alarm_params": {
    "only_b": {
-    "fresh:imitation_ref_kl_high": "7e40c8e: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "fresh:imitation_lambda_saturated": "7e40c8e: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "fresh:imitation_handoff": "7e40c8e: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "fresh:imitation_critic_unready": "7e40c8e: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_ref_kl_high": "7e40c8e: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_lambda_saturated": "7e40c8e: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_handoff": "7e40c8e: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_critic_unready": "7e40c8e: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)"
+    "fresh:imitation_ref_kl_high": "22fddf4: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "fresh:imitation_lambda_saturated": "22fddf4: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "fresh:imitation_handoff": "22fddf4: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "fresh:imitation_critic_unready": "22fddf4: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_ref_kl_high": "22fddf4: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_lambda_saturated": "22fddf4: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_handoff": "22fddf4: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_critic_unready": "22fddf4: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)"
    }
   }
  },
  "require": {
   "config_keys": {
    "only_b": {
-    "imitation": "0ab7a29/7e40c8e: RunConfig.imitation, written as null on a run without the block",
-    "alarms.imitation_ref_kl_warn": "7e40c8e: AlarmConfig threshold of imitation_ref_kl_high",
-    "alarms.imitation_lambda_saturated_patience": "7e40c8e: AlarmConfig patience of imitation_lambda_saturated",
-    "alarms.imitation_handoff_window": "7e40c8e: AlarmConfig threshold of imitation_handoff",
-    "alarms.imitation_handoff_kl": "7e40c8e: AlarmConfig threshold of imitation_handoff",
-    "alarms.imitation_handoff_clip": "7e40c8e: AlarmConfig threshold of imitation_handoff",
-    "alarms.imitation_ev_at_unfreeze": "7e40c8e: AlarmConfig threshold of imitation_critic_unready"
+    "imitation": "7e93217/22fddf4: RunConfig.imitation, written as null on a run without the block",
+    "alarms.imitation_ref_kl_warn": "22fddf4: AlarmConfig threshold of imitation_ref_kl_high",
+    "alarms.imitation_lambda_saturated_patience": "22fddf4: AlarmConfig patience of imitation_lambda_saturated",
+    "alarms.imitation_handoff_window": "22fddf4: AlarmConfig threshold of imitation_handoff",
+    "alarms.imitation_handoff_kl": "22fddf4: AlarmConfig threshold of imitation_handoff",
+    "alarms.imitation_handoff_clip": "22fddf4: AlarmConfig threshold of imitation_handoff",
+    "alarms.imitation_ev_at_unfreeze": "22fddf4: AlarmConfig threshold of imitation_critic_unready"
    }
   },
   "alarms": {
    "only_b": {
-    "imitation_ref_kl_high": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_lambda_saturated": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_handoff": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_critic_unready": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
+    "imitation_ref_kl_high": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_lambda_saturated": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_handoff": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_critic_unready": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
    }
   },
   "resumed_alarms": {
    "only_b": {
-    "imitation_ref_kl_high": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_lambda_saturated": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_handoff": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
-    "imitation_critic_unready": "7e40c8e: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
+    "imitation_ref_kl_high": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_lambda_saturated": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_handoff": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)",
+    "imitation_critic_unready": "22fddf4: default_alarms extends every run's table with _imitation_alarms (24 -> 28 names)"
    }
   },
   "metric_keys": {
    "only_b": {
-    "env/play_rate_by_elixir/1": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/2": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/3": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/4": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
-    "env/play_rate_by_elixir/7": "7e40c8e: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference"
+    "env/play_rate_by_elixir/1": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/2": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/3": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/4": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference",
+    "env/play_rate_by_elixir/7": "22fddf4: the play-rate-by-elixir family is published on every run (train's Decision 2 keeps it in core), one key per elixir cost the policy played. The members are exact: this config on rust plays elixir costs [1, 2, 3, 4, 7] deterministically (the null pairs are identical), so a new or a missing member is a difference"
    }
   },
   "checkpoint": {
    "only_b": {
-    "fresh:schedules/state.json:last.actor_lr_scale": "7e40c8e: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent",
-    "resumed:schedules/state.json:last.actor_lr_scale": "7e40c8e: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent"
+    "fresh:schedules/state.json:last.actor_lr_scale": "22fddf4: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent",
+    "resumed:schedules/state.json:last.actor_lr_scale": "22fddf4: ScheduleState gains actor_lr_scale (default 1.0), serialised into schedules/state.json 'last'. It is a record (loaded with msgspec.convert, not hashed into state_digest). Owner-side ruling: the freeze/actor-lr-scale schedule stays in core, so this difference is expected and permanent"
    },
    "changed": {
-    "fresh:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (7e40c8e)",
-    "resumed:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (7e40c8e)",
+    "fresh:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (22fddf4)",
+    "resumed:manifest:files.schedules/state.json": "the bytes of schedules/state.json, which gained last.actor_lr_scale (22fddf4)",
     "fresh:manifest:config_hash": "the manifest's copy of config_hash; moves with the seven config keys",
     "resumed:manifest:config_hash": "the manifest's copy of config_hash; moves with the seven config keys"
    }
   },
   "columns": {
-   "commit": "side A is 8bf6a67 (pre-IL, parent of 0ab7a29), side B is 490c74c",
-   "config_json_sha256": "config.json gains the seven keys: the seven config keys the IL commits added to every run (0ab7a29 L1 block, 7e40c8e L2 thresholds): imitation: null and alarms.imitation_*",
-   "config_hash": "the canonical config gains the seven keys: the seven config keys the IL commits added to every run (0ab7a29 L1 block, 7e40c8e L2 thresholds): imitation: null and alarms.imitation_*",
+   "commit": "side A is 572ce13 (pre-IL, parent of 7e93217), side B is 61621bb",
+   "config_json_sha256": "config.json gains the seven keys: the seven config keys the IL commits added to every run (7e93217 L1 block, 22fddf4 L2 thresholds): imitation: null and alarms.imitation_*",
+   "config_hash": "the canonical config gains the seven keys: the seven config keys the IL commits added to every run (7e93217 L1 block, 22fddf4 L2 thresholds): imitation: null and alarms.imitation_*",
    "resumed_config_hash": "the reloaded <run>/config.json carries the same seven keys"
   },
   "alarm_params": {
    "only_b": {
-    "fresh:imitation_ref_kl_high": "7e40c8e: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "fresh:imitation_lambda_saturated": "7e40c8e: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "fresh:imitation_handoff": "7e40c8e: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "fresh:imitation_critic_unready": "7e40c8e: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_ref_kl_high": "7e40c8e: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_lambda_saturated": "7e40c8e: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_handoff": "7e40c8e: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
-    "resumed:imitation_critic_unready": "7e40c8e: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)"
+    "fresh:imitation_ref_kl_high": "22fddf4: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "fresh:imitation_lambda_saturated": "22fddf4: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "fresh:imitation_handoff": "22fddf4: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "fresh:imitation_critic_unready": "22fddf4: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_ref_kl_high": "22fddf4: imitation_ref_kl_high's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_lambda_saturated": "22fddf4: imitation_lambda_saturated's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_handoff": "22fddf4: imitation_handoff's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)",
+    "resumed:imitation_critic_unready": "22fddf4: imitation_critic_unready's (severity, patience, keys) exist only where the alarm does; it never fires on a plain run (alarm_firings stays equal)"
    }
   }
  },

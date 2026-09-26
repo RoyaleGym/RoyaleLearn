@@ -83,9 +83,9 @@ def test_a_clean_checkout_runs() -> None:
 
 def test_a_dirty_checkout_is_refused_and_the_message_names_it() -> None:
     with pytest.raises(PreflightError) as raised:
-        refuse_dirty_sources(False, ("royalegym (4488a2f-dirty)",))
+        refuse_dirty_sources(False, ("royalegym (2381149-dirty)",))
     message = str(raised.value)
-    assert "royalegym (4488a2f-dirty)" in message
+    assert "royalegym (2381149-dirty)" in message
     assert "--allow-dirty" in message, "a refusal has to say how to proceed deliberately"
 
 
@@ -99,7 +99,7 @@ def test_every_dirty_checkout_is_named_rather_than_the_first() -> None:
 
 def test_allow_dirty_runs_anyway() -> None:
     """The escape hatch exists because a tree is dirty for good reasons too."""
-    refuse_dirty_sources(True, ("royalegym (4488a2f-dirty)",))
+    refuse_dirty_sources(True, ("royalegym (2381149-dirty)",))
 
 
 def test_train_takes_the_flag_and_defaults_to_refusing() -> None:

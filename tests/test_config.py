@@ -96,7 +96,7 @@ def test_each_profiles_minibatch_is_the_value_it_was_chosen_at() -> None:
 
     ``test_the_shipped_example_is_its_profile_written_out_in_full`` compares the code with the
     file. That catches drift between them and nothing else: move both to 512 and it still passes,
-    which is exactly the state this repo was in until 582ce96. A number that came from a
+    which is exactly the state this repo was in until 588dc04. A number that came from a
     measurement belongs in a test beside the measurement.
 
     laptop 256: measured on the 4 GB card (``docs/harness-spec.md`` section 6). 512 reserved 4243

@@ -108,7 +108,7 @@ def skip_if_a_sibling_moved(done: subprocess.CompletedProcess[str]) -> None:
     checkouts, so a sibling can go from clean to dirty between the run that writes the checkpoint
     and the subprocess that resumes it -- which is a true identity difference, correctly refused,
     and says nothing about the resume path this file tests. Seen on 2026-09-22: "royalegym_git:
-    checkpoint '56da55d', now '56da55d-dirty'", while these same tests passed on their own minutes
+    checkpoint '4f6c794', now '4f6c794-dirty'", while these same tests passed on their own minutes
     later.
 
     So it is a SKIP naming the field that moved, not a pass and not a red somebody has to chase.

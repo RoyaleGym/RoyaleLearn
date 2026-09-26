@@ -1163,7 +1163,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `n_epochs` | 3 | | the family disagrees by three orders of magnitude (1, 10, about 1000 gradient steps per 50 k), so none of them is evidence; 3 balances reuse against the update being the wall-clock bottleneck. Watch clip fraction across epochs |
 | `timesteps_per_iteration` | 32 768 | timesteps | the compute budget and the episode arithmetic land on the same number independently |
 | `batch_size` | 4 096 | samples per optimizer step | 24 optimizer steps per iteration; about nine episodes' worth of terminal signal per step, so the advantage mean is not dominated by one battle |
-| `minibatch_size` | 256 | samples per forward | a **pure memory knob**: gradients accumulate weighted by `n/batch_size` with one `optimizer.step()` per batch, and a test proves the accumulated gradient equals the full-batch one. It was 512, chosen as "the largest that fits 4 GB", and **512 does not fit** (see below). The default lives in `PPOConfig.minibatch_size` itself, because every struct default in `config.py` is the laptop column; the workstation (2 048) and many-core (8 192) profiles set their own. Until 582ce96 the struct still said 512, so `royalelearn config --profile laptop`, and `doctor` or `bench` without `--config`, built the value that spills |
+| `minibatch_size` | 256 | samples per forward | a **pure memory knob**: gradients accumulate weighted by `n/batch_size` with one `optimizer.step()` per batch, and a test proves the accumulated gradient equals the full-batch one. It was 512, chosen as "the largest that fits 4 GB", and **512 does not fit** (see below). The default lives in `PPOConfig.minibatch_size` itself, because every struct default in `config.py` is the laptop column; the workstation (2 048) and many-core (8 192) profiles set their own. Until 588dc04 the struct still said 512, so `royalelearn config --profile laptop`, and `doctor` or `bench` without `--config`, built the value that spills |
 | `clip_range` | 0.2 | | the PPO paper; all three references |
 | `dual_clip_c` | 3.0 | | for a negative advantage the standard minimum does not bound the loss below, and in a 2305-way masked space a rarely-sampled action's ratio can be enormous |
 | `vf_coef` | 1.0 | | separate networks and separate optimizers, so it only scales the critic's effective learning rate |
@@ -1238,7 +1238,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 profile leaf for leaf, twice: the loaded tree must equal the profile, and the raw document must carry
 every leaf the profile dumps. Only the second can see a field the file leaves out, because loading
 fills an omitted field in from the profile. It found `doctor.vram_headroom_mb` missing from all three
-example files, and they carry it now (582ce96).
+example files, and they carry it now (588dc04).
 
 `EnvFactorySpec` (`rollout/envspec.py`) is the JSON-able env description, simultaneously the thing
 sent to workers, the thing recorded in the checkpoint and the thing the ladder's `context` string is
@@ -1454,7 +1454,7 @@ Signalling: two semaphores per (worker, shard), `obs_ready` and `actions_ready`,
 per publication or command, after the control word is written. Both sides spin for `rollout.spin_us`,
 then sleep on the semaphore. The spin is timed with `perf_counter`: `time.monotonic()` is the tick
 count on Windows before Python 3.13 and moves in 15.6 ms steps, so a spin timed by it lasts until the
-next step, which is how idle workers once spun through the whole update (98ff62f). A wait that sees
+next step, which is how idle workers once spun through the whole update (38352bf). A wait that sees
 the word during its spin takes the token that announced it, so a semaphore holds one token per
 command not yet answered, and a late token only wakes a later wait that finds nothing and sleeps
 again. A worker sleeps only on the shard whose command is due next, for at most `SLEEP_S` (50 ms),
@@ -2262,12 +2262,12 @@ Each potential term returns `gamma * Phi(s') - Phi(s)`, with `Phi` computed from
 
 **This is the reward that ships.** `default_env_spec`, and so all three profiles, and
 `examples/configs/laptop.json`, `smoke.json` and `workstation.json` name
-`royalelearn.rewards.default_potential_reward` since 23d971c, and
+`royalelearn.rewards.default_potential_reward` since a89570d, and
 `tests/test_rewards.py::test_every_shipped_config_trains_against_the_potential_reward` holds each
-profile and each of those files to it. Before 23d971c every shipped config named RoyaleGym's
+profile and each of those files to it. Before a89570d every shipped config named RoyaleGym's
 `royalegym.reward.default_reward`, so every real iteration before it trained a different objective.
 The reward is part of the environment spec's digest, which is in the run identity and is the first
-input of the ladder's context digest (section 11.6). So runs from before 23d971c have a different
+input of the ladder's context digest (section 11.6). So runs from before a89570d have a different
 identity and context and never pool with later ones. That separation is intended.
 
 `gamma` comes from the schedule. The coordinator builds one `ScheduleState` per iteration and hands the
@@ -2319,7 +2319,7 @@ the sum of the absolute shaping terms stays below the terminal term's magnitude.
 **What that alarm means under a POTENTIAL reward, which is not what it meant under the other one.**
 A potential term pays `gamma * Phi(s') - Phi(s)` every step. DISCOUNTED over an episode that
 telescopes to `gamma^T * Phi(s_T) - Phi(s_0)`, and with the terminal potential taken as zero
-(2ba3895) only `-Phi(s_0)` survives. The shares are UNDISCOUNTED sums, though, because that is what
+(fc8b53a) only `-Phi(s_0)` survives. The shares are UNDISCOUNTED sums, though, because that is what
 the recorder adds up, and for those the telescoping leaves one more piece:
 
     sum_t F_t = -Phi(s_0) - (1 - gamma) * sum_{t=1}^{T-1} Phi(s_t)
@@ -2349,20 +2349,20 @@ The three shaping weights are keyword arguments of `default_potential_reward` (`
 `reward_terms_step_abs` is linear in its weight.
 
 So the alarm is not a weight check any more, and reading it as one would make it look vestigial. It
-now says: a shaping term has stopped telescoping. That is the defect 2ba3895 fixed, where a finished
+now says: a shaping term has stopped telescoping. That is the defect fc8b53a fixed, where a finished
 battle still had a potential and the shaping paid for the margin of a win, and it is the defect a new
 term that is not a difference of a potential would have. A run whose shaping share climbs towards its
 terminal term has a term that is no longer policy-invariant, whatever its weight says.
 
 The two shares that alarm reads, `env/reward_shaping_abs` and `env/reward_terminal_abs`, are sums of
 those per-seat magnitudes. The signed mean is kept because it is how a term that is not antisymmetric
-shows itself. Both shares were wrong until 1065b78 and c38dc82: the absolute value was taken on the
+shows itself. Both shares were wrong until 5724eb5 and dc7f7a1: the absolute value was taken on the
 mean over both seats, where every zero-sum term cancels, and the objective arrived under its class name
 and was summed with the shaping. On every metric row the development machine recorded before then
 (161 rows) both shares read exactly 0.0 **[M]**, so the alarm compared two structural zeros. It has
 not yet been seen on a real run since.
 
-**Closed 2026-09-22 (2ba3895): the potential on the terminating step.** `PotentialReward` takes
+**Closed 2026-09-22 (fc8b53a): the potential on the terminating step.** `PotentialReward` takes
 `Phi(s') = 0` when `state.game_over` and keeps the position's potential on a truncation, where the
 learner bootstraps from the final observation's value. Before that commit the terminating step paid
 `gamma * Phi(s')` more than potential-based shaping would, a bonus that depended on how the game
@@ -2496,7 +2496,7 @@ its role for the whole iteration whether its episodes are long or short, so the 
 (2 × n_battles)` exactly. The iteration invariant of section 14.1 still compares the two within
 `MIXTURE_TOLERANCE`; it can become an equality, short only of rows lost to a dead worker.
 
-*Landed in de70de8.* Before it, the role was drawn per episode from `mix` and the iteration was sized
+*Landed in d83027a.* Before it, the role was drawn per episode from `mix` and the iteration was sized
 from the expectation. The shipped profiles do not change size. They are still 144, 1 152 and 2 304
 learner rows a cycle, as the table in section 2.2 always said, but they are now that size on every
 seed rather than on average: measured over master seeds 0–299, 76 iterations short of the floor
@@ -2759,7 +2759,7 @@ Everything above measures a **frozen snapshot**. The gate names `snap:v{n}` and 
 evaluation runner, so the id `learner` never appears in an evaluation result and a run publishes
 no score for the policy it is actually changing. `ladder/score_vs_noop` and
 `ladder/score_vs_random_legal` asked the result log about a pair nothing could write, and read
-0.5 in every row until they were made absent instead (b106aa1).
+0.5 in every row until they were made absent instead (72c1215).
 
 The probe is that missing measurement. Every `ladder.probe_every_iterations` iterations, after
 the update, the coordinator plays the **live model** against each of `ladder.probe_opponents`:
@@ -2906,7 +2906,7 @@ sits in and refuses a checkpoint whose `state_digest` no row of its iteration ca
 its checkpoint a second time and each copy describes a learner that existed. What cannot be compared
 is let through: no metric file, no row of that iteration, or a line torn by a crash. Past iteration 0
 that absence is printed, so a resume the record could not vouch for does not read like one it did
-(0839758).
+(8db7e0d).
 
 On resume the store diffs the loaded config against the current one and **prints every difference**
 before continuing. A difference in an identity-hashed field is a refusal, not a warning: a policy
@@ -3137,7 +3137,7 @@ metric crossed a threshold costs the same morning as no run at all.
 
 The halting iteration's own row is written to `metrics.jsonl` before the alarms read it, so the
 halt's checkpoint holds the learner that row describes and passes the resume check of section 12.2
-(0839758). That iteration's alarm rows are still missing: `AlarmSet.evaluate` raises before it
+(8db7e0d). That iteration's alarm rows are still missing: `AlarmSet.evaluate` raises before it
 returns what fired, so neither the halt nor the warnings beside it reach `alarms.jsonl`. The halting
 alarm is in the bundle, and the warnings beside it are only printed.
 
@@ -3161,7 +3161,7 @@ being hunted, and a false halt costs everything the run was for.
 | `kl_dead` | `ppo/kl < 1e-5` | 10 | warn | nothing is moving: dead entropy, learning rate too low, or a frozen head |
 | `ev_negative` | `ppo/explained_variance < 0` | 50 | warn | the most likely cause of a plateau |
 | `noop_collapse` | `policy/cards_per_match < 8` | 5 | warn | about 22 is healthy |
-| `noop_collapse_severe` | `policy/cards_per_match < 3` | 5 | **halt** | until bbf83f3 this threshold could not be reached, and not because of its value. See below |
+| `noop_collapse_severe` | `policy/cards_per_match < 3` | 5 | **halt** | until 92786d4 this threshold could not be reached, and not because of its value. See below |
 | `noop_entropy_floor` | `ppo/noop_entropy < 0.02` | 5 | warn | the leading indicator; it watches after `ent_coef_noop` has annealed to zero, which is when it matters most |
 | `tile_spam` | `policy/tile_top1_share > 0.25` | 5 | warn | |
 | `artefact_exploit` | `policy/card_tile_top10_share > 0.5` | 5 | warn, and dump five winning traces | a real meta is not that concentrated |
@@ -3169,7 +3169,7 @@ being hunted, and a false halt costs everything the run was for.
 | `seat_bias` | `env/win_rate_by_seat`'s 95% interval excludes 0.45-0.55 | 3 | warn | an unseeded reset, a reward asymmetry, or an observation mirror bug; a few points inside that band can be the shipped engine's own seat asymmetry, which is why this warns rather than halts and why the ladder's paired evaluation swaps sides on every seed |
 | `elixir_count_inexact` | `env/elixir_count_exact_frac < 0.99` | 3 | warn | the observation's opponent-elixir field is an estimate on some episodes: a repeated card in a deck, or an engine whose elixir law is not the calibration's. The policy is reading a documented-exact slot that is not. A value near zero rather than slightly under one is the second cause and not a broken counter: it says the engine build and the card data disagree about elixir, so read the run's `identity.json` `engine_build` before anything else. The row itself carries no engine digest: `run/state_digest` is the learner's weights, not the engine |
 | `reward_clipped` | `ppo/reward_clip_frac > 0` | 1 | warn | a reward reached `advantage.reward_clip`. Potential shaping leaves the optimum unchanged only while every step's reward reaches the return intact; on a clipped step the terms stop cancelling, and a clipped terminal step makes a win worth less than a win. Zero at every iteration of the first eight runs on the development machine **[M]**, which was an observation that the rewards stayed small and is now a check. The schema's healthy band for the key was 0 to 0.01 until this row; it is exactly 0 |
-| `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | under a potential reward this says a shaping term has stopped telescoping, which is what a term that is not a difference of a potential does; it is not a check on the weights. Measured quiet in production 2026-09-22 at 2.9% of the objective (section 10). Until 1065b78 and c38dc82 it compared two structural zeros |
+| `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | under a potential reward this says a shaping term has stopped telescoping, which is what a term that is not a difference of a potential does; it is not a check on the weights. Measured quiet in production 2026-09-22 at 2.9% of the objective (section 10). Until 5724eb5 and dc7f7a1 it compared two structural zeros |
 | `vram_spilling` | `time/update >= 2 x the best update this run has had` AND `health/vram_driver_free_mb < 128` | 3 | warn | the update is several times slower than this run has managed, on a card the driver says is full. That is what an allocation backed by host memory over PCIe looks like from inside the process, and the platform gives no other sign: it does not refuse an oversubscribed allocation, it serves it and reports success. The memory reading is there to tell a spill from a busy machine, which slows an update by 1.4 to 1.7 rather than by 4. The bar is a running minimum, so a slow iteration cannot raise the bar it is judged against and the first iteration's warm-up cannot lower it. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It stays silent on a run with no CUDA device, because `health/vram_driver_free_mb` is then absent |
 | `transitivity` | `ladder/transitivity_residual > 0.10` | 3 | warn | the scalar rating is lying |
 | `gate_starved` | five consecutive gate failures | 1 | warn | the plateau signal, stated as an event |
@@ -3213,7 +3213,7 @@ episode **[M]**, so the blended mean could not fall below about 3.9 however comp
 stopped playing. The halt at 3.0 was therefore arithmetically unable to fire for the first gate's
 worth of iterations, about 3.7 hours at laptop geometry, which is most of the period the collapse
 it guards against actually happens in. The repair was to the metric's population and not to its
-threshold: since bbf83f3 these are the learner's own seats. Measured and worked out by the train
+threshold: since 92786d4 these are the learner's own seats. Measured and worked out by the train
 session, 2026-09-22.
 
 That is the second alarm in this table to have been unreachable by construction, after
@@ -3316,7 +3316,7 @@ while cumulative_timesteps < limit:
 ```
 
 Every invariant reads only what collection wrote, so the batch is judged before anything learns from
-it, and a refused batch is never trained on. Until 0839758 the update ran first, and a refused batch
+it, and a refused batch is never trained on. Until 8db7e0d the update ran first, and a refused batch
 was trained and then refused. The row is written before the alarms read it because a halt checkpoints
 the learner that row describes, and the row has to be in `metrics.jsonl` by then (section 12.2).
 
@@ -3428,7 +3428,7 @@ periodic one, a halt's, or the one the run resumed from), because that one was w
 iteration boundary and can still replay the iteration that failed. Otherwise the save is written. A
 save taken after collection carries the battles' advanced ordinals: the ordinals address battles, so a
 resume plays the next ones, none twice, and the refused iteration's episodes are skipped rather than
-trained on (0839758).
+trained on (8db7e0d).
 
 ---
 
@@ -4082,7 +4082,7 @@ exactly what they were before sections existed. That is tested.
   (19.5), `actor_terms` (terms added to the actor's loss, section 9's update), `alarms` and
   `metric_schema` (the run's own alarm table and schema, section 13).
 - **One release.** `load_config` drops `"imitation": null` and the six `alarms.imitation_*` keys at
-  their old defaults, which every config.json written between 0ab7a29 and the extension API
+  their old defaults, which every config.json written between 7e93217 and the extension API
   carries, with a notice; a changed one is refused with its new home.
 
 ### 19.5 Freezing and ramping the actor

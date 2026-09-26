@@ -71,7 +71,7 @@ The harness follows the family's conventions, which will be familiar from RLGym:
   it from either side. Every checkpoint's learner is one a metrics row describes: the loop judges
   a batch before the update trains on it, an emergency save writes nothing while the learner is
   ahead of its rows, and a resume refuses a checkpoint whose state digest no row of its iteration
-  carries (0839758).
+  carries (8db7e0d).
 - **Layering.** This repo imports `royalegym` and nothing from `royalesim` directly, and it
   never touches calibration data. The direction is `RoyaleLearn -> RoyaleGym -> RoyaleSim`.
 
@@ -96,7 +96,7 @@ it takes a snapshot, names it `snap:v{n}` and hands that name to the runner. The
 therefore never appeared in an evaluation result, and the two keys that report the score against
 the scripted anchors were asking the result log about a pair nothing could write. They read a
 flat 0.5 -- what an unplayed pair answers, and also what a genuine even contest looks like -- in
-all 124 metric rows on disk, until b106aa1 made them absent instead.
+all 124 metric rows on disk, until 72c1215 made them absent instead.
 
 `ladder.probe_every_iterations` turns on the measurement that was missing. The live model plays
 `probe_games` paired battles against each of `ladder.probe_opponents` on the first seeds of the
@@ -149,7 +149,7 @@ the advantage the estimator produces.
 What it means for earlier runs: their metric rows and checkpoints describe a different objective
 and cannot be compared with anything collected after the fix. Resuming one continues a run whose
 old rows were computed the other way. The environment spec is unchanged, so the run identity
-and the ladder's context digest do NOT separate them. Unlike the reward change at 23d971c, this
+and the ladder's context digest do NOT separate them. Unlike the reward change at a89570d, this
 one is invisible to the identity, and the commit is the only boundary.
 
 **A truncated row's bootstrap observation is stacked with frames one decision too old, at a frame
@@ -191,11 +191,11 @@ that is 93% structural zeros. The rule that found them is in `harness-spec.md` s
 metric's row population belongs in its identity (`ppo/kl@choice` against `@all`) rather than in
 its implementation, so that a threshold cannot be set against the wrong population by accident.
 
-Two alarms and the halt path have narrower gaps. `vram_spilling` (29a05a4) has been seen only
+Two alarms and the halt path have narrower gaps. `vram_spilling` (fb135f0) has been seen only
 staying silent: 42 rows from seven runs at minibatch 256 on the 4 GB card read 2995 to 3372 MB
 available against 2349 needed, and nobody has watched it fire on a card. The suite trips it on a
-synthetic row, and a test now fails for any alarm with no row to trip it (4ab3cf5).
-`shaping_dominates` compared two structural zeros on every row recorded until 1065b78 and c38dc82
+synthetic row, and a test now fails for any alarm with no row to trip it (e4e2f06).
+`shaping_dominates` compared two structural zeros on every row recorded until 5724eb5 and dc7f7a1
 fixed its inputs (`harness-spec.md` section 10), so it has not been seen on a real run either. And a
 halting iteration's alarms never reach `alarms.jsonl`, because `AlarmSet.evaluate` raises before it
 returns them. The halting alarm is in the bundle, and the warnings beside it are only printed.
@@ -211,7 +211,7 @@ system timer is at 1 ms, and in about 16 ms when it is not. So an idle worker sp
 its time with a 1 ms timer and about half with the default one. The parent's wait had the same
 clock.
 
-Since 98ff62f both sides time the spin with `perf_counter`. A wait that sees the command takes the
+Since 38352bf both sides time the spin with `perf_counter`. A wait that sees the command takes the
 token that announced it, so a semaphore holds one token per command not yet answered. A worker
 sleeps up to `SLEEP_S` (50 ms), and only on the shard whose command is due next. Every command a
 run sends arrives in that order. It glances at its other shard once per pass. So a command sent
@@ -240,7 +240,7 @@ runs an iteration end to end on the real engine, and `tests/test_resume.py` hold
 guarantee from both sides of the episode boundary. Writing that one is what found the unread
 ordinal, the environment gap, and the crash in `verify-resume`.
 
-**Two checkpoints written before 0839758 describe no metric row, and resume refuses both.** Until
+**Two checkpoints written before 8db7e0d describe no metric row, and resume refuses both.** Until
 then the update ran before the batch was judged. So a refused batch was trained first and refused
 after, and the emergency save wrote those weights under the previous row's counters. Running
 `checkpoint.check_described` over every checkpoint under `runs/` (34 on 2026-09-22) lets 32
@@ -251,7 +251,7 @@ fix has a price: a crash inside the update now loses the progress since the last
 checkpoint, where it used to save weights no row describes. An in-memory copy of the pre-update
 learner would win that back, and it is not built.
 
-**Runs before 23d971c trained a different objective.** Until then every shipped config named
+**Runs before a89570d trained a different objective.** Until then every shipped config named
 RoyaleGym's `default_reward`, whose elixir-trade term pays a player who never commits a card. They
 now name `royalelearn.rewards.default_potential_reward`, the composition `harness-spec.md` section
 10 was written around. The reward is part of the environment spec's digest. That digest is in the

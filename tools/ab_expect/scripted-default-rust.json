@@ -1,16 +1,16 @@
 {
  "format": 2,
- "why": "ladder.scripted_opponents (eb848fb) against its parent 919406c, plain arm on RustEngine (past the opening lockout). eb848fb adds one config field, LadderConfig.scripted_opponents, whose default is the two anchors, and passes it to MixMatchmaker. With the default nothing a run does changes, so the only differences are the new key in config.json and what hashes the config: the config hashes, the identity's ladder_digest (it digests the whole ladder block), the run_id derived from the identity, and the manifest's copies of config_hash and run_id in both checkpoints. The engine binary, weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, every other checkpoint leaf and every checkpoint file sha are equal. Measured 2026-09-25 11:42-11:43 (PDT) with RoyaleGym 30ca79b pinned on both sides, RoyaleSim 8126375, royalesim.pyd 3d062d96a96c.",
+ "why": "ladder.scripted_opponents (db9daa4) against its parent 35d9d33, plain arm on RustEngine (past the opening lockout). db9daa4 adds one config field, LadderConfig.scripted_opponents, whose default is the two anchors, and passes it to MixMatchmaker. With the default nothing a run does changes, so the only differences are the new key in config.json and what hashes the config: the config hashes, the identity's ladder_digest (it digests the whole ladder block), the run_id derived from the identity, and the manifest's copies of config_hash and run_id in both checkpoints. The engine binary, weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, every other checkpoint leaf and every checkpoint file sha are equal. Measured 2026-09-25 11:42-11:43 (PDT) with RoyaleGym 9b20372 pinned on both sides, RoyaleSim 1b950ea, royalesim.pyd 3d062d96a96c.",
  "may_differ": {
   "commit": {
-   "why": "side A is 919406c, side B is eb848fb; pinned so the file holds only this pair of commits",
+   "why": "side A is 35d9d33, side B is db9daa4; pinned so the file holds only this pair of commits",
    "values": [
-    "919406ca8d7e115bd432162560cb05b801012c02",
-    "eb848fb34031288a77038b3ae302903116007e8a"
+    "35d9d33fb615d53b6a0cc0f1942a0ae38e0905ce",
+    "db9daa4a74b78f533b403f6665c976e3491eba7b"
    ]
   },
   "config_json_sha256": {
-   "why": "config.json gains ladder.scripted_opponents; pinned: side A's is the S3 side-B value in s3-plain-vs-490c74c-rust.json, so the plain rust config did not move between 3ff1f22 and 919406c",
+   "why": "config.json gains ladder.scripted_opponents; pinned: side A's is the S3 side-B value in s3-plain-vs-61621bb-rust.json, so the plain rust config did not move between f4a7769 and 35d9d33",
    "values": [
     "25c2043a4ca682985f4837b8e43316cf95db6b3c86ec6a6367dc360dca5e0ac1",
     "8948e22d53f2f5fd0740fed6915cf15f53b63788f5b8063ea24543da9fef797c"
@@ -49,7 +49,7 @@
   "config_keys": {
    "only_b": {
     "ladder.scripted_opponents.0": {
-     "why": "eb848fb config.py: LadderConfig.scripted_opponents, default (scripted:noop, scripted:random_legal); the first default entry, in the anchors' order",
+     "why": "db9daa4 config.py: LadderConfig.scripted_opponents, default (scripted:noop, scripted:random_legal); the first default entry, in the anchors' order",
      "value": "\"scripted:noop\""
     },
     "ladder.scripted_opponents.1": {
@@ -145,5 +145,5 @@
    "why": "the manifest's config_hash and run_id copies in both checkpoints, nothing else: state_digest, every file sha and component_versions equal"
   }
  },
- "note": "Pinned from the 11:42-11:43 sitting (four runs: mock and rust, each commit once, RoyaleGym 30ca79ba7e68 on every side). The mock pair has its own file, scripted-default-mock.json, since the config hashes and run_ids are per engine. What this pair cannot see: the tiny config is all mirror (ladder.mix [1, 0, 0]), so no battle draws a scripted opponent on either side. The pair shows that the new field and the coordinator's new argument leave a mirror run bit for bit alone; it says nothing about the scripted draw itself, which only the unit tests reach."
+ "note": "Pinned from the 11:42-11:43 sitting (four runs: mock and rust, each commit once, RoyaleGym 9b20372b8e02 on every side). The mock pair has its own file, scripted-default-mock.json, since the config hashes and run_ids are per engine. What this pair cannot see: the tiny config is all mirror (ladder.mix [1, 0, 0]), so no battle draws a scripted opponent on either side. The pair shows that the new field and the coordinator's new argument leave a mirror run bit for bit alone; it says nothing about the scripted draw itself, which only the unit tests reach."
 }

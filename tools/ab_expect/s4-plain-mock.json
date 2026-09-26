@@ -1,12 +1,12 @@
 {
  "format": 2,
- "why": "S4 (c5a745e) against S3 (3ff1f22), plain arm on MockEngine, side B run WITHOUT royaleimitate anywhere (the shared venv has none, no --imitate) and with --forbid-module royaleimitate, so PYTHONPROFILEIMPORTTIME showed neither child importing it. c5a745e deletes royalelearn/imitation, royalelearn/artifacts.py and the two TRANSITIONAL built-ins (extensions.py _BUILTINS becomes {}), removes the artifact-digest and fit-field-reference subcommands, and makes config._retire drop a null 'imitation' key; none of that runs on a plain config. So everything is identical except the commit: config bytes and hashes, run_id and every identity field, weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, the checkpoint and other_modules. Measured 2026-09-25 03:49-03:50 with RoyaleGym e09b1bd pinned, RoyaleSim 5ec2b6e, royalesim.pyd e4364b01f3e8.",
+ "why": "S4 (d23ce4f) against S3 (f4a7769), plain arm on MockEngine, side B run WITHOUT royaleimitate anywhere (the shared venv has none, no --imitate) and with --forbid-module royaleimitate, so PYTHONPROFILEIMPORTTIME showed neither child importing it. d23ce4f deletes royalelearn/imitation, royalelearn/artifacts.py and the two TRANSITIONAL built-ins (extensions.py _BUILTINS becomes {}), removes the artifact-digest and fit-field-reference subcommands, and makes config._retire drop a null 'imitation' key; none of that runs on a plain config. So everything is identical except the commit: config bytes and hashes, run_id and every identity field, weights, moments, state digests, every metric key and value, the alarm table, its parameters and firings, the checkpoint and other_modules. Measured 2026-09-25 03:49-03:50 with RoyaleGym f8b2fe2 pinned, RoyaleSim e86bb4e, royalesim.pyd e4364b01f3e8.",
  "may_differ": {
   "commit": {
-   "why": "side A is 3ff1f22 (S3 with both review rounds), side B is c5a745e (S4); pinned so the file holds only this pair of commits",
+   "why": "side A is f4a7769 (S3 with both review rounds), side B is d23ce4f (S4); pinned so the file holds only this pair of commits",
    "values": [
-    "3ff1f2232d0e9979ba7e1346884407469154baf5",
-    "c5a745e8f92b9e215b14bf4ec9febb137a67ba3f"
+    "f4a776923cab8596b4495dedcd4f3c3bef738de9",
+    "d23ce4fa4e7bdd4cfcdd0f7ec19942bbeb57fe77"
    ]
   }
  },
@@ -15,5 +15,5 @@
    "commit": "the comparison is between two commits"
   }
  },
- "note": "Nothing else may differ, and the file allows nothing else: any other column, the royaleimitate modules in other_modules included, fails the comparison. Run side B with --forbid-module royaleimitate; the rust pair has its own file, s4-plain-rust.json, and the installed-but-unused case is s4-plain-installed-mock.json. Re-measured 2026-09-25 04:03-04:07 with the entry_points column (ab5/base2, RoyaleSim b77440b; every column but environment equals the 03:49-03:50 results): both sides declare no royale* entry point, so that column is equal too. A pair compares only differences, so a royaleimitate installed in the shared venv would show on both sides alike and pass here; that the venv has none is the sitting's control (c5a745e on the IL arm without --imitate is refused at load_config: no installed package provides 'imitation' or 'warm_start'), not a column of this file."
+ "note": "Nothing else may differ, and the file allows nothing else: any other column, the royaleimitate modules in other_modules included, fails the comparison. Run side B with --forbid-module royaleimitate; the rust pair has its own file, s4-plain-rust.json, and the installed-but-unused case is s4-plain-installed-mock.json. Re-measured 2026-09-25 04:03-04:07 with the entry_points column (ab5/base2, RoyaleSim f7248f8; every column but environment equals the 03:49-03:50 results): both sides declare no royale* entry point, so that column is equal too. A pair compares only differences, so a royaleimitate installed in the shared venv would show on both sides alike and pass here; that the venv has none is the sitting's control (d23ce4f on the IL arm without --imitate is refused at load_config: no installed package provides 'imitation' or 'warm_start'), not a column of this file."
 }

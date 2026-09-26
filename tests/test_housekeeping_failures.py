@@ -32,7 +32,7 @@ from royalelearn.metrics.sinks import EPISODES_NAME, JsonlSink
 #: Holding a file open blocks its deletion on Windows and does not on POSIX, where the name goes
 #: and the inode lives until the last handle closes. So a test that creates the failure by
 #: holding a handle can only run on Windows, and the first version of this file did exactly that
-#: and turned Linux CI red at 4bd05ed. The guard itself is platform-independent and is tested at
+#: and turned Linux CI red at 917baed. The guard itself is platform-independent and is tested at
 #: the bottom of this file by INJECTING the error, so the runner that certifies exercises the
 #: code either way; these are the fidelity, asserting the mechanism is real rather than only
 #: that the guard works.

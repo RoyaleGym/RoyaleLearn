@@ -1,8 +1,8 @@
 {
  "format": 2,
- "why": "S1 (d74c4b4 against 490c74c) moves the generic half of imitation/artifacts.py, RowCodec and the probe statistics out of imitation/ with IL still in-tree. An IL run (legacy config shape, init at half the seeded actor, a snapshot reference at lambda != 0, a freeze for one iteration) must be identical on every column except the commit: weights, moments, state digests, every imitation/* metric, the alarm firings and the checkpoint's optimizers/misc.json included.",
+ "why": "S1 (5b0ecb3 against 61621bb) moves the generic half of imitation/artifacts.py, RowCodec and the probe statistics out of imitation/ with IL still in-tree. An IL run (legacy config shape, init at half the seeded actor, a snapshot reference at lambda != 0, a freeze for one iteration) must be identical on every column except the commit: weights, moments, state digests, every imitation/* metric, the alarm firings and the checkpoint's optimizers/misc.json included.",
  "may_differ": {
-  "commit": "side A is 490c74c, side B is the S1 commit"
+  "commit": "side A is 61621bb, side B is the S1 commit"
  },
  "require": {
   "columns": {

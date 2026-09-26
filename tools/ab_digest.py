@@ -321,10 +321,10 @@ def _hash_seed() -> int:
 # --------------------------------------------------------------------------
 
 #: The IL arm's config fragments. Placeholders are filled from the artifacts folder. ``legacy``
-#: is 490c74c's block; ``sections`` is S3's layout as of 7cd82d0 (royalelearn/imitation/config.py
+#: is 61621bb's block; ``sections`` is S3's layout as of ef37d87 (royalelearn/imitation/config.py
 #: WarmStartSection and ImitationSection): warm_start holds init, actor_lr_scale and the freeze
 #: alarms' thresholds, imitation holds references, regularisers and the regularisers' alarms'
-#: thresholds. Each ``alarms`` block is written out at the values ``legacy`` runs with (490c74c's
+#: thresholds. Each ``alarms`` block is written out at the values ``legacy`` runs with (61621bb's
 #: AlarmConfig.imitation_* defaults), so the two shapes name the same experiment.
 IL_SHAPES: dict[str, dict[str, Any]] = {
     "legacy": {
@@ -716,7 +716,7 @@ RUNNER = (
 MODE = JOB["mode"]
 import royalelearn, royalegym
 # What `python -m royalelearn` imports first (BLAS and CUBLAS env). Unguarded: cli.py exists at
-# 8bf6a67 and every later commit, and a tree whose cli cannot be imported cannot start a run.
+# 572ce13 and every later commit, and a tree whose cli cannot be imported cannot start a run.
 import royalelearn.cli
 import torch
 from royalelearn.config import config_hash, load_config

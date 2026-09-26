@@ -1077,7 +1077,7 @@ def _merge(base: Any, overlay: Any) -> Any:
     return overlay
 
 
-#: Keys that builds between 0ab7a29 and the extension API wrote into EVERY config.json, with
+#: Keys that builds between 7e93217 and the extension API wrote into EVERY config.json, with
 #: the values they had there, and where each lives now. Dropped with a notice when a file still
 #: carries them at those values, for one release; a changed value is refused with its new home,
 #: because dropping it would silently move a threshold somebody set.
@@ -1092,7 +1092,7 @@ RETIRED_ALARM_KEYS: dict[str, tuple[float, str]] = {
 
 
 def _retire(raw: dict[str, Any], say: Callable[[str], None] | None) -> dict[str, Any]:
-    """The one-release shim for configs written between 0ab7a29 and the extension API.
+    """The one-release shim for configs written between 7e93217 and the extension API.
 
     Every such file carries ``"imitation": null`` -- which any null section now loads as -- and
     the six ``alarms.imitation_*`` thresholds. And an IL config of that time kept the actor's
