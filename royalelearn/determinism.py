@@ -34,7 +34,6 @@ __all__ = [
     "BLAS_THREAD_VARS",
     "CUBLAS_WORKSPACE_CONFIG",
     "CUBLAS_WORKSPACE_VALUE",
-    "FILL_POLICY",
     "TIERS",
     "apply",
     "apply_blas_thread_env",
@@ -97,10 +96,6 @@ def require_cublas_workspace_config(
     )
 
 
-#: What run_exact does with torch's fill of unwritten memory, as the determinism record says it.
-FILL_POLICY = "on at start-up and in every checked iteration; off in the others"
-
-
 def set_fill_uninitialized(on: bool) -> None:
     """Turn torch's fill of unwritten memory on or off (docs/harness-spec.md section 5.1).
 
@@ -143,7 +138,6 @@ def apply(
             cudnn_benchmark=False,
             allow_tf32=False,
             cublas_workspace_config=os.environ.get(CUBLAS_WORKSPACE_CONFIG),
-            fill_uninitialized_memory=FILL_POLICY,
         )
     else:
         torch.use_deterministic_algorithms(False)
