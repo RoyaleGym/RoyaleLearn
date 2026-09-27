@@ -145,7 +145,7 @@ print({k: v.shape for k, v in obs.items()})
 ```
 8
 Discrete(2305)
-{'action_mask': (8, 2305), 'mask_planes': (8, 4, 32, 18), 'spatial': (8, 20, 32, 18), 'vector': (8, 1249)}
+{'action_mask': (8, 2305), 'mask_planes': (8, 4, 32, 18), 'spatial': (8, 20, 32, 18), 'vector': (8, 1333)}
 ```
 
 Eight rows, because four battles have two players each and both feed one bot. Each row sees its own
@@ -155,8 +155,8 @@ king tower at the bottom, so the bot never has to learn the board twice.
 one move is legal on every row, the wait, because a match refuses every deploy for its opening
 seconds. After that, how many are legal depends on the deck and on what is in hand, so it differs
 between rows. Step these four battles with the wait nine times and play opens: with the decks
-seed 0 deals, the count then ranges from 691 to 1277 across the eight rows (2026-09-24, engine
-build `cb784bb583586789`).
+seed 0 deals, the count then ranges from 691 to 1277 across the eight rows. This block and that range were run
+on 2026-09-26 on engine build `ea9686b2a2af91fd`.
 
 One step is one decision, and a decision is half a second of game time by default. That is the
 `decision_ms` setting. Waiting is a legal choice, and it is the no-op.
@@ -169,7 +169,7 @@ To watch it, set `ROYALEVISER=127.0.0.1:9870` and run
 top left of the grid was made.
 
 Those widths are not constants. Every shape, every width and every field's place in the vector is
-read off the running environment when the harness starts, and none of them is typed into the code. The `1249` above
+read off the running environment when the harness starts, and none of them is typed into the code. The `1333` above
 comes from the card catalogue this checkout built, and a checkout that built a different card table
 prints a different number. The catalogue grew again recently and nothing in the code needed
 editing. A page that quotes a vector width or a plane count as a fixed number is already wrong,
