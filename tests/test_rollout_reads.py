@@ -120,9 +120,15 @@ def test_the_host_and_the_device_must_agree_on_the_choice_rows() -> None:
         stats.drain()
 
 
-def _engine(env_spec: Any, observations: Any, device: str) -> tuple[Fixture, Any, Any]:
+def _engine(
+    env_spec: Any, observations: Any, device: str, *, forced: tuple[tuple[int, int], ...] = ()
+) -> tuple[Fixture, Any, Any]:
+    from royalelearn.testing import plant_forced
+
     built = Fixture(env_spec, observations, device=device)
     built.fill()
+    if forced:
+        plant_forced(built, forced)
     model = DefaultNetworkFactory(SEED).build(built.spec, ARCH, device)
     engine = BatchedInference(built.buffer, model, master_seed=SEED)
     plan = plan_for(SLOTS)
@@ -141,8 +147,11 @@ def test_a_rollout_round_answers_what_the_distribution_would_have_bit_for_bit(
     env_spec: Any, observations: Any
 ) -> None:
     """The actions and log-probabilities that come home packed are the ones the distribution
-    gives when asked directly, with the log-probabilities compared as bit patterns."""
-    built, model, engine = _engine(env_spec, observations, "cpu")
+    gives when asked directly, with the log-probabilities compared as bit patterns.
+
+    Two seats are forced (only the no-op legal), because a round of nothing but choice rows
+    cannot tell a host that counted the right rows from one that counted the wrong ones."""
+    built, model, engine = _engine(env_spec, observations, "cpu", forced=((0, 2), (0, 5)))
     try:
         played = _round(built, 0)
         answer = engine.act(played)
@@ -155,10 +164,11 @@ def test_a_rollout_round_answers_what_the_distribution_would_have_bit_for_bit(
         assert np.array_equal(answer.actions, actions.numpy())
         assert np.array_equal(answer.log_probs.view(np.int32), log_probs.numpy().view(np.int32))
         # The host counted the choice rows from the stored bits; the drain checks that count
-        # against the decoded masks', so a host that read the bits another way stops here.
+        # against the decoded masks', so a host that counted other rows stops here.
         stats = engine.drain_stats()
         assert stats.choice_rows == int((dist.n_legal() > 1).sum())
         assert stats.rows == slots.size
+        assert 0 < stats.choice_rows < stats.rows, "the round must hold both kinds of row"
     finally:
         built.close()
 
