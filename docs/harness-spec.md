@@ -584,7 +584,11 @@ class Critic(ABC, nn.Module):
 class ActorCritic(ABC, nn.Module):
     """Implementers may assume obs tensors are on the device and already dequantised, and that
     obs.mask[:, 0] is True on every row (RoyaleGym sets mask[NOOP]=1 unconditionally,
-    action.py:284, including after game over). They MUST assert it."""
+    action.py:284, including after game over). They MUST assert it. Inside the update's
+    minibatch loop the harness has already asserted it for every trainable cell, in the
+    critic pass (section 18.1, "How a row is classed, and what checks it"), and
+    MaskedCategorical skips its own check there; a model that builds its distribution some
+    other way may do the same."""
     arch: "ArchSpec"
     @abstractmethod
     def act(self, obs: ObsBatch, uniforms: Tensor) -> "ActResult": ...
@@ -3788,6 +3792,16 @@ applies.
 - In debug iterations the update asserts the column equals each minibatch's unpacked mask count. The
   column is written from the critic's pass and read back through the minibatch gather, which sorts its
   cells, so a drift between the two would put one row's count beside another row's observation.
+- On every iteration, the critic pass checks the no-op bit of every trainable cell, on the device, and
+  reads the result once after the pass, before the first minibatch and so before any optimizer step. A
+  cell with the bit clear raises `MaskedCategorical`'s own message, built from that cell's mask. The
+  minibatch loop then constructs its distributions without the per-construction check, because that
+  check is a device read-back: one a minibatch, each draining the stream, and it was the last one left
+  in the loop once the gather stopped synchronising (2026-09-26). The minibatches decode the same bytes
+  the pass checked, so no row reaches the loss unchecked. In debug iterations the loop keeps the check
+  as well, and every caller outside the loop (rollout, evaluation, a model used on its own) keeps it at
+  construction. Cells no worker wrote are zero bytes, whose no-op bit is clear by construction, so the
+  check covers the trainable cells and not the whole rectangle.
 - On every iteration, two numpy comparisons check every trainable forced cell: its stored
   log-probability must be exactly 0.0 and its action the no-op. Anything else raises and names up to
   ten cells. This is the evidence for the zero-gradient argument the skip rests on, and it is the only
