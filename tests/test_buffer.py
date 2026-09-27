@@ -593,6 +593,45 @@ def test_every_staged_column_is_exact_and_a_tensor_of_its_own(rect: Fixture) -> 
             assert minibatch.n_choice == choice.size
 
 
+@pytest.mark.filterwarnings("ignore:Synchronization debug mode is a prototype feature")
+def test_on_cuda_a_minibatch_is_gathered_and_decoded_without_draining_the_stream(
+    env_spec: EnvSpec, observations: list[dict[str, np.ndarray]]
+) -> None:
+    """The property the staging ring was built for, checked where it can fail.
+
+    torch's sync debug mode raises on every call that waits for the whole stream: a blocking
+    copy from pageable memory, a scalar read back, a list index sent up. It does not raise on
+    the ring's own event wait, which waits for one copy and nothing else. So every gather after
+    the first -- the first builds the ring and the codec's per-device constants -- must run
+    clean. Before 2026-09-26 each gather drained the stream about thirteen times, and this test
+    fails on that code at its first one.
+
+    What it cannot say: torch itself warns that the debug mode "does not yet detect all
+    synchronizing operations". It sees blocking copies, stream synchronisations and scalar reads;
+    a synchronisation it cannot see would pass here and show only as a gap in a profiler's
+    timeline. So this is a floor under the property, not a proof of it.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA device on this machine, so there is no stream to drain")
+    built = Fixture(env_spec, observations, device="cuda")
+    try:
+        buffer = fill_iteration(built)
+        buffer.set_values(torch.zeros((CYCLES + 1, SLOTS)))
+        buffer.set_advantages(torch.zeros((CYCLES, SLOTS)), torch.zeros((CYCLES, SLOTS)))
+        (batch,) = collect(buffer, CYCLES * SLOTS, 3, 1)
+        minibatches = iter(batch)
+        next(minibatches)
+        torch.cuda.synchronize()
+        torch.cuda.set_sync_debug_mode("error")
+        try:
+            gathered = [minibatch.obs.spatial.sum() for minibatch in minibatches]
+        finally:
+            torch.cuda.set_sync_debug_mode("default")
+        assert len(gathered) == CYCLES * SLOTS // 3 - 1
+    finally:
+        built.close()
+
+
 def test_a_minibatch_s_observations_are_the_rows_its_cells_name(rect: Fixture) -> None:
     buffer = fill_iteration(rect)
     spec = rect.spec

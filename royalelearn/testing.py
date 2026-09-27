@@ -538,6 +538,7 @@ class RectFixture:
         cycles: int = CYCLES,
         slots: int = SLOTS,
         frame_stack: int = 1,
+        device: str = "cpu",
     ) -> None:
         import uuid
 
@@ -556,6 +557,7 @@ class RectFixture:
             run_id=uuid.uuid4().hex[:12],
             cycles=cycles,
             n_slots=slots,
+            device=device,
         )
         self.buffer.set_static_planes(self.codec.static_planes(observations[0]))
 
