@@ -3,7 +3,8 @@
 Everything else in this repository is a piece that can be replaced -- a codec, an estimator, a
 matchmaker, a sink. This file is the sentence they are read in. It holds no policy of its own
 beyond that ordering and the invariants that go with it, and it is the only module that knows
-that a critic pass comes before GAE, that a batch is judged before the update learns from it,
+that a critic pass comes before GAE, that a batch is judged before the update learns from it
+(all but the drain's row check, which runs when the row is built),
 that a gate belongs at an env-step cadence rather than an iteration one, and that a checkpoint
 is written after the alarms have had their look at the row.
 
@@ -1546,7 +1547,9 @@ class LearningCoordinator:
             # first one this process runs, where a resumed run's leftovers first differ from a
             # straight run's: a guard that costs a full write of every fresh buffer and changes
             # no value of a program that reads only what it wrote (docs/harness-spec.md 5.1).
-            # The whole iteration runs under it, its gate, probe and checkpoint included.
+            # Everything this process does in the iteration runs under it: collection, the update,
+            # the checkpoint and any battle it plays itself (the probe's). The gate's battles do
+            # not when evaluation workers play them (rollout.eval_workers above 1, the default).
             from .determinism import set_fill_uninitialized
             from .learn.ppo import checks_due
 

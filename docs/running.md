@@ -11,7 +11,8 @@ commands work with forward slashes and `.venv/bin/python` in place of `.venv\Scr
 It is not the specification. [harness-spec.md](harness-spec.md) is the dense version.
 [metrics.md](metrics.md) describes every number in a row. [checkpoints.md](checkpoints.md)
 covers saving and resuming. [throughput.md](throughput.md) covers how fast it goes. Every claim
-here was checked against the code on 2026-09-22 and names the file it came from. Where the code
+here was checked against the code on 2026-09-22 (the `ratio_invariant` and `illegal_actions`
+paragraphs on 2026-09-27) and names the file it came from. Where the code
 and the spec disagree, the code wins.
 
 **What has not been shown.** A run completes its loop. Nobody has trained a good bot with this

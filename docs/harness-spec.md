@@ -47,7 +47,7 @@ worker that writes these bytes and flips these events is a drop-in; the Python w
 reference implementation and the differential test against it is the acceptance criterion.
 
 **D4. Observations are quantised in the worker and written straight into their final resting place in
-the experience buffer.** 14 163 B per row against 55 397 B as float32 **[A]**, section 7.2. The learner never
+the experience buffer.** 14 163 B per row against 55 397 B as float32 (95 cards, 2026-09-22) **[A]**, section 7.2. The learner never
 copies an observation on the CPU except into a small pinned staging ring.
 
 **D5. The policy acts on `decode(encode(obs))`, never on the raw float32.** The bytes that are stored
@@ -105,8 +105,8 @@ package has today and keeps.
 | split of that 1.21 ms | 0.31 ms engine (26%), 0.90 ms Python obs + mask for both seats (74%) | **[A]** from the two rows above |
 | one network forward | 378 MFLOP/sample at C=64, N=4, 32×18 board | **[A]** section 8.1 |
 | RTX 3050 Laptop, achieved on convs | ~3 TFLOP/s fp32, ~9 TFLOP/s bf16 | **[A]** 40% of the 6 / 24 peak |
-| observation row, as the environment hands it over | 55 397 B | **[M]** shapes from `single_observation_space` |
-| observation row, this codec | 14 163 B | section 7.2 |
+| observation row, as the environment hands it over | 55 397 B (95 cards, 2026-09-22) | **[M]** shapes from `single_observation_space` |
+| observation row, this codec | 14 163 B (95 cards, 2026-09-22) | section 7.2 |
 
 Both row figures are arithmetic on the observation space rather than constants, so the next layout
 change is a recomputation and not a rewrite. With `S` spatial planes of `H·W` cells of which `s` are
@@ -143,8 +143,8 @@ One config block per machine class; only numbers change.
 | `net.channels` C / `net.blocks` N | 64 / 4 | 96 / 8 | 128 / 12 |
 | `ppo.batch_size` | 4 096 | 16 384 | 32 768 |
 | `ppo.minibatch_size` | 256 | 2 048 | 8 192 |
-| buffer bytes (observations) | 623 MB | 5.0 GB | 10.0 GB |
-| `rollout.overlap` | false | true | true |
+| buffer bytes (observations) (95 cards, 2026-09-22) | 623 MB | 2.5 GB | 5.0 GB |
+| `rollout.overlap` | false | false | false |
 | `ladder.candidate_every_env_steps` | 4 000 000 | 2 000 000 | 2 000 000 |
 
 `shards_per_worker` is the intra-worker overlap: each worker holds two independent vec envs of `M/2`
@@ -175,9 +175,10 @@ buys under about 10%, set it to 1 and spend the thread on a worker instead.
 
 The buffer row is `(T + obs.frame_stack) × R × row_bytes`: `T+1` cycles for the bootstrap row plus
 `frame_stack - 1` history cycles carried over from the previous iteration (section 9.1). At the laptop
-profile that is `229 × 192 × 14 163 B = 623 MB` **[A]**. The two larger profiles run
-`rollout.overlap = true`, which costs a second rectangle, so their figures are twice
-`115 × 1 536 × 14 163 B` and twice `115 × 3 072 × 14 163 B`.
+profile that is `229 × 192 × 14 163 B = 623 MB` (95 cards, 2026-09-22) **[A]**. The two larger profiles'
+figures are `115 × 1 536 × 14 163 B` and `115 × 3 072 × 14 163 B`. They were twice that while they
+asked for `rollout.overlap`, which bought a second rectangle; start-up has refused it since
+2026-09-22, because nothing honours it.
 
 ### 2.3 The laptop budget
 
@@ -194,8 +195,9 @@ so `228 × 144 = 32 832` timesteps and `228 × 96 = 21 888` game-steps.
 | **total, serial** | **~41** | **≈ 800 timesteps/s** |
 
 At `determinism.tier = "run_exact"` subtract 10-20%: **~680-720 timesteps/s**, so 100 M timesteps is
-**39-41 hours**. With `rollout.overlap = true` the rollout hides under the update and the figure is
-~1 100 timesteps/s, 25 hours; that costs a second buffer (623 MB) and is off by default on 8 GB.
+**39-41 hours**. Overlapped collection would hide the rollout under the update, for
+~1 100 timesteps/s and 25 hours, at the cost of a second buffer (623 MB, 95 cards). It is not built:
+start-up refuses `rollout.overlap = true`.
 
 Two consequences, stated so nobody re-derives them:
 
@@ -231,7 +233,7 @@ a policy that would not settle.
 ### 2.4 The RAM ledger, printed by `royalelearn doctor`
 
 ```
-experience buffer (pinned)      229 x 192 x 14 163 B      623 MB
+experience buffer (pinned)      229 x 192 x 14 163 B      623 MB   (95 cards, 2026-09-22)
 parent torch + CUDA host allocations                    ~1 400 MB
 3 workers x (32 RustEngine battles, no torch)      3 x ~250 =  750 MB
 3 workers x shard staging and scalars                3 x ~40 =  120 MB
@@ -896,13 +898,20 @@ integers, and True for bool (`torch.utils.deterministic.fill_uninitialized_memor
 It is a guard, not part of the arithmetic. For floats it turns a read of memory nothing wrote into a
 NaN the same in every run; for bool and uint8 it is not loud at all (an unwritten mask would read as
 every action legal). A program that reads only what it wrote computes the same bits with it off. It
-is also an extra full write of every such buffer. Measured on 2026-09-26 on an RTX 4070 Ti, the fill
-on against off, the mean of two timed updates each: 0.76 s of a 9.05 s update when every row runs
-the actor, and 0.45 s of a 7.08 s update when forced rows skip it (`critic_only`), 8% and 6%.
+is also an extra full write of every such buffer. It was timed once: on 2026-09-26, on an RTX 4070
+Ti, on one run shape (48 battles, 114 cycles, 8,208 learner rows an iteration) and on the learner
+as of e437ffa, before the update's per-minibatch host synchronisations were cut. Two updates were
+timed with the fill on, then two with it off. With every row running the actor: on 9.03 and
+9.07 s, off 8.44 and 8.14 s, so the means differ by 0.76 s. With forced rows skipping it
+(`critic_only`): on 6.84 and 7.32 s, off 6.66 and 6.61 s, so 0.44 s. Two timings of one setting
+differ by as much as that, so what this supports is a few tenths of a second on that learner,
+not a precise share. The update has got faster since, and the fill has not been timed on it.
 
 So T2 keeps it where the harness is checking and turns it off elsewhere. `determinism.apply` turns it
-on, so start-up (preflight, the VRAM probe) runs with it, and so does anything outside an iteration
-(`royalelearn eval`, `gate`, `play`). At the top of every iteration the coordinator sets it from
+on, so start-up (preflight, the VRAM probe) runs with it, and so does anything else this process
+does outside an iteration, such as `royalelearn play`. The battles of `royalelearn eval` and `gate`
+are played by evaluation workers when `rollout.eval_workers` is above 1 (the default is 2), and
+those run without it, as below. At the top of every iteration the coordinator sets it from
 `learn.ppo.checks_due(config.ppo, iteration)` -- on in every iteration whose ratio invariant is
 checked, the first `ppo.debug_assert_iterations` included -- and also on in the first iteration a
 process runs, because after a resume that is where the process's leftovers first differ from a run
@@ -916,7 +925,11 @@ what it allocates (read, 2026-09-26, and `tests/test_fill_policy.py` compares th
 with the fill off and forced on, on the CPU, walking the critic_only update); the ratio-invariant and
 non-finite alarms run every iteration; and for torch's own CUDA operations, a two-run digest
 comparison past the debug window -- the A/B the training runs are measured with -- is the evidence.
-That comparison has been run with `ppo.forced_rows` both `all` and `critic_only`. The
+That comparison has been run twice on an RTX 4070 Ti with one training configuration, 14
+iterations each: on 2026-09-26 with `ppo.forced_rows` `all`, and on 2026-09-27 with
+`critic_only`. Each time one run kept the fill on throughout and the other turned it off where the
+harness does not check, which in 14 iterations is the last four, and every learner digest was
+equal. The
 determinism and resume tests in the suite stay inside the debug window and do not reach a fill-off
 iteration.
 
@@ -1173,14 +1186,14 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `source` | `"process"` | `"process"` / `"inline"` | inline is the semantic reference and runs every fast test |
 | `workers` | 3 | processes | 6-8 threads; the parent needs one for the CUDA driver and one for the loop, and the learner is the bottleneck so more workers buy little |
 | `games_per_worker` | 32 | battles | with `workers=3`, 96 battles and 192 slots |
-| `shards_per_worker` | 2 | vec envs | a worker steps one shard while the parent infers on the other. Worth `min(env, inference)` per round and no more, because the two are additive (section 2.2); `bench` prints what it is worth here, and 1 is the right value when that is under about 10% |
+| `shards_per_worker` | 2 | vec envs | a worker steps one shard while the parent infers on the other. Worth `min(env, inference)` per round and no more, because the two are additive (section 2.2); `bench` does not separate the shards: two bench runs on a quiet machine, at 1 and at 2, compared on collection seconds, say what it is worth here, and 1 is the right value when the second shard buys under about 10% |
 | `spin_us` | 100 | microseconds | spin, timed with `perf_counter`, before sleeping on the round's semaphore (section 7.3); a Windows Event round trip measures ~40-80 microseconds **[A]**, a spin about 2 |
 | `round_timeout_s` | 30.0 | seconds | **every** wait has a timeout; a timeout is a typed `WorkerFailure`, never a block |
 | `restart_failed_workers` | `true` | | |
 | `max_restarts_per_worker` | 3 | | three restarts of one worker in a run raises rather than silently degrading throughput |
 | `launch_delay_s` | 0.5 | seconds | three `RustEngine` constructions at once each decode `calibration.json` and `arena.json` |
 | `stagger_first_reset` | `true` | | desynchronise episode phase across battles at run start, so episode ends spread across cycles |
-| `overlap` | `false` | | lag-1 collection under the update: about 1.37x wall clock for a second 623 MB buffer. Off on 8 GB; on in the workstation profile |
+| `overlap` | `false` | | lag-1 collection under the update, for about 1.37x wall clock at the cost of a second buffer (623 MB at 95 cards). Not built: start-up refuses `true` (since 2026-09-22), and no profile sets it |
 | `eval_workers` | 2 | processes | the gate's farm, built at gate time and closed after |
 | `eval_games_per_worker` | 24 | battles | |
 | **`net`** (`ArchSpec`) | | | |
@@ -1426,7 +1439,7 @@ vector is 1 177 wide. Turning on `Reveal.enemy_spell_aim` adds a spatial plane, 
 | 4 mask planes | **not stored**, derived from the mask | 0 | exact |
 | vector, V = 1177 | `float16` | 2 354 | exact to fp16; the builder clips the whole vector to [0, 1] (`obs.py:181`) |
 | action mask | bit-packed `uint8` | 289 | exact |
-| **row total** | | **14 163 B** | 3.91x smaller than what the env hands over |
+| **row total** | | **14 163 B** (95 cards, 2026-09-22) | 3.91x smaller than what the env hands over |
 
 The same rule on `MockEngine`'s 16-card catalogue gives `9 216 + 2 304 + 2*229 + 289 = 12 267 B`, and
 the whole test suite runs there precisely because its widths are not the Rust catalogue's.
@@ -1438,7 +1451,7 @@ Notes an implementer needs:
   are not comparable and the digest is what says so.
 - **`mask_planes` is never stored.** RoyaleGym guarantees
   `mask_planes == action_mask[1:].reshape(hand_size, tiles_y, tiles_x)` exactly, with its own test;
-  the learner does `mask[1:].view(...)` at unpack. Storing them would be 2 304 B of a 14 163 B row
+  the learner does `mask[1:].view(...)` at unpack. Storing them would be 2 304 B of a 14 163 B row (95 cards)
   spent on a reshape.
 - **A static plane is one the layout declares static, and nothing else.** On this catalogue those are
   the water and no-deploy masks. There is no sampling fallback and there must not be: the tower planes
@@ -1914,7 +1927,7 @@ Every detail has a failure it prevents, and every reference implementation gets 
    never be selected, and the sampled action is independent of batch composition and of torch's global
    RNG. A test compares it against a brute-force inverse CDF.
 
-The mask travels with the transition (289 bit-packed bytes, 2.2% of a row) and the *same* mask is
+The mask travels with the transition (289 bit-packed bytes, 2.0% of a row) and the *same* mask is
 applied in `backprop`. Two asserts run during `ppo.debug_assert_iterations`:
 
 ```python
@@ -1957,7 +1970,7 @@ Cycle `T` holds observations only. It is the bootstrap row, and its scalars are 
 rows below cycle 0 are history: at the end of every iteration the last `k - 1` cycles are copied down
 into them, so cycle 0 of the next iteration has a full stack and an iteration boundary is not a
 discontinuity in what the policy sees. At `k = 1` there are none and the block is `(T+1) x R`. At the
-laptop profile that is `229 x 192 x 14 163 B = 623 MB` **[A]**.
+laptop profile that is `229 x 192 x 14 163 B = 623 MB` (95 cards, 2026-09-22) **[A]**.
 
 Every row of the rectangle is stored, including the seats a frozen or scripted opponent played. That
 costs 25% more memory than storing only learner rows and it buys a buffer index that is the slot
@@ -3361,7 +3374,8 @@ it, and a refused batch is never trained on. Until 8db7e0d the update ran first,
 was trained and then refused. One check still runs later: when the row is built, the rollout's
 statistics are drained, and the drain compares the rows they were taken over with the rows the
 decoded masks offer a choice on. That is after the update, and after a gate's candidate is stored.
-A failure there halts the run, and no checkpoint of the moved learner is written. The row is written
+A failure there raises and ends the run, and it is not a halt: its emergency save refuses, because
+no row describes the moved learner yet, and names the last checkpoint to resume from. The row is written
 before the alarms read it because a halt checkpoints the learner that row describes, and the row has
 to be in `metrics.jsonl` by then (section 12.2).
 
@@ -3434,7 +3448,7 @@ therefore recorded in the checkpoint and in the ladder's `context` like any othe
 |---|---|
 | `config [--profile laptop\|workstation\|many-core] [-o run.json]` | write a fully populated default config |
 | `doctor [--config F]` | the start-up gates of section 7.7 on their own: build one env, print the engine build digests, the observation space and the codec table, run `mask_disagreements` over all 2304 non-no-op actions, check the action-layout identity, print the RAM ledger, the credit horizon, the geometry and the `run_id`. Seconds, and it catches most first-run failures |
-| `bench [--config F] [--seconds 60]` | measure and print section 2.3's table for **this** machine: env milliseconds per game-step, codec microseconds per row, boundary microseconds per round, inference milliseconds per round, update timesteps per second, peak VRAM, the rollout/update capacity ratio, and `ratio_max_abs_dev` over ten rounds beside the configured `ratio_atol`; under `run_exact`, also `checked_iteration`, whether the last timed iteration is one the harness checks (section 5.1). It PRINTS that block; nothing writes `docs/throughput.md`, which is a page kept by hand, and a command that overwrote it would lose the prose around the numbers. `--iterations` caps the loop (default 3) and `--seconds` is a lower bound checked between iterations, never inside one |
+| `bench [--config F] [--seconds 60]` | measure and print, for **this** machine: the number of iterations timed, env milliseconds per game-step, codec microseconds per row, boundary megabytes per second, inference milliseconds per round, update timesteps per second, the rollout/update capacity ratio, peak VRAM, and the last iteration's `ratio_max_abs_dev` (its first minibatch) beside the configured `ratio_atol`; under `run_exact`, also `checked_iteration`, whether the last timed iteration is one the harness checks (section 5.1). It PRINTS that block; nothing writes `docs/throughput.md`, which is a page kept by hand, and a command that overwrote it would lose the prose around the numbers. `--iterations` caps the loop (default 3) and `--seconds` is a lower bound checked between iterations, never inside one |
 | `train --config F [--run-name N] [--until-timesteps T] [--inline] [--device cuda\|cpu]` | a new run |
 | `resume --run DIR [--checkpoint PATH] [--until-timesteps T] [--allow-identity-drift]` | continue; refuses on an identity mismatch by default and names every differing field |
 | `verify-resume --config F [--iterations 6] [--split 3]` | section 12.4's proof, on the user's own machine |
@@ -3887,7 +3901,7 @@ applies.
 Two groups from the design are not built. `ppo/actor_adam_eps_bound_frac` and
 `ppo/critic_adam_eps_bound_frac` -- the share of coordinates with sqrt(v_hat) below `adam_eps`, one
 reduction over each optimizer's state per iteration -- belong to the `adam_eps` item and are a phase-2
-mechanism readout rather than a D1 decider. `time/update_actor` and `time/update_critic` need CUDA
+mechanism readout rather than something phase 1's `forced_rows` comparison (section 18.1) decides. `time/update_actor` and `time/update_critic` need CUDA
 events around each half of the update; under `all` the backward is fused, so they would be absent
 rather than zero, and the split is `smdp`'s prerequisite rather than this field's.
 

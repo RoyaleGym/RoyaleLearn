@@ -388,8 +388,9 @@ Said plainly, because the rest of the page is only worth anything if this part i
 
 - **The row for row guarantees are tested on a toy engine on CPU.** `tests/test_resume.py`
   uses the MockEngine, one worker, two battles, a tiny network, float32, on CPU. It proves the
-  plumbing. It does not prove that your GPU run repeats, and nobody has run that check on the
-  real engine here yet.
+  plumbing. It does not prove that your GPU run repeats. Runs of one config on the real engine,
+  14 iterations each on an RTX 4070 Ti (2026-09-26 and 2026-09-27), repeated digest for digest.
+  That says nothing about your GPU, and none of those runs tested a resume.
 - **The 10 to 20 percent cost of `run_exact` is an estimate, not a measurement.** Nothing on
   this machine has compared the two tiers head to head.
 - **Cross machine reproducibility has not been tested.** The design says the environment side

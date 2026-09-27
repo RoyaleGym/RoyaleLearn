@@ -318,7 +318,7 @@ def test_the_supported_surface_resolves_and_importing_it_imports_nothing_else() 
 
 
 
-# -- what the S3 review found --------------------------------------------------------------------
+# -- what the review of the sectioned config found -------------------------------------------------
 
 
 def test_a_null_key_no_provider_claims_is_still_refused() -> None:

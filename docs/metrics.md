@@ -193,7 +193,7 @@ every row they appear in. As of 2026-09-22 there were 56 metric files and 249 ro
 | `health/rss_peak_mb` | Always 0.0, in all 249 rows | Peak system memory of the parent process. The Unix path uses the `resource` module, which does not exist on Windows. The Windows fallback calls `GetProcessMemoryInfo` through `ctypes.windll.psapi`, and that call returns failure on this box, so the function returns 0.0. The code chooses to report zero rather than guess, which is the right call for a number the planner reads, but it does mean the row is empty on Windows. Use Task Manager. |
 | `ladder/eval_games_total` | Always 0, in all 249 rows | Evaluation battles played so far. The evaluation runner appends straight to the shared result log rather than through the pool's counter, so the counter never moves. `records.py` documents this at the line that emits it. A run can fit a real rating off 24 real evaluation battles while this row still reads 0. |
 | `ladder/score_vs_noop`, `ladder/score_vs_random_legal` | Real on probe iterations; absent otherwise; exactly 0.5 in all 172 older rows that have them | Score against the two scripted benchmark opponents. The bot used never to be evaluated under its own name, so the pair these keys asked about had no games and the lookup answered 0.5, which is also what a genuine dead heat looks like; then the key was omitted. Since `ladder.probe_every_iterations` exists they are the live bot's own score, measured on the iterations it probes, with `ladder/score_vs_n/{rung}` beside them for the sample size and `ladder/score_vs_ci95_lo\|hi/{rung}` for the interval. Off by default. Read the interval first: at the shipped width a move under about 18 points against `random_legal` is the instrument rather than the bot. See `ladder.md`. |
-| `time/overlap_saved` | Hardcoded 0.0 | A timing slot reserved for overlapped collection, which is not built. `time/critic_pass` and `time/gae` were beside it until 2026-09-22 and are now measured: they are the critic's pass over every collected cell and the advantage recursion, both of which run before the first epoch of an update. |
+| `time/overlap_saved` | Not written since 2026-09-22; rows written before then hold 0.0 | A timing slot reserved for overlapped collection, which is not built. `time/critic_pass` and `time/gae` were beside it until 2026-09-22 and are now measured: they are the critic's pass over every collected cell and the advantage recursion, both of which run before the first epoch of an update. |
 | `time/codec` | 0.0 in every row on disk | Time spent packing observations in the workers. It reads `codec_ms` out of the rollout source's stats, and no shipped source reports it yet. |
 | `ladder/champion_step` | 0 in every row on disk | The env step the champion was snapshotted at. Every admission was filed at step 0 until 2026-09-24, because the pool looked the step up in the registry the candidate was about to be added to. New runs carry the real step. |
 | `ladder/paired_rho` | 0.0 in every row on disk | The champion comparison's paired-seed correlation. It was read off whichever comparison ran last, and an undefined correlation was written as 0.0; both fixed 2026-09-24. It is now absent when there is nothing to report. |
@@ -231,7 +231,10 @@ Two design choices are worth knowing about:
    is simply not asked. An iteration where no battle finished cannot trip the draw-rate alarm.
 2. **The batch is judged before the update learns from it.** As of 2026-09-22, the invariant checks
    run before the PPO update, not after (commit `8db7e0d`). A batch that fails them is refused
-   before it can train anything.
+   before it can train anything. One check runs after the update: when the metrics row is
+   built, the rows the rollout's statistics were taken over are compared with the rows the
+   decoded masks offer a choice on. A disagreement stops the run with an error, and no
+   checkpoint of the updated weights is saved.
 
 You can see the whole table, with names and severities, without starting a run:
 

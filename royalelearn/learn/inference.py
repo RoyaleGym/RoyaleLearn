@@ -272,8 +272,9 @@ class BatchedInference:
         # or it is being restarted -- and the cell it did not write holds whatever the
         # rectangle held before, which for a fresh iteration is zeros. Reading one of those
         # would hand the policy an observation with no legal action in it, including the no-op
-        # the environment always sets, and the first thing to notice would be an assertion
-        # inside the distribution rather than the worker that stopped. The action left behind
+        # the environment always sets, and the first thing to notice would be the no-op
+        # refusal read back with the actions (the distribution's own message) rather than the
+        # worker that stopped. The action left behind
         # is the no-op, which is what a seat that could not be asked should do.
         live = np.asarray(round_.valid, dtype=bool)
         forwards = 0

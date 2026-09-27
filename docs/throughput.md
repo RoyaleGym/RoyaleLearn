@@ -7,7 +7,8 @@ computer is holding you up.
 Every measured number here carries a date and says which run shape produced it. Where nobody has
 measured a thing, this page says so rather than guessing. The gaps are real and there are several.
 
-Last checked against the code on 2026-09-22.
+Last checked against the code on 2026-09-22. The bench lines, the timing keys and
+`rollout.overlap` were re-checked on 2026-09-27.
 
 ## The short version
 
@@ -73,7 +74,7 @@ one is.
 | `rollout_capacity_ratio` | Update seconds divided by collection seconds. Above 1 means collection is the cheaper half. |
 | `vram_peak_mb` | Peak graphics memory this iteration, in decimal MB. A 4096 MiB card is 4,295 decimal MB, so read the percentage carefully. |
 | `ratio_max_abs_dev`, `ratio_atol` | Not throughput. They are a correctness check on the stored log probabilities, printed here because this is the command that has them. |
-| `checked_iteration` | Only under `run_exact`. True when the last timed iteration is one the harness checks: the first ten, then every fiftieth. A checked iteration also fills fresh memory before use, which costs a few percent of the update, and so does the first iteration of any process. At the shipped settings every bench iteration is a checked one, so bench's update rate includes that cost and a long run's later iterations are a little faster. |
+| `checked_iteration` | Only under `run_exact`. True when the last timed iteration is one the harness checks: the first ten, then every fiftieth. A checked iteration also fills fresh memory before use, and so does the first iteration of any process. In one timed comparison, on an RTX 4070 Ti on 2026-09-26 and on an older learner, that fill cost a few tenths of a second of a 7 to 9 second update (harness-spec section 5.1). Nobody has timed it on other cards. At the shipped settings every bench iteration is a checked one, so bench's update rate includes that cost, and a long run's later iterations skip it. |
 
 One caveat on `codec_us_per_row`. It is measured in the parent process, by packing a zero-filled
 observation 200 times, not in the workers on real battle data (`_codec_microseconds` in
@@ -228,11 +229,9 @@ faster per transition. Nobody has measured the learning cost of any of these cha
 and your cores. There are three workers in the `laptop` profile on a machine with eight threads,
 not thirty-two, because the learner is the bottleneck there.
 
-**`rollout.overlap` does nothing yet.** It is on in the `workstation` and `many_core` profiles and
-it is meant to hide collection under the update. The loop in `coordinator.py` collects and then
-updates, with no branch on that setting, and `time/overlap_saved` is written as 0.0 every
-iteration. The memory projection does reserve room for a second batch when it is on. So today the
-setting costs projected memory and saves nothing. Leave it off on a small machine.
+**`rollout.overlap` is not built.** It is meant to hide collection under the update, but the loop
+in `coordinator.py` collects and then updates. A config that turns it on is refused at start-up,
+and no profile turns it on. `time/overlap_saved` is not written.
 
 ## Which resource is biting
 

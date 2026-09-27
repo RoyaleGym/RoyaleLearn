@@ -1,9 +1,9 @@
 """Run one small training config at two commits and say exactly what differs.
 
-The cross-commit blind control of the imitation-extraction plan (RoyaleLive
-docs/2026-09-24-il-extraction-plan.md, steps S0-S4). A refactor that claims to change nothing is
-held to it column by column, and a step that claims a stated difference is held to exactly that
-difference, written as an expect file (``tools/ab_expect/``).
+The cross-commit blind control used while the imitation code moved into its own package. A
+refactor that claims to change nothing is held to it column by column, and a step that claims a
+stated difference is held to exactly that difference, written as an expect file
+(``tools/ab_expect/``).
 
     python tools/ab_digest.py run <commit> --out <dir> [--arm plain|il] [--engine mock|rust]
         [--gym <commit> | --gym-from <result.json>] [--artifacts <dir>]
@@ -320,12 +320,13 @@ def _hash_seed() -> int:
 # The configs: fixed JSON, never a test helper, so both sides read the same bytes
 # --------------------------------------------------------------------------
 
-#: The IL arm's config fragments. Placeholders are filled from the artifacts folder. ``legacy``
-#: is 61621bb's block; ``sections`` is S3's layout as of ef37d87 (royalelearn/imitation/config.py
-#: WarmStartSection and ImitationSection): warm_start holds init, actor_lr_scale and the freeze
-#: alarms' thresholds, imitation holds references, regularisers and the regularisers' alarms'
-#: thresholds. Each ``alarms`` block is written out at the values ``legacy`` runs with (61621bb's
-#: AlarmConfig.imitation_* defaults), so the two shapes name the same experiment.
+#: The IL arm's config fragments. Placeholders are filled from the artifacts folder. ``legacy`` is
+#: 61621bb's block; ``sections`` is the sectioned layout as of ef37d87
+#: (royalelearn/imitation/config.py WarmStartSection and ImitationSection): warm_start holds init,
+#: actor_lr_scale and the freeze alarms' thresholds, imitation holds references, regularisers and
+#: the regularisers' alarms' thresholds. Each ``alarms`` block is written out at the values
+#: ``legacy`` runs with (61621bb's AlarmConfig.imitation_* defaults), so the two shapes name the
+#: same experiment.
 IL_SHAPES: dict[str, dict[str, Any]] = {
     "legacy": {
         "imitation": {
