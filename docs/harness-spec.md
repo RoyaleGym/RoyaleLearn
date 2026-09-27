@@ -2565,6 +2565,27 @@ that a run replayed at a different worker count lays its roles out differently, 
   of 48 the learner has played few pairs directly and `win_rate`'s Beta(1,1) prior reads exactly 0.5
   for the rest, which collapses `hard` to uniform and discards the information that the learner
   crushes v40 and v40 crushes v55.
+- **The learner's rating is its newest admitted snapshot's (2026-09-27).** `p_k` needs a fitted
+  rating for the learner, and the live policy never plays an evaluation game under its own id: a
+  gate rates snapshots, and the probe's games are `kind="probe"`, which the fit does not read. Until
+  2026-09-27 the matchmaker looked up the id `learner` in the fitted table, never found it, and read
+  `p_k = 0.5` for every candidate, so `hard` was uniform in every run, for the residency draw and the
+  per-episode draw alike. The unit tests had supplied a `learner` rating by hand, so none of them saw
+  it. Now the newest admitted snapshot stands in for the learner: the pool member with the largest
+  env step, which is the last copy of the learner a gate accepted. `p_k` is the fitted model's
+  prediction for that member against candidate k, and 0.5 against itself.
+  - **The draw falls back to uniform, and says so.** Before a gate has admitted a snapshot, or
+    while the fit has not yet rated it, there is no stand-in, and the weights are the uniform ones
+    the floor mixes in. `ladder/pfsp_effective` is 1 on an iteration whose plan used a rating and 0
+    on one that fell back, and `ladder/pfsp_learner_step` gives the stand-in's env step, absent when
+    there was none. An arm that means to train against `hard` checks the first key.
+  - **The stand-in lags the learner** by up to `candidate_every_env_steps`: it is the learner as of
+    its last admitted snapshot. The same lag is what keeps the draw fixed inside an iteration, since
+    the stand-in changes only when a snapshot is admitted or a refit lands, both at an iteration
+    boundary.
+  - **It is a behaviour change**, not a fix that leaves numbers alone. Every run whose pool has more
+    candidates than `max_resident_opponents`, or plays any pool episode once a snapshot is rated,
+    now draws different opponents than it did.
 - **Mixed with a uniform floor**: `0.8 * hard + 0.2 * uniform`, and every weight floored at
   `weight_floor_scale / M` so no snapshot becomes unreachable. Without a floor the population's tail
   is forgotten, which is the job AlphaStar's forgotten-players slice does.
@@ -2843,9 +2864,9 @@ draws its own action noise. The start state is the part worth controlling, and i
 changes and nothing is paid until a run asks for it.
 
 What it does **not** do: it is not the gate, it admits and promotes nothing, and it gives the
-learner no fitted rating. So `ladder/rating_above_v0` stays absent and the PFSP weighting still
-has no rating for the live policy. Both of those want a rated player, which is what a snapshot
-is; the probe deliberately makes a different trade.
+learner no fitted rating. So `ladder/rating_above_v0` stays absent, and the PFSP weighting takes
+the learner's newest admitted snapshot as its stand-in (section 11.3). Both want a rated player,
+which is what a snapshot is; the probe deliberately makes a different trade.
 
 What it publishes, on the iterations it runs and on no others: `ladder/score_vs_noop` and
 `ladder/score_vs_random_legal` for the anchors, and for every rung
@@ -3149,8 +3170,9 @@ enemy-elixir field was an estimate on some episodes and the alarm below says so)
 **`ladder/`**: `rating`, `rating_se`, `rating_ci95_lo/hi` per member, `rating_above_v0`,
 `elo_readout`, `champion_id`, `champion_step`, `pool_size`, `sampler_size`, `gate_attempts`,
 `gate_passes`, `gate_observed_rate`, `gate_lower_bound`, `gate_failed_condition`, `gate_seconds_frac`,
-`transitivity_residual`, `paired_rho`, `draw_rate_eval`, `eval_games_total`, `evictions` and
-`probe_seconds_frac`; and on a probe iteration ONLY, `score_vs/<rung>` with `score_vs_n/<rung>` and
+`transitivity_residual`, `paired_rho`, `draw_rate_eval`, `eval_games_total`, `evictions`,
+`pfsp_effective` and `pfsp_learner_step` (absent while no snapshot stands in for the learner,
+section 11.3) and `probe_seconds_frac`; and on a probe iteration ONLY, `score_vs/<rung>` with `score_vs_n/<rung>` and
 `score_vs_ci95_lo/hi/<rung>`, of which `score_vs_noop` and `score_vs_random_legal` are the two
 anchors under their older names.
 
