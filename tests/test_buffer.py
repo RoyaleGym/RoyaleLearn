@@ -599,12 +599,14 @@ def test_on_cuda_a_minibatch_is_gathered_and_decoded_without_draining_the_stream
 ) -> None:
     """The property the staging ring was built for, checked where it can fail.
 
-    torch's sync debug mode raises on every call that waits for the whole stream: a blocking
-    copy from pageable memory, a scalar read back, a list index sent up. It does not raise on
-    the ring's own event wait, which waits for one copy and nothing else. So every gather after
-    the first -- the first builds the ring and the codec's per-device constants -- must run
-    clean. Before 2026-09-26 each gather drained the stream about thirteen times, and this test
-    fails on that code at its first one.
+    torch's sync debug mode raises on every call that drains the stream at once: a blocking copy
+    from pageable memory, a scalar read back, a list index sent up. It does not see the ring's
+    own event wait, and that is the intended pacing rather than a drain of the current work: a
+    slot comes back once the work queued before its last use is done, so the host runs at most
+    as many minibatches ahead as the ring has slots. So every gather after the first -- the first
+    builds the ring and the codec's per-device constants -- must run clean. Before 2026-09-26
+    each gather drained the stream about thirteen times, and this test fails on that code at
+    its first one.
 
     What it cannot say: torch itself warns that the debug mode "does not yet detect all
     synchronizing operations". It sees blocking copies, stream synchronisations and scalar reads;
@@ -629,6 +631,64 @@ def test_on_cuda_a_minibatch_is_gathered_and_decoded_without_draining_the_stream
             torch.cuda.set_sync_debug_mode("default")
         assert len(gathered) == CYCLES * SLOTS // 3 - 1
     finally:
+        built.close()
+
+
+@pytest.mark.filterwarnings("ignore:Synchronization debug mode is a prototype feature")
+def test_on_cuda_a_minibatch_forward_and_backward_do_not_drain_the_stream(
+    env_spec: EnvSpec, observations: list[dict[str, np.ndarray]]
+) -> None:
+    """The rest of a minibatch, under the determinism the runs use.
+
+    The gather test stops at the decode. This one takes a gathered minibatch through the
+    network's forward and backward -- the log-probability gather included, whose backward
+    deterministic mode swaps for another implementation -- inside the update's no-op scope,
+    with deterministic algorithms on. The same floor as the gather test: the debug mode does not
+    see every synchronisation, so a pass here is not a proof that none is left.
+    """
+    import os
+
+    from royalelearn.determinism import apply_cublas_workspace_config
+    from royalelearn.learn.distribution import noop_checked_upstream
+    from royalelearn.learn.nets import DefaultNetworkFactory
+    from royalelearn.testing import ARCH
+    from royalelearn.testing import SEED as MODEL_SEED
+
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA device on this machine, so there is no stream to drain")
+    apply_cublas_workspace_config(os.environ)
+    built = Fixture(env_spec, observations, device="cuda")
+    was_deterministic = torch.are_deterministic_algorithms_enabled()
+    try:
+        torch.use_deterministic_algorithms(True)
+        model = DefaultNetworkFactory(MODEL_SEED).build(built.spec, ARCH, "cuda")
+        buffer = fill_iteration(built)
+        buffer.set_values(torch.zeros((CYCLES + 1, SLOTS)))
+        buffer.set_advantages(torch.zeros((CYCLES, SLOTS)), torch.zeros((CYCLES, SLOTS)))
+        (batch,) = collect(buffer, CYCLES * SLOTS, 8, 1)
+        minibatches = iter(batch)
+
+        def one(minibatch: Any) -> None:
+            with noop_checked_upstream():
+                result = model.backprop(minibatch.obs, minibatch.actions)
+                loss = (
+                    result.log_probs.sum()
+                    + result.entropy.sum()
+                    + result.noop_entropy.sum()
+                    + result.values.sum()
+                )
+            loss.backward()
+
+        one(next(minibatches))  # the first builds the ring, the caches and the kernels' state
+        torch.cuda.synchronize()
+        torch.cuda.set_sync_debug_mode("error")
+        try:
+            for minibatch in minibatches:
+                one(minibatch)
+        finally:
+            torch.cuda.set_sync_debug_mode("default")
+    finally:
+        torch.use_deterministic_algorithms(was_deterministic)
         built.close()
 
 

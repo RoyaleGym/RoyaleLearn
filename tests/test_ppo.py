@@ -947,18 +947,64 @@ def test_a_trainable_cell_without_its_noop_stops_the_update_before_any_step(
     before = [p.detach().clone() for p in model.parameters()]
     config = msgspec.structs.replace(CONFIG, debug_assert_iterations=0)
 
-    with pytest.raises(AssertionError, match=r"mask\[NOOP\]"):
+    trainable = int(buffer.trainable().sum())
+    with pytest.raises(AssertionError, match=r"mask\[NOOP\]") as raised:
         update_for(model, config).step(buffer, msgspec.structs.replace(SCHEDULE, iteration=5))
 
+    assert f"1 of {trainable} trainable cells" in str(raised.value)
+    assert "(2, 3)" in str(raised.value), "the message names the cell as (cycle, slot)"
     assert all(torch.equal(a, b) for a, b in zip(before, model.parameters(), strict=True)), (
         "the update stepped before the check stopped it"
     )
 
 
+def test_a_corruption_wider_than_a_critic_chunk_still_says_what_it_is(rect: Fixture) -> None:
+    """A codec or bit-order fault clears the bit on every row. The message is built from a few of
+    them, never all: the gather stages ``critic_chunk`` rows at most, and asking it for more
+    raised a staging error that sent the reader to the wrong place."""
+    model = build_model(rect.spec)
+    buffer = collect(rect, model)
+    for cycle, slot in zip(*np.nonzero(buffer.trainable()), strict=True):
+        _clear_the_noop_bit(buffer, int(cycle), int(slot))
+    config = msgspec.structs.replace(CONFIG, debug_assert_iterations=0, critic_chunk=4)
+    trainable = int(buffer.trainable().sum())
+    assert trainable > config.critic_chunk
+
+    with pytest.raises(AssertionError, match=f"{trainable} of {trainable} trainable cells"):
+        update_for(model, config).step(buffer, msgspec.structs.replace(SCHEDULE, iteration=5))
+
+
+def test_an_extension_term_s_own_rows_are_still_checked_in_the_loop(rect: Fixture) -> None:
+    """A term may run the live actor on rows the critic pass never saw, so the loop's skip must
+    not reach it: past the debug iterations, a term that builds a distribution over a mask with
+    the no-op cleared still stops the update, as it did when every construction checked."""
+    from royalelearn.learn.distribution import MaskedCategorical
+    from royalelearn.testing import StubTerm
+
+    class _BadRows(StubTerm):
+        scaling = "minibatch"
+        measure_grad_ratio = False
+
+        def loss(self, inputs: Any, *, epoch: int, measure: bool) -> tuple[float, Any]:
+            mask = inputs.obs.mask.clone()
+            mask[:, 0] = False
+            distribution = MaskedCategorical(inputs.actor.logits(inputs.obs), mask)
+            return self.coefficient, distribution.log_probs[:, 1].mean()
+
+    model = build_model(rect.spec)
+    buffer = collect(rect, model)
+    config = msgspec.structs.replace(CONFIG, debug_assert_iterations=0)
+    update = update_for(model, config, extra_actor_terms=(_BadRows(0.0),))
+
+    with pytest.raises(AssertionError, match=r"mask\[NOOP\]"):
+        update.step(buffer, msgspec.structs.replace(SCHEDULE, iteration=5))
+
+
 def test_a_cell_nobody_trains_on_may_lack_its_noop(rect: Fixture) -> None:
-    """The bootstrap row is valued and never trained on, and a cell no worker wrote is zero bytes
-    with its no-op bit clear by construction. The check covers the trainable cells; one that
-    covered the whole rectangle would stop every iteration that had a dead worker in it."""
+    """The bootstrap row is valued and never trained on. A cell that is not trainable never
+    reaches the loss whatever its bytes hold -- zeros if no worker ever wrote it, with the no-op
+    bit clear -- so the check covers the trainable cells; one that covered the whole rectangle
+    would stop an update over bytes it was never going to read."""
     model = build_model(rect.spec)
     buffer = collect(rect, model)
     _clear_the_noop_bit(buffer, CYCLES, 0)

@@ -230,8 +230,9 @@ def chunked_critic_pass(
     total = (cycles + 1) * slots
     # The no-op check for every cell the update can train on, made here because every mask is
     # already unpacked here, and read once after the pass rather than once a minibatch in the loop
-    # (docs/harness-spec.md section 18.1). The bootstrap row is never trained on; a cell no worker
-    # wrote is zero bytes, no-op bit included, and is not trainable either.
+    # (docs/harness-spec.md section 18.1). A cell that is not trainable never reaches the loss,
+    # whatever its bytes hold: the bootstrap row, a cell no worker ever wrote (zero bytes), or one
+    # a dead worker left holding an earlier iteration's row. So only the trainable cells count.
     trainable = np.zeros((cycles + 1, slots), dtype=bool)
     trainable[:cycles] = buffer.trainable()
     checked = torch.from_numpy(trainable.reshape(-1)).to(buffer.device)
@@ -247,9 +248,21 @@ def chunked_critic_pass(
             missing[start:stop] = checked[start:stop] & ~obs.mask[:, NOOP]
     if bool(missing.any()):
         offending = torch.nonzero(missing).view(-1).cpu().numpy()
-        obs = gather.observations(offending // slots, offending % slots)
-        raise AssertionError(noop_violation_message(obs.mask))
+        # A few of them are shown, never all: a systematic fault (a codec or bit-order mismatch)
+        # clears the bit on every row, and the gather stages ``chunk`` rows at most.
+        shown = offending[: min(_NOOP_CELLS_SHOWN, step)]
+        obs = gather.observations(shown // slots, shown % slots)
+        where = ", ".join(f"({int(c) // slots}, {int(c) % slots})" for c in shown)
+        raise AssertionError(
+            f"{offending.size} of {int(trainable.sum())} trainable cells have the no-op masked "
+            f"out; the first {shown.size} as (cycle, slot): {where}\n"
+            + noop_violation_message(obs.mask)
+        )
     return values * _row_validity(buffer), n_legal
+
+
+#: How many offending cells a failed no-op check names and decodes for its message.
+_NOOP_CELLS_SHOWN = 16
 
 
 def _row_validity(buffer: RectBuffer) -> Tensor:
@@ -884,7 +897,11 @@ class PPOUpdate(Update):
         for term in self.extra_actor_terms:
             if term.scaling == "rows" and not has_choice:
                 continue
-            coefficient, raw = term.loss(inputs, epoch=epoch, measure=measure)
+            # A term may run the live actor on rows of its own, which the critic pass never saw,
+            # so every distribution it builds checks its own mask again, as it did before the
+            # check moved out of the loop.
+            with noop_checked_upstream(active=False):
+                coefficient, raw = term.loss(inputs, epoch=epoch, measure=measure)
             scale = actor_scale if term.scaling == "rows" else minibatch.weight
             if ratio_now and term.measure_grad_ratio:
                 scaled.append((term, raw * scale))

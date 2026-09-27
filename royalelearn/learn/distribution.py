@@ -51,15 +51,16 @@ def noop_checked_upstream(active: bool = True) -> Iterator[None]:
 
     The check is a device read-back, so inside a loop over minibatches it drains the stream once
     a minibatch. Enter this only where every row the block can see has already been checked by
-    something else; the update enters it for its minibatch loop, after the critic pass, and not
-    in debug iterations. ``active=False`` is a no-op, so a caller can decide at run time.
+    something else; the update enters it around each minibatch, after the critic pass, and not
+    in debug iterations. ``active=False`` turns the check back ON for its block, even inside an
+    enclosing one: the update uses it for extension terms, which may build distributions over
+    rows the critic pass never saw.
     """
-    token = _NOOP_CHECKED_UPSTREAM.set(True) if active else None
+    token = _NOOP_CHECKED_UPSTREAM.set(active)
     try:
         yield
     finally:
-        if token is not None:
-            _NOOP_CHECKED_UPSTREAM.reset(token)
+        _NOOP_CHECKED_UPSTREAM.reset(token)
 
 
 def noop_violation_message(mask: Tensor) -> str:

@@ -395,7 +395,7 @@ def _unpack_before_2026_09_26(
     spatial.mul_(live.to(spatial.dtype))
 
 
-def _fresh_obs(spec: EnvSpec, count: int, frames: int) -> Any:
+def _fresh_obs(spec: EnvSpec, count: int, frames: int, device: str = "cpu") -> Any:
     """Output tensors pre-filled with a sentinel, so a plane neither version writes still shows."""
     import torch
 
@@ -403,10 +403,12 @@ def _fresh_obs(spec: EnvSpec, count: int, frames: int) -> Any:
 
     planes, tiles_y, tiles_x = spec.spatial_shape
     return ObsBatch(
-        spatial=torch.full((count, frames * planes, tiles_y, tiles_x), 7.5),
-        mask_planes=torch.full((count, frames * spec.hand_size, tiles_y, tiles_x), 7.5),
-        vector=torch.full((count, spec.vector_size), 7.5),
-        mask=torch.zeros((count, spec.n_actions), dtype=torch.bool),
+        spatial=torch.full((count, frames * planes, tiles_y, tiles_x), 7.5, device=device),
+        mask_planes=torch.full(
+            (count, frames * spec.hand_size, tiles_y, tiles_x), 7.5, device=device
+        ),
+        vector=torch.full((count, spec.vector_size), 7.5, device=device),
+        mask=torch.zeros((count, spec.n_actions), dtype=torch.bool, device=device),
     )
 
 
@@ -421,9 +423,10 @@ def _same_bits(a: Any, b: Any) -> bool:
     return torch.equal(a, b)
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("variant", ["as_bound", "planes_shuffled", "divisor_not_one"])
 def test_the_decode_is_bit_for_bit_the_one_it_replaced(
-    codec: SpatialObsCodec, env_spec: EnvSpec, variant: str
+    codec: SpatialObsCodec, env_spec: EnvSpec, variant: str, device: str
 ) -> None:
     """Random bytes, not packed observations: every half-precision bit pattern a row can carry,
     NaN payloads and infinities included, has to come back exactly as the old decode gave it.
@@ -431,13 +434,28 @@ def test_the_decode_is_bit_for_bit_the_one_it_replaced(
     Run on the layout as bound and on two rewritten ones, because the shipped table happens to
     have mostly consecutive planes, which is the case slices handle most easily: the planes in a
     shuffled order split into many runs of one, and a divisor other than one takes the division.
-    Two frames, one of them all zero bytes, so the per-frame zeroing is covered too.
+    Two frames, one of them all zero bytes, so the per-frame zeroing is covered too. On CUDA it
+    runs with deterministic algorithms on, which is the path the runs take: there the old list
+    writes were the deterministic ``index_put_``, a different implementation from the CPU one.
 
     Not covered, because no output can show it: whether the unit-divisor test is made in float32
     as before. A divisor that is one only after rounding divides by exactly 1.0, which returns
     every byte value unchanged, so both answers decode the same bits.
     """
     torch = pytest.importorskip("torch")
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("no CUDA device on this machine")
+    was_deterministic = torch.are_deterministic_algorithms_enabled()
+    torch.use_deterministic_algorithms(device == "cuda")
+    try:
+        _compare_the_decodes(torch, codec, env_spec, variant, device)
+    finally:
+        torch.use_deterministic_algorithms(was_deterministic)
+
+
+def _compare_the_decodes(
+    torch: Any, codec: SpatialObsCodec, env_spec: EnvSpec, variant: str, device: str
+) -> None:
     layout = codec.layout
     rng = derive_generator(SEED, f"test/codec/bit-exact/{variant}")
     if variant == "planes_shuffled":
@@ -460,7 +478,9 @@ def test_the_decode_is_bit_for_bit_the_one_it_replaced(
     statics = torch.from_numpy(
         rng.normal(size=(len(codec.layout.static_planes), tiles_y, tiles_x)).astype(np.float32)
     )
-    new, old = _fresh_obs(env_spec, count, frames), _fresh_obs(env_spec, count, frames)
+    raw, statics = raw.to(device), statics.to(device)
+    new = _fresh_obs(env_spec, count, frames, device)
+    old = _fresh_obs(env_spec, count, frames, device)
     codec.unpack_to_device(raw, statics, new)
     _unpack_before_2026_09_26(codec, raw, statics, old)
     for field in ("spatial", "mask_planes", "vector", "mask"):

@@ -227,10 +227,14 @@ class _StagingRing:
         return out
 
     def copied(self) -> None:
-        """Called once every copy out of the slot just handed out has been enqueued."""
+        """Called once every copy out of the slot just handed out has been enqueued.
+
+        Recorded on the stream of the ring's own device, which is where those copies went. The
+        current device's stream is another one on a machine with more than one card.
+        """
         event = self.events[self._held]
         if event is not None:
-            event.record()
+            event.record(torch.cuda.current_stream(self.device))
 
 
 def batch_count(n_samples: int, batch_size: int) -> int:
@@ -697,29 +701,35 @@ class RectBuffer(ExperienceBuffer):
         if not live.all():
             staged = view[:count]
             staged[~live] = 0
-        raw = slab[:count].to(self.device, non_blocking=True)
-        # After the sort, so the index names rows of this minibatch as it is handed over.
-        legal = np.take(self.n_legal.reshape(-1), cells)
-        choice = np.flatnonzero(legal > 1)
         ring = self._ring
         device = self.device
-        columns = {
-            "actions": ring.column("actions", np.take(self.action.reshape(-1), cells), device),
-            "log_probs": ring.column(
-                "log_probs", np.take(self.log_prob.reshape(-1), cells), device
-            ),
-            "advantages": ring.column(
-                "advantages", np.take(self.advantage.reshape(-1), cells), device
-            ),
-            "returns": ring.column("returns", np.take(self.ret.reshape(-1), cells), device),
-            "values": ring.column(
-                "values", np.take(self.value[: self.cycles].reshape(-1), cells), device
-            ),
-            "n_legal": ring.column("n_legal", legal, device),
-            "choice_index": ring.column("choice_index", choice, device),
-            "cells": ring.column("cells", cells, device),
-        }
-        ring.copied()
+        # The slot's event is recorded whatever happens below: a column that failed to allocate
+        # must not leave the slot marked done while the slab's own copy is still in flight.
+        try:
+            raw = slab[:count].to(device, non_blocking=True)
+            # After the sort, so the index names rows of this minibatch as it is handed over.
+            legal = np.take(self.n_legal.reshape(-1), cells)
+            choice = np.flatnonzero(legal > 1)
+            columns = {
+                "actions": ring.column(
+                    "actions", np.take(self.action.reshape(-1), cells), device
+                ),
+                "log_probs": ring.column(
+                    "log_probs", np.take(self.log_prob.reshape(-1), cells), device
+                ),
+                "advantages": ring.column(
+                    "advantages", np.take(self.advantage.reshape(-1), cells), device
+                ),
+                "returns": ring.column("returns", np.take(self.ret.reshape(-1), cells), device),
+                "values": ring.column(
+                    "values", np.take(self.value[: self.cycles].reshape(-1), cells), device
+                ),
+                "n_legal": ring.column("n_legal", legal, device),
+                "choice_index": ring.column("choice_index", choice, device),
+                "cells": ring.column("cells", cells, device),
+            }
+        finally:
+            ring.copied()
 
         obs = self._empty_obs(count)
         statics = self._statics()

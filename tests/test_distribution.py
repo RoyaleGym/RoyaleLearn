@@ -187,7 +187,8 @@ def test_a_fully_masked_row_is_refused(torch: Any) -> None:
 
 def test_the_check_is_skipped_inside_the_update_s_scope_and_nowhere_else(torch: Any) -> None:
     """Only the update's minibatch loop may skip it, and only because the critic pass checked
-    every row it can see. The scope must end where it ends, and ``active=False`` must not skip."""
+    every row it can see. The scope must end where it ends, and ``active=False`` turns the check
+    back on inside it, which is how an extension term's own rows stay checked."""
     from royalelearn.learn.distribution import MaskedCategorical, noop_checked_upstream
 
     logits = torch.zeros(4, 16)
@@ -195,8 +196,9 @@ def test_the_check_is_skipped_inside_the_update_s_scope_and_nowhere_else(torch: 
     mask[2, 0] = False
     with noop_checked_upstream():
         MaskedCategorical(logits, mask)
-        with noop_checked_upstream(active=False):
+        with noop_checked_upstream(active=False), pytest.raises(AssertionError, match="NOOP"):
             MaskedCategorical(logits, mask)
+        MaskedCategorical(logits, mask)
     with pytest.raises(AssertionError, match=r"mask\[NOOP\]"):
         MaskedCategorical(logits, mask)
     with noop_checked_upstream(active=False), pytest.raises(AssertionError, match=r"mask\[NOOP\]"):
