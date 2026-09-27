@@ -468,17 +468,20 @@ def _mask_disagreement_gate(env: Any, say: Callable[[str], None]) -> None:
     to be in the first line rather than discovered. A policy trained against a wrong mask is
     worthless, and the check is already written in RoyaleGym where nobody runs it.
 
-    The one state is the opening one -- ``env.engine.state()`` on a freshly built environment --
-    which is the right sample for the disagreement most likely to exist, because rules that
-    gate the START of a battle apply there and nowhere else. RoyaleGym found one on 2026-09-23:
-    the mask offered all four cards while the engine refused them all with ``TOO_EARLY``, for
-    the length of a deploy lockout, so a seat was penalised for obeying its own mask. This gate
-    stands exactly where that bites and will refuse a run that reintroduces it.
+    The one state is the one environment 0 holds when the gate runs, and that is NOT the opening
+    one: ``run_preflight`` calls ``_sample`` first, which resets the environment and plays the
+    table sample's steps, so the gate sees a state part-way into a battle. It checks only the
+    cards in hand at that state.
 
-    WHAT IT CANNOT SEE is a disagreement that only appears LATER: a rule that opens when a tower
-    falls, a card whose legality depends on what is already on the board, a zone that changes at
-    overtime. Sampling several states through a played-out battle would cover those, and would
-    need the engine, which is why it is named here rather than quietly absent.
+    WHAT IT CANNOT SEE follows from that. A rule that gates the START of a battle does not apply
+    there. RoyaleGym found one on 2026-09-23: the mask offered all four cards while the engine
+    refused them all with ``TOO_EARLY``, for the length of a deploy lockout, and a run that
+    reintroduced it would pass this gate. Nor does it see a card that is not in hand then: the
+    Heal disagreement found on 2026-09-27 (the mask offered Heal on the seat's own princess
+    towers and on buildings, where the engine refused it) passed it that way. And it does not
+    see a rule that opens when a tower falls, a card whose legality depends on what is on the
+    board, or a zone that changes at overtime. Gating a freshly reset state as well, and
+    sampling several states with every card dealt, would cover those.
     """
     from royalegym.action import mask_disagreements
     from royalegym.protocol import TEAMS

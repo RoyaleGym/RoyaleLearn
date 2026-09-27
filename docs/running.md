@@ -62,7 +62,7 @@ rather than a traceback (`errors.py`, `cli.py`).
 | --- | --- | --- |
 | Inconsistent config | `config.validate` | A number contradicts another one, a component in the `env` block is given a setting it does not take, a shaping weight is not a finite number of zero or more, or a section an installed package provides is malformed. A top-level key that is not RoyaleLearn's own and that no installed package provides as a section is refused by name, null or not. The message names every problem at once, not just the first. `ppo.batch_size` not being a multiple of `ppo.minibatch_size` is the common one. |
 | Stale engine build | `preflight._construct` | One environment is constructed first. A calibration or build mismatch dies here rather than at cycle 0, and the message names the fix: `maturin develop --release, in the RoyaleSim checkout` (`preflight.REBUILD_COMMAND`). |
-| Mask disagreement | `preflight._mask_disagreement_gate` | For both teams, exhaustively, the action mask and the engine are asked about every action. A bot trained against a wrong mask is worthless, so this refuses rather than warns. Off with `doctor.run_mask_disagreement_gate = false`. |
+| Mask disagreement | `preflight._mask_disagreement_gate` | For both teams, the action mask and the engine are asked about every action at one moment: the one the start-up sample's play reaches. Only the cards in hand then are checked, so it can pass while the mask is wrong for another card. A bot trained against a wrong mask is worthless, so this refuses rather than warns. Off with `doctor.run_mask_disagreement_gate = false`. |
 | No legal no-op | `preflight._noop_gate` | Checked on 1000 sampled states and on a finished battle. A state with no legal action is a distribution over nothing, and what that produces is a NaN in the first backward pass. |
 | Action layout mismatch | `preflight._action_layout_gate` | The head writes a logit per (hand slot, tile); the environment reads an integer. A transposition between them is a bot that plays a different card in a different place from the one it learned. Exhaustive over every non-no-op action. |
 | Memory projection over budget | `preflight.run_preflight` | The run projects more resident memory than `doctor.ram_budget_mb`, 6,500 MB by default (`config.DoctorConfig`). Lower `rollout.workers`, `rollout.games_per_worker` or `ppo.timesteps_per_iteration`. |
@@ -181,7 +181,9 @@ and none is fixed by changing a hyperparameter. Four of the six stop the run.
 
 **`illegal_actions`.** The engine refused a command the mask allowed. Under a correct mask this
 is exactly zero, so any positive value is a bug in the mask, in the action encoding, or in an
-unmasked policy. Do not retune anything. Read the bundle, then re-run
+unmasked policy. A refused command also stops the iteration with `DeployRefused`, so any gap
+in the mask can stop a run, and a random deck, which deals the most cards, is the likeliest to
+find one. Do not retune anything. Read the bundle, then re-run
 `python -m royalelearn doctor`, which exercises the mask and layout gates.
 
 **`ratio_invariant`.** At the first minibatch of the first epoch the stored log-probabilities

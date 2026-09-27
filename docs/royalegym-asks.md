@@ -149,7 +149,8 @@ Three more mask facts the harness depends on:
   every stored row. Start-up checks the equality on sampled states.
 - The mask agrees with the engine. RoyaleGym ships
   `royalegym.action.mask_disagreements(engine, parser, state, team)` and this harness runs it
-  exhaustively for both seats at start-up. The check already existed in RoyaleGym and nobody ran
+  for both seats at start-up, over every action at one state: the one the start-up sample's
+  play reaches. It sees only the cards in hand then. The check already existed in RoyaleGym and nobody ran
   it during training, which is why it is a gate here. A policy trained against a wrong mask is
   worthless.
 
@@ -219,7 +220,8 @@ Three of those keys carry the most weight:
 `reveal` is the one a reader should care about most. RoyaleGym's default observation hides the
 opponent's hand and counts their elixir the way a person would. Turning a `Reveal` on adds slots
 and channels rather than filling zeroed ones, so a fair observation and a cheating one are not
-even the same width. Because `config()` records it, a checkpoint can say which one produced the
+even the same width. One known gap: an enemy Royal Ghost still shows in the observation while it
+is invisible, which a player cannot see. This is not fixed yet. Because `config()` records it, a checkpoint can say which one produced the
 policy. Nothing about a weights file alone would show that.
 
 The harness adds a digest of its own over the card catalogue's names, ids, elixir costs and
@@ -378,5 +380,7 @@ cd RoyaleLearn
 ../.venv/Scripts/python -m royalelearn doctor
 ```
 
-That is the whole contract, executable. If it passes, the surfaces this page describes are intact.
+That is the whole contract, executable, at the one state it checks. If it passes, the surfaces
+this page describes are intact there. It does not deal every card, so a card outside the hands
+it sees can still have a wrong mask.
 If it fails, the message names the thing that moved and the file it came from.

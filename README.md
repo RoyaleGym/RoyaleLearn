@@ -209,7 +209,8 @@ the first-run checks. `bench` measures this machine's throughput. Run all four f
 `RoyaleLearn` folder, because those file names are relative to the folder you are in.
 
 Start with the last two, not the first. `doctor` builds one environment, prints the engine build
-digest and the observation shapes, checks the placement mask against the engine exhaustively,
+digest and the observation shapes, checks the placement mask against the engine for every move
+at one moment of a battle (so only for the cards in hand then),
 prints the memory projection and refuses a run that will not fit. It takes seconds and catches
 most first-run failures. `bench` measures your own machine's throughput instead of quoting
 someone else's. It runs at least one whole training iteration, so on a real profile it takes as
@@ -409,6 +410,8 @@ What works:
 
 What is open:
 
+- A known gap in the environment, found 2026-09-27: an enemy Royal Ghost still shows in the
+  observation while it is invisible, which a player cannot see. It is not fixed yet.
 - A bot. Runs are no longer only short tests: `train-hog26-10` reached iteration 621. That is
   still not evidence about whether a policy trained here is any good.
 - Rollout workers are Python today, and move to Rust when Python becomes the slow part. Here is why

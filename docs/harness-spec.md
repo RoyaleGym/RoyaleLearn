@@ -402,7 +402,8 @@ own affair and costs the environment nothing.
 
 Superhuman information, meaning anything a human player at the same moment could not see, is enabled
 per field through the obs builder's frozen `Reveal` struct, which is part of
-`ClashParallelEnv.config()`.
+`ClashParallelEnv.config()`. One known gap (2026-09-27): an enemy Royal Ghost still shows in the
+default observation while it is invisible. This is not fixed yet.
 An enabled field adds vector slots, and `enemy_spell_aim` adds a spatial plane, so both widths and the
 plane count move with it. Every one of those changes arrives through `vector_layout`,
 `spatial_layout` and the observation space like any other layout fact, and through `obs_digest` like
@@ -1268,7 +1269,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `torch_threads` | 1 | | thread count changes CPU reduction order |
 | **`doctor`** | | | |
 | `ram_budget_mb` | 6500 | MB | of 7800 |
-| `run_mask_disagreement_gate` | `true` | | exhaustive over all 2304 non-no-op actions |
+| `run_mask_disagreement_gate` | `true` | | every one of the 2304 non-no-op actions, at one state: the one the start-up sample's play reaches, so only the cards in hand then |
 | `vram_headroom_mb` | 256 | MB | device memory that must stay free after one minibatch's measured peak, or the run does not start (section 7.7, step 12). The same peak plus this margin is `health/vram_needed_mb`, which is published every iteration so a slowdown can be read against the regime it happened in (section 13.3). 0 turns off the gate |
 
 `examples/configs/laptop.json` and `workstation.json` are their profiles written out in full.
@@ -1673,8 +1674,10 @@ Their results go into the run identity and the checkpoint.
 4. **Resolve the vector fields the pointer head needs** through `vector_layout`. They are
    `hand_card_onehot`, `hand_cost` and `hand_affordable`. A missing name is a `PreflightError`
    naming it.
-5. **`royalegym.action.mask_disagreements(engine, parser, state, team)` for both teams**, exhaustive
-   over all 2304 non-no-op actions. Non-empty is a `PreflightError`, not a warning: a policy trained
+5. **`royalegym.action.mask_disagreements(engine, parser, state, team)` for both teams**, over all
+   2304 non-no-op actions at one state: the one environment 0 holds after the table sample's play,
+   which runs first. It sees only the cards in hand at that state, so it passes while the mask is
+   wrong for another card, and it does not see the opening state's rules. Non-empty is a `PreflightError`, not a warning: a policy trained
    against a wrong mask is worthless, the check is already written and nobody runs it.
 6. **Assert `mask[NOOP]`** on 1000 sampled states including one with `game_over` set. This is the one
    precondition the whole masking scheme rests on.
