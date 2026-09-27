@@ -429,8 +429,9 @@ class _StatAccumulator:
         self._reset()
 
     def _reset(self) -> None:
-        #: Per round, the device sums not yet read, and the host's own count of choice rows.
-        self._pending: list[tuple[Tensor, Tensor, Tensor, int]] = []
+        #: Per round, not yet read: the float32, float64 and int64 sums, the host's count of
+        #: choice rows, the decoded masks' own choice flags, and the index the sums were taken on.
+        self._pending: list[tuple[Tensor, Tensor, Tensor, int, Tensor, Tensor]] = []
         self.rows = 0
         self.forwards = 0
         self.rounds = 0
@@ -472,8 +473,9 @@ class _StatAccumulator:
         self.rows += rows
         p_noop = distribution.p_noop()
         n_legal = distribution.n_legal()
+        offered = n_legal > 1
         if choice_index is None:
-            choice_index = torch.nonzero(n_legal > 1).view(-1)
+            choice_index = torch.nonzero(offered).view(-1)
             choice_count = int(choice_index.numel())
         assert choice_count is not None
         # A row with one legal action holds with probability 1 and lifts by exactly 1, whatever
@@ -505,8 +507,10 @@ class _StatAccumulator:
                         (gap * legal_log).sum(),
                     ]
                 ),
-                torch.stack([n_legal.sum(), (n_legal > 1).sum()]),
+                torch.stack([n_legal.sum(), offered.sum()]),
                 int(choice_count),
+                offered,
+                choice_index,
             )
         )
 
@@ -514,26 +518,37 @@ class _StatAccumulator:
         """The rounds' device sums, read and added in the order they were taken.
 
         Each field is added up round by round in Python floats, as it was when every round read
-        its own sums, so the totals are the same numbers. The device's count of choice rows is
-        checked against the host's here: the two come from the same stored bits by different
-        routes, and a disagreement means the codec and the host read a mask differently.
+        its own sums, so the totals are the same numbers. The rows the statistics took as choice
+        rows are checked here, row by row, against the decoded masks': the two come from the
+        same stored bits by different routes, and a disagreement -- another row counted, or the
+        right count over the wrong rows -- means the statistics were taken over the wrong rows.
         """
         if not self._pending:
             return
         f32 = torch.stack([entry[0] for entry in self._pending]).tolist()
         f64 = torch.stack([entry[1] for entry in self._pending]).tolist()
         i64 = torch.stack([entry[2] for entry in self._pending]).tolist()
+        offered = torch.cat([entry[4] for entry in self._pending]).tolist()
+        indices = torch.cat([entry[5] for entry in self._pending]).tolist()
+        taken, cut = [], 0
+        for entry in self._pending:
+            taken.append(indices[cut : cut + entry[5].numel()])
+            cut += entry[5].numel()
+        start = 0
         for index, (singles, doubles, counts, host_choice) in enumerate(
             zip(f32, f64, i64, (entry[3] for entry in self._pending), strict=True)
         ):
+            rows = self._pending[index][4].shape[0]
+            device_rows = [i for i, flag in enumerate(offered[start : start + rows]) if flag]
+            start += rows
             entropy, p_noop, hold, hold_lift, choice_n_legal = singles
             gap, gap_sq, legal_log, legal_log_sq, gap_legal_log = doubles
-            n_legal, device_choice = counts
-            if device_choice != host_choice:
+            n_legal, _device_count = counts
+            if device_rows != taken[index] or len(device_rows) != host_choice:
                 raise AssertionError(
                     f"rollout round {index} of this iteration: the decoded masks offered a choice "
-                    f"on {device_choice} rows and the host's count of the same stored bits says "
-                    f"{host_choice}; the codec and the host read the mask differently"
+                    f"on rows {device_rows[:16]} and the statistics were taken over rows "
+                    f"{taken[index][:16]}; the codec and the host read the mask differently"
                 )
             self.entropy += entropy
             self.p_noop += p_noop

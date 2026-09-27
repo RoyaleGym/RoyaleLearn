@@ -166,8 +166,9 @@ def test_a_rollout_round_answers_what_the_distribution_would_have_bit_for_bit(
         # The host counted the choice rows from the stored bits; the drain checks that count
         # against the decoded masks', so a host that counted other rows stops here.
         stats = engine.drain_stats()
-        assert stats.choice_rows == int((dist.n_legal() > 1).sum())
-        assert stats.rows == slots.size
+        want = _reference([dist])
+        for field in FIELDS:
+            assert getattr(stats, field) == want[field], field
         assert 0 < stats.choice_rows < stats.rows, "the round must hold both kinds of row"
     finally:
         built.close()
