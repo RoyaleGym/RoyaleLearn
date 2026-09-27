@@ -35,12 +35,14 @@ confused. The tower planes are constant across any sample in which no tower fall
 promoted "unchanged on a thousand states" to "static" would freeze a tower at full health for the
 rest of a run and the policy would never see one die.
 
-``torch`` is imported inside ``unpack_to_device`` and nowhere else. Packing happens in the rollout
-workers, which are numpy-only processes; unpacking happens on the learner's device.
+``torch`` is imported only inside the unpacking methods and their helpers, never at module level.
+Packing happens in the rollout workers, which are numpy-only processes; unpacking happens on the
+learner's device.
 """
 
 from __future__ import annotations
 
+import functools
 import math
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -110,6 +112,37 @@ def _half(raw: Tensor) -> Tensor:
     if raw.storage_offset() % size or any(stride % size for stride in raw.stride()[:-1]):
         raw = raw.clone(memory_format=torch.contiguous_format)
     return raw.view(torch.float16)
+
+
+@functools.lru_cache(maxsize=64)
+def _plane_runs(planes: tuple[int, ...]) -> tuple[tuple[int, int, int], ...]:
+    """``(first destination plane, one past the last, first source plane)`` per consecutive run.
+
+    ``planes[i]`` is where source plane ``i`` goes. A run is a stretch in which each destination
+    is one more than the last, so the whole stretch is one slice on both sides. The table lists
+    each plane once; a repeat would make the result depend on which write landed last, so it is
+    refused rather than resolved.
+    """
+    if len(set(planes)) != len(planes):
+        raise ValueError(f"a plane is listed twice in {planes}")
+    runs: list[tuple[int, int, int]] = []
+    start = 0
+    for index in range(1, len(planes) + 1):
+        if index == len(planes) or planes[index] != planes[index - 1] + 1:
+            runs.append((planes[start], planes[index - 1] + 1, start))
+            start = index
+    return tuple(runs)
+
+
+def _write_planes(spatial: Tensor, planes: tuple[int, ...], source: Tensor) -> None:
+    """``spatial[:, :, planes] = source`` as slice copies, so no index ever reaches the device.
+
+    A list index is an ``index_put_`` whose index tensor is copied to the device and waited
+    for. A slice is a view. Each element receives the same value either way; only how it
+    arrives differs. ``source`` may broadcast over the first two axes, as the statics do.
+    """
+    for first, stop, offset in _plane_runs(planes):
+        spatial[:, :, first:stop].copy_(source[:, :, offset : offset + stop - first])
 
 
 def _count_states(spec: EnvSpec, sample: Sequence[dict[str, np.ndarray]]) -> int:
@@ -488,8 +521,6 @@ class SpatialObsCodec(ObsCodec):
 
         Everything is written into ``out``'s tensors, which the caller allocates once and reuses.
         """
-        import torch
-
         layout = self.layout
         if raw.ndim == 2:
             raw = raw.unsqueeze(1)
@@ -502,28 +533,36 @@ class SpatialObsCodec(ObsCodec):
         tiles_y, tiles_x = layout.tiles
         spatial = out.spatial.view(batch, frames, layout.planes, tiles_y, tiles_x)
 
+        # Nothing below reads a value back from the device. This runs once per minibatch and once
+        # per critic chunk, and a read-back there is a stream synchronisation: the host waits for
+        # every kernel already queued, so it can never run ahead of the device. Until 2026-09-26
+        # this was five synchronisations per call, found by reading the code: the divisor built on
+        # the device and tested there, and three list-indexed assignments whose index went to the
+        # device through a blocking copy.
         if layout.u8_planes:
             block = (
                 raw[:, :, layout.u8_start : layout.u8_stop]
                 .reshape(batch, frames, len(layout.u8_planes), tiles_y, tiles_x)
                 .to(spatial.dtype)
             )
-            divisor = torch.as_tensor(
-                layout.u8_divisor, dtype=spatial.dtype, device=spatial.device
-            )
-            if not bool(torch.all(divisor == 1)):
+            # The same test in the same precision, decided on the host from the layout's own
+            # tuple: a float32 comparison of the divisors with one, as the device used to do it.
+            if not self._unit_divisor(layout.u8_divisor, spatial.dtype):
+                divisor = self._divisor(layout.u8_divisor, spatial.dtype, spatial.device)
                 block = block / divisor.view(1, 1, -1, 1, 1)
-            spatial[:, :, list(layout.u8_planes)] = block
+            _write_planes(spatial, layout.u8_planes, block)
 
         if layout.f16_planes:
             half = _half(raw[:, :, layout.f16_start : layout.f16_stop]).reshape(
                 batch, frames, len(layout.f16_planes), tiles_y, tiles_x
             )
-            spatial[:, :, list(layout.f16_planes)] = half.to(spatial.dtype)
+            _write_planes(spatial, layout.f16_planes, half.to(spatial.dtype))
 
         if layout.static_planes:
-            spatial[:, :, list(layout.static_planes)] = statics.to(spatial.dtype).view(
-                1, 1, len(layout.static_planes), tiles_y, tiles_x
+            _write_planes(
+                spatial,
+                layout.static_planes,
+                statics.to(spatial.dtype).view(1, 1, len(layout.static_planes), tiles_y, tiles_x),
             )
 
         bits = self._mask_bits(raw, layout)
@@ -550,6 +589,28 @@ class SpatialObsCodec(ObsCodec):
 
         live = (raw != 0).any(dim=-1).view(batch, frames, 1, 1, 1)
         spatial.mul_(live.to(spatial.dtype))
+
+    def _unit_divisor(self, divisors: tuple[float, ...], dtype: Any) -> bool:
+        """Whether every divisor is one in ``dtype``, compared on the host, once per table."""
+        import torch
+
+        key = ("unit", divisors, dtype)
+        unit = self._shift_cache.get(key)
+        if unit is None:
+            unit = bool(torch.all(torch.tensor(divisors, dtype=dtype) == 1))
+            self._shift_cache[key] = unit
+        return unit
+
+    def _divisor(self, divisors: tuple[float, ...], dtype: Any, device: Any) -> Tensor:
+        """The divisors as a device tensor, built once per device rather than once per batch."""
+        import torch
+
+        key = ("divisor", divisors, dtype, device)
+        tensor = self._shift_cache.get(key)
+        if tensor is None:
+            tensor = torch.as_tensor(divisors, dtype=dtype, device=device)
+            self._shift_cache[key] = tensor
+        return tensor
 
     def _mask_bits(self, raw: Tensor, layout: RowLayout) -> Tensor:
         """``(B, k, n_actions)`` of the stored mask, unpacked least significant bit first."""

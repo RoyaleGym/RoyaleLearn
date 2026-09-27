@@ -535,6 +535,64 @@ def test_a_minibatch_carries_the_scalars_of_its_own_cells(rect: Fixture) -> None
             assert np.allclose(minibatch.returns.cpu().numpy(), buffer.ret.reshape(-1)[cells])
 
 
+def test_every_staged_column_is_exact_and_a_tensor_of_its_own(rect: Fixture) -> None:
+    """All eight per-row columns, bit for bit, in the dtype the update reads, and none of them a
+    view of the ring they were staged through.
+
+    The expected cells come from the BATCH, cut and sorted here, not from the minibatch's own
+    ``cells`` column: a column checked against itself would pass any mapping. Every column holds
+    values distinct per cell, so a row that arrives beside another row's scalars shows. And the
+    whole batch is gathered before anything is checked, with more minibatches than the ring has
+    slots, so a column that were a view of its slot would already hold a later minibatch's values
+    when it is compared with the rectangle.
+    """
+    buffer = fill_iteration(rect)
+    cycles, slots = CYCLES, SLOTS
+    buffer.set_values(torch.arange((cycles + 1) * slots, dtype=torch.float32).reshape(-1, slots))
+    buffer.set_advantages(
+        torch.arange(cycles * slots, dtype=torch.float32).reshape(cycles, slots) + 0.25,
+        torch.arange(cycles * slots, dtype=torch.float32).reshape(cycles, slots) * -3.0,
+    )
+    legal = (np.arange((cycles + 1) * slots) % 4).reshape(cycles + 1, slots) + 1
+    buffer.set_n_legal(torch.from_numpy(legal))
+    buffer.action[:cycles] = (np.arange(cycles * slots) * 7 % 2305).reshape(cycles, slots)
+    buffer.log_prob[:cycles] = -np.arange(cycles * slots, dtype=np.float32).reshape(
+        cycles, slots
+    ) / 9.0
+    minibatch_size = 3
+    expected_columns: dict[str, tuple[np.ndarray, torch.dtype]] = {
+        "actions": (buffer.action, torch.int64),
+        "log_probs": (buffer.log_prob, torch.float32),
+        "advantages": (buffer.advantage, torch.float32),
+        "returns": (buffer.ret, torch.float32),
+        "values": (buffer.value[:cycles], torch.float32),
+        "n_legal": (buffer.n_legal, torch.int64),
+    }
+    # One batch holding every cell: 48 cells in minibatches of 3 is 16 gathers against 4 slots.
+    for batch in collect(buffer, cycles * slots, minibatch_size, 1):
+        ring = buffer._ring
+        assert ring is not None
+        gathered = list(batch)
+        assert len(gathered) > len(ring.slabs), "the ring must wrap for the aliasing half"
+        for index, minibatch in enumerate(gathered):
+            start = index * minibatch_size
+            cells = np.sort(batch.cells[start : start + minibatch_size])
+            assert torch.equal(minibatch.cells, torch.from_numpy(cells.astype(np.int64)))
+            assert minibatch.cells.dtype == torch.int64
+            for name, (column, dtype) in expected_columns.items():
+                got = getattr(minibatch, name)
+                want = torch.from_numpy(np.take(column.reshape(-1), cells)).to(dtype)
+                assert got.dtype == dtype, name
+                assert got.is_contiguous() and got.storage_offset() == 0, name
+                assert torch.equal(got, want), (
+                    f"{name} of minibatch {index} is not its cells' values, or changed when a "
+                    "later gather reused its ring slot"
+                )
+            choice = np.flatnonzero(np.take(buffer.n_legal.reshape(-1), cells) > 1)
+            assert torch.equal(minibatch.choice_index, torch.from_numpy(choice.astype(np.int64)))
+            assert minibatch.n_choice == choice.size
+
+
 def test_a_minibatch_s_observations_are_the_rows_its_cells_name(rect: Fixture) -> None:
     buffer = fill_iteration(rect)
     spec = rect.spec

@@ -347,6 +347,137 @@ def test_the_mask_planes_are_the_environment_s_reshaped_mask(
     assert np.array_equal(planes.reshape(expected.shape), expected)
 
 
+def _unpack_before_2026_09_26(
+    codec: SpatialObsCodec, raw: Any, statics: Any, out: Any
+) -> None:
+    """``unpack_to_device`` as it was written before its synchronisations were taken out.
+
+    Kept verbatim as the reference the new one must equal bit for bit. It builds the divisor on
+    the device and tests it there, and writes the planes through list indices; the new one
+    decides the divisor on the host and writes through slices. Nothing else differs.
+    """
+    import torch
+
+    from royalelearn.rollout.codec import _half
+
+    layout = codec.layout
+    if raw.ndim == 2:
+        raw = raw.unsqueeze(1)
+    batch, frames, _row_bytes = raw.shape
+    tiles_y, tiles_x = layout.tiles
+    spatial = out.spatial.view(batch, frames, layout.planes, tiles_y, tiles_x)
+    if layout.u8_planes:
+        block = (
+            raw[:, :, layout.u8_start : layout.u8_stop]
+            .reshape(batch, frames, len(layout.u8_planes), tiles_y, tiles_x)
+            .to(spatial.dtype)
+        )
+        divisor = torch.as_tensor(layout.u8_divisor, dtype=spatial.dtype, device=spatial.device)
+        if not bool(torch.all(divisor == 1)):
+            block = block / divisor.view(1, 1, -1, 1, 1)
+        spatial[:, :, list(layout.u8_planes)] = block
+    if layout.f16_planes:
+        half = _half(raw[:, :, layout.f16_start : layout.f16_stop]).reshape(
+            batch, frames, len(layout.f16_planes), tiles_y, tiles_x
+        )
+        spatial[:, :, list(layout.f16_planes)] = half.to(spatial.dtype)
+    if layout.static_planes:
+        spatial[:, :, list(layout.static_planes)] = statics.to(spatial.dtype).view(
+            1, 1, len(layout.static_planes), tiles_y, tiles_x
+        )
+    bits = codec._mask_bits(raw, layout)
+    out.mask.copy_(bits[:, 0].to(out.mask.dtype))
+    out.mask_planes.view(batch, frames, layout.hand_size, tiles_y, tiles_x).copy_(
+        bits[:, :, 1:].reshape(batch, frames, layout.hand_size, tiles_y, tiles_x)
+    )
+    out.vector.copy_(_half(raw[:, 0, layout.vector_start : layout.vector_stop]))
+    live = (raw != 0).any(dim=-1).view(batch, frames, 1, 1, 1)
+    spatial.mul_(live.to(spatial.dtype))
+
+
+def _fresh_obs(spec: EnvSpec, count: int, frames: int) -> Any:
+    """Output tensors pre-filled with a sentinel, so a plane neither version writes still shows."""
+    import torch
+
+    from royalelearn.api.policy import ObsBatch
+
+    planes, tiles_y, tiles_x = spec.spatial_shape
+    return ObsBatch(
+        spatial=torch.full((count, frames * planes, tiles_y, tiles_x), 7.5),
+        mask_planes=torch.full((count, frames * spec.hand_size, tiles_y, tiles_x), 7.5),
+        vector=torch.full((count, spec.vector_size), 7.5),
+        mask=torch.zeros((count, spec.n_actions), dtype=torch.bool),
+    )
+
+
+def _same_bits(a: Any, b: Any) -> bool:
+    """Equal bit patterns, so a NaN compares equal to the same NaN and -0.0 differs from 0.0."""
+    import torch
+
+    if a.dtype != b.dtype or a.shape != b.shape:
+        return False
+    if a.dtype.is_floating_point:
+        return torch.equal(a.view(torch.int32), b.view(torch.int32))
+    return torch.equal(a, b)
+
+
+@pytest.mark.parametrize("variant", ["as_bound", "planes_shuffled", "divisor_not_one"])
+def test_the_decode_is_bit_for_bit_the_one_it_replaced(
+    codec: SpatialObsCodec, env_spec: EnvSpec, variant: str
+) -> None:
+    """Random bytes, not packed observations: every half-precision bit pattern a row can carry,
+    NaN payloads and infinities included, has to come back exactly as the old decode gave it.
+
+    Run on the layout as bound and on two rewritten ones, because the shipped table happens to
+    have mostly consecutive planes, which is the case slices handle most easily: the planes in a
+    shuffled order split into many runs of one, and a divisor other than one takes the division.
+    Two frames, one of them all zero bytes, so the per-frame zeroing is covered too.
+
+    Not covered, because no output can show it: whether the unit-divisor test is made in float32
+    as before. A divisor that is one only after rounding divides by exactly 1.0, which returns
+    every byte value unchanged, so both answers decode the same bits.
+    """
+    torch = pytest.importorskip("torch")
+    layout = codec.layout
+    rng = derive_generator(SEED, f"test/codec/bit-exact/{variant}")
+    if variant == "planes_shuffled":
+        every = np.array(layout.u8_planes + layout.f16_planes + layout.static_planes)
+        shuffled = tuple(int(p) for p in rng.permutation(every))
+        u8 = shuffled[: len(layout.u8_planes)]
+        f16 = shuffled[len(u8) : len(u8) + len(layout.f16_planes)]
+        static = shuffled[len(u8) + len(f16) :]
+        codec._layout = layout._replace(u8_planes=u8, f16_planes=f16, static_planes=static)
+    elif variant == "divisor_not_one":
+        divisors = tuple(float(d) for d in rng.integers(1, 9, size=len(layout.u8_planes)))
+        assert any(d != 1.0 for d in divisors)
+        codec._layout = layout._replace(u8_divisor=divisors)
+    count, frames = 5, 2
+    raw = torch.from_numpy(
+        rng.integers(0, 256, size=(count, frames, codec.layout.row_bytes), dtype=np.uint8)
+    )
+    raw[1, 1] = 0
+    tiles_y, tiles_x = env_spec.spatial_shape[1:]
+    statics = torch.from_numpy(
+        rng.normal(size=(len(codec.layout.static_planes), tiles_y, tiles_x)).astype(np.float32)
+    )
+    new, old = _fresh_obs(env_spec, count, frames), _fresh_obs(env_spec, count, frames)
+    codec.unpack_to_device(raw, statics, new)
+    _unpack_before_2026_09_26(codec, raw, statics, old)
+    for field in ("spatial", "mask_planes", "vector", "mask"):
+        assert _same_bits(getattr(new, field), getattr(old, field)), field
+    assert torch.isnan(new.spatial).any(), "random halves should include a NaN; the draw is weak"
+
+
+def test_a_plane_listed_twice_is_refused_rather_than_resolved() -> None:
+    from royalelearn.rollout.codec import _plane_runs
+
+    assert _plane_runs((0, 1, 2, 5, 6, 9)) == ((0, 3, 0), (5, 7, 3), (9, 10, 5))
+    assert _plane_runs((4, 3)) == ((4, 5, 0), (3, 4, 1))
+    assert _plane_runs(()) == ()
+    with pytest.raises(ValueError, match="listed twice"):
+        _plane_runs((1, 2, 1))
+
+
 def test_a_row_of_zero_bytes_decodes_to_a_zero_frame(
     codec: SpatialObsCodec, env_spec: EnvSpec, sample: list[dict[str, np.ndarray]]
 ) -> None:

@@ -141,6 +141,20 @@ class AdvantageInputs(NamedTuple):
     trainable: Tensor
 
 
+#: The per-row columns a minibatch carries, in the dtype it carries them in. Widening the int16
+#: columns on the host is the same exact conversion the device used to do.
+_STAGED_COLUMNS: dict[str, torch.dtype] = {
+    "actions": torch.int64,
+    "log_probs": torch.float32,
+    "advantages": torch.float32,
+    "returns": torch.float32,
+    "values": torch.float32,
+    "n_legal": torch.int64,
+    "choice_index": torch.int64,
+    "cells": torch.int64,
+}
+
+
 class _StagingRing:
     """A ring of pinned host slabs the gather stages through.
 
@@ -163,6 +177,8 @@ class _StagingRing:
         frames: int,
         row_bytes: int,
         device: torch.device | None = None,
+        *,
+        columns: bool = False,
     ) -> None:
         self.device = device if device is not None else torch.device("cpu")
         pin = self.device.type == "cuda" and torch.cuda.is_available()
@@ -171,6 +187,18 @@ class _StagingRing:
             for _ in range(slots)
         ]
         self.views = [slab.numpy() for slab in self.slabs]
+        # The per-row columns travel the same way and under the same event. They used to go up
+        # as pageable copies, and a copy from pageable memory is a blocking one: eight of them a
+        # minibatch, each waiting for every kernel already queued, so the host never ran ahead.
+        self.columns = [
+            {
+                name: torch.empty(rows, dtype=dtype, pin_memory=pin)
+                for name, dtype in _STAGED_COLUMNS.items()
+            }
+            if columns
+            else {}
+            for _ in range(slots)
+        ]
         self.events: list[Any] = [torch.cuda.Event() if pin else None for _ in range(slots)]
         self._next = 0
         self._held = 0
@@ -185,8 +213,21 @@ class _StagingRing:
             event.synchronize()
         return self.slabs[index], self.views[index]
 
+    def column(self, name: str, values: np.ndarray, device: torch.device) -> Tensor:
+        """``values`` on ``device``, staged through the held slot's pinned column ``name``.
+
+        The result is a fresh tensor of its own, contiguous and allocated like any other, never
+        a view of the slot: a view would change under the minibatch the next time the slot is
+        handed out, and a sliced or offset view can change how a kernel reads it.
+        """
+        staged = self.columns[self._held][name][: values.size]
+        staged.numpy()[...] = values
+        out = torch.empty(values.size, dtype=staged.dtype, device=device)
+        out.copy_(staged, non_blocking=True)
+        return out
+
     def copied(self) -> None:
-        """Called once the copy out of the slab just handed out has been enqueued."""
+        """Called once every copy out of the slot just handed out has been enqueued."""
         event = self.events[self._held]
         if event is not None:
             event.record()
@@ -633,6 +674,7 @@ class RectBuffer(ExperienceBuffer):
                 self.frame_stack,
                 self.layout.row_bytes,
                 self.device,
+                columns=True,
             )
             self._ring_rows = rows
 
@@ -656,27 +698,38 @@ class RectBuffer(ExperienceBuffer):
             staged = view[:count]
             staged[~live] = 0
         raw = slab[:count].to(self.device, non_blocking=True)
-        self._ring.copied()
+        # After the sort, so the index names rows of this minibatch as it is handed over.
+        legal = np.take(self.n_legal.reshape(-1), cells)
+        choice = np.flatnonzero(legal > 1)
+        ring = self._ring
+        device = self.device
+        columns = {
+            "actions": ring.column("actions", np.take(self.action.reshape(-1), cells), device),
+            "log_probs": ring.column(
+                "log_probs", np.take(self.log_prob.reshape(-1), cells), device
+            ),
+            "advantages": ring.column(
+                "advantages", np.take(self.advantage.reshape(-1), cells), device
+            ),
+            "returns": ring.column("returns", np.take(self.ret.reshape(-1), cells), device),
+            "values": ring.column(
+                "values", np.take(self.value[: self.cycles].reshape(-1), cells), device
+            ),
+            "n_legal": ring.column("n_legal", legal, device),
+            "choice_index": ring.column("choice_index", choice, device),
+            "cells": ring.column("cells", cells, device),
+        }
+        ring.copied()
 
         obs = self._empty_obs(count)
         statics = self._statics()
         self.codec.unpack_to_device(raw, statics, obs)
-        # After the sort, so the index names rows of this minibatch as it is handed over.
-        legal = np.take(self.n_legal.reshape(-1), cells)
-        choice = np.flatnonzero(legal > 1).astype(np.int64)
         return Minibatch(
             obs=obs,
-            actions=self._gather_column(self.action, cells, torch.int64),
-            log_probs=self._gather_column(self.log_prob, cells, torch.float32),
-            advantages=self._gather_column(self.advantage, cells, torch.float32),
-            returns=self._gather_column(self.ret, cells, torch.float32),
-            values=self._gather_column(self.value[: self.cycles], cells, torch.float32),
-            n_legal=torch.from_numpy(legal.astype(np.int64)).to(self.device),
-            choice_index=torch.from_numpy(choice).to(self.device),
             n_choice=int(choice.size),
-            cells=torch.from_numpy(cells.astype(np.int64)).to(self.device),
             n=count,
             weight=weight,
+            **columns,
         )
 
     def _stack_rows(self, cycle: np.ndarray, slot: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -712,10 +765,6 @@ class RectBuffer(ExperienceBuffer):
             available = np.where(previous >= 0, collected, carried)
             live[:, j] = live[:, j - 1] & ~ended & available
         return rows, live
-
-    def _gather_column(self, column: np.ndarray, cells: np.ndarray, dtype: torch.dtype) -> Tensor:
-        taken = np.take(column.reshape(-1), cells)
-        return torch.from_numpy(np.ascontiguousarray(taken)).to(device=self.device, dtype=dtype)
 
     def _empty_obs(self, count: int) -> ObsBatch:
         """The tensors one minibatch is unpacked into.
