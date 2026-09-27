@@ -60,6 +60,7 @@ _EXPORTS: dict[str, str] = {
     "freeze_alarms": ".freeze",
     "frozen_dtype": ".inference",
     "gae_recursion": ".gae",
+    "noop_checked_upstream": ".distribution",
     "reference_gae": ".gae",
     "resolve_dtype": ".nets",
     "standardise": ".ppo",
