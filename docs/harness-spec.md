@@ -884,6 +884,22 @@ torch.backends.cudnn.allow_tf32 = False
 torch.set_num_threads(config.determinism.torch_threads)      # default 1
 ```
 
+**The fill of memory nothing has written.** With deterministic algorithms on, torch also fills every
+tensor it allocates without values (`torch.empty` and every kernel output made the same way) with
+NaN, or with the largest integer, before handing it over (`torch.utils.deterministic.
+fill_uninitialized_memory`, on by default). That is a guard and not part of the arithmetic: a read of
+memory nothing wrote becomes the same loud value in every run instead of whatever was there. A program
+that reads only what it wrote computes the same bits with it off. It is also an extra full write of
+every such buffer, and on the S3 update that was 0.45-0.76 s of 8-9 s, 6-8% (RoyaleTraining D1,
+2026-09-26, a profiler trace of one update). So T2 keeps it where the harness is checking and turns
+it off everywhere else. It stays on through start-up (preflight, the VRAM probe) and in every
+iteration whose ratio invariant is checked, which includes the first `ppo.debug_assert_iterations`;
+it is off in every other iteration, collection and update alike. `coordinator` sets it at the top of
+each iteration from `learn.ppo.checks_due(config.ppo, iteration)`, the same rule the update's own
+checks use, and `determinism.apply` records the policy. Off costs the guard, not correctness: an
+uninitialised read would now make two runs of one identity differ, which is exactly what the
+determinism tests and a resume's digest comparison detect.
+
 `CUBLAS_WORKSPACE_CONFIG=:4096:8` must be set before torch initialises CUDA, so `cli.py` sets it from
 the config **before importing torch** and `determinism.apply` asserts it is already set, raising a
 message that names the entry point if not. Every worker sets `OMP_NUM_THREADS`,
