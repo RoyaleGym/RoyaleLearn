@@ -313,7 +313,7 @@ class BatchedInference:
 
         One read back to the host, not several: the actions, the log-probabilities' bits and the
         no-op check travel in one copy, and the policy statistics wait on the device until the
-        iteration's collection is drained.
+        iteration's row is built, after the update.
         """
         actor: Any = self.behaviour if self.behaviour is not None else self.model
         n = int(uniforms.numel())
@@ -464,11 +464,12 @@ class _StatAccumulator:
         """The learner's own rows only: a frozen opponent's entropy is not this run's.
 
         Every sum is computed here, on the device, exactly as it always was; only the reading of
-        it waits for ``drain``, which reads a whole iteration's rounds in three copies instead of
-        twelve reads a round, each of which waited for the stream. The rollout passes the choice
-        rows as the host's own index (``choice_index``, ``choice_count``), which picks the same
-        rows in the same order as the device's mask would, without asking the device how many
-        there are. A caller without one gets them from the mask, and pays that one read.
+        it waits for ``drain``, which reads a whole iteration's rounds in five copies (three of
+        sums, two for the row-by-row check) instead of twelve reads a round, each of which waited
+        for the stream. The rollout passes the choice rows as the host's own index
+        (``choice_index``, ``choice_count``), which picks the same rows in the same order as the
+        device's mask would, without asking the device how many there are. A caller without one
+        gets them from the mask, and pays that one read.
         """
         self.rows += rows
         p_noop = distribution.p_noop()

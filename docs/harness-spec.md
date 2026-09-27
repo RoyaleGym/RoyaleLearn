@@ -588,7 +588,9 @@ class ActorCritic(ABC, nn.Module):
     action.py:284, including after game over). They MUST assert it. Inside the update's
     minibatch loop, outside debug iterations, the harness has already asserted it for every
     trainable cell, in the critic pass (section 18.1, "How a row is classed, and what checks
-    it"), and MaskedCategorical skips its own check there."""
+    it"), and MaskedCategorical skips its own check there. The rollout's forwards skip it too:
+    they read the no-op bit back in the same copy as the actions, and a row without it stops
+    the round there."""
     arch: "ArchSpec"
     @abstractmethod
     def act(self, obs: ObsBatch, uniforms: Tensor) -> "ActResult": ...
@@ -643,7 +645,8 @@ class CodecTable(msgspec.Struct, frozen=True):
     than from a list of plane indices. Logged, hashed and written into every snapshot."""
     plane: tuple[tuple[str, str, float], ...]   # per spatial plane: (name, storage, divisor);
                                                 # storage in {"uint8", "float16", "static",
-                                                #             "derived"}
+                                                #             "derived"}; "derived" is reserved,
+                                                # and bind refuses it: nothing rebuilds one yet
     vector: str                                 # "float16"
     mask: str                                   # "bitpack"
     def digest(self) -> str: ...                # sha256 of the canonical JSON
@@ -892,8 +895,9 @@ integers, and True for bool (`torch.utils.deterministic.fill_uninitialized_memor
 It is a guard, not part of the arithmetic. For floats it turns a read of memory nothing wrote into a
 NaN the same in every run; for bool and uint8 it is not loud at all (an unwritten mask would read as
 every action legal). A program that reads only what it wrote computes the same bits with it off. It
-is also an extra full write of every such buffer: on the S3 update, 0.45-0.76 s of 8-9 s, 6-8%
-(RoyaleTraining D1, 2026-09-26, a profiler trace of one update).
+is also an extra full write of every such buffer. Measured on 2026-09-26 on an RTX 4070 Ti, the fill
+on against off, the mean of two timed updates each: 0.76 s of a 9.05 s update when every row runs
+the actor, and 0.45 s of a 7.08 s update when forced rows skip it (`critic_only`), 8% and 6%.
 
 So T2 keeps it where the harness is checking and turns it off elsewhere. `determinism.apply` turns it
 on, so start-up (preflight, the VRAM probe) runs with it, and so does anything outside an iteration
@@ -901,15 +905,17 @@ on, so start-up (preflight, the VRAM probe) runs with it, and so does anything o
 `learn.ppo.checks_due(config.ppo, iteration)` -- on in every iteration whose ratio invariant is
 checked, the first `ppo.debug_assert_iterations` included -- and also on in the first iteration a
 process runs, because after a resume that is where the process's leftovers first differ from a run
-that never stopped. The whole iteration runs under that setting, collection, update, gate and probe
-battles and checkpoint alike. Nothing records the setting; it is recomputed from the config and the
-iteration.
+that never stopped. Everything the coordinator's process does in the iteration runs under that
+setting: collection, the update, the checkpoint, and any battle it plays itself. Evaluation workers
+are separate processes and do not take the determinism settings, so the setting does not reach the
+battles they play. Nothing records the setting; it is recomputed from the config and the iteration.
 
 What still guards the iterations it is off in: every allocation on the harness's own path writes
 what it allocates (read, 2026-09-26, and `tests/test_fill_policy.py` compares the learner's digest
 with the fill off and forced on, on the CPU, walking the critic_only update); the ratio-invariant and
-non-finite alarms run every iteration; and for torch's own CUDA kernels, a two-run digest comparison
-past the debug window -- the A/B the training runs are measured with -- is the evidence. The
+non-finite alarms run every iteration; and for torch's own CUDA operations, a two-run digest
+comparison past the debug window -- the A/B the training runs are measured with -- is the evidence.
+That comparison has been run with `ppo.forced_rows` both `all` and `critic_only`. The
 determinism and resume tests in the suite stay inside the debug window and do not reach a fill-off
 iteration.
 
@@ -3349,8 +3355,12 @@ while cumulative_timesteps < limit:
 
 Every invariant reads only what collection wrote, so the batch is judged before anything learns from
 it, and a refused batch is never trained on. Until 8db7e0d the update ran first, and a refused batch
-was trained and then refused. The row is written before the alarms read it because a halt checkpoints
-the learner that row describes, and the row has to be in `metrics.jsonl` by then (section 12.2).
+was trained and then refused. One check still runs later: when the row is built, the rollout's
+statistics are drained, and the drain compares the rows they were taken over with the rows the
+decoded masks offer a choice on. That is after the update, and after a gate's candidate is stored.
+A failure there halts the run, and no checkpoint of the moved learner is written. The row is written
+before the alarms read it because a halt checkpoints the learner that row describes, and the row has
+to be in `metrics.jsonl` by then (section 12.2).
 
 **`rollout.overlap` is REFUSED as of 2026-09-22, and what follows describes what it would do
 rather than what it does.** Half of it exists: `BatchedInference.begin_iteration` takes a
@@ -3421,7 +3431,7 @@ therefore recorded in the checkpoint and in the ladder's `context` like any othe
 |---|---|
 | `config [--profile laptop\|workstation\|many-core] [-o run.json]` | write a fully populated default config |
 | `doctor [--config F]` | the start-up gates of section 7.7 on their own: build one env, print the engine build digests, the observation space and the codec table, run `mask_disagreements` over all 2304 non-no-op actions, check the action-layout identity, print the RAM ledger, the credit horizon, the geometry and the `run_id`. Seconds, and it catches most first-run failures |
-| `bench [--config F] [--seconds 60]` | measure and print section 2.3's table for **this** machine: env milliseconds per game-step, codec microseconds per row, boundary microseconds per round, inference milliseconds per round, update timesteps per second, peak VRAM, the rollout/update capacity ratio, and `ratio_max_abs_dev` over ten rounds beside the configured `ratio_atol`. It PRINTS that block; nothing writes `docs/throughput.md`, which is a page kept by hand, and a command that overwrote it would lose the prose around the numbers. `--iterations` caps the loop (default 3) and `--seconds` is a lower bound checked between iterations, never inside one |
+| `bench [--config F] [--seconds 60]` | measure and print section 2.3's table for **this** machine: env milliseconds per game-step, codec microseconds per row, boundary microseconds per round, inference milliseconds per round, update timesteps per second, peak VRAM, the rollout/update capacity ratio, and `ratio_max_abs_dev` over ten rounds beside the configured `ratio_atol`; under `run_exact`, also `checked_iteration`, whether the last timed iteration is one the harness checks (section 5.1). It PRINTS that block; nothing writes `docs/throughput.md`, which is a page kept by hand, and a command that overwrote it would lose the prose around the numbers. `--iterations` caps the loop (default 3) and `--seconds` is a lower bound checked between iterations, never inside one |
 | `train --config F [--run-name N] [--until-timesteps T] [--inline] [--device cuda\|cpu]` | a new run |
 | `resume --run DIR [--checkpoint PATH] [--until-timesteps T] [--allow-identity-drift]` | continue; refuses on an identity mismatch by default and names every differing field |
 | `verify-resume --config F [--iterations 6] [--split 3]` | section 12.4's proof, on the user's own machine |
@@ -3830,11 +3840,13 @@ applies.
   the host runs at most `staging_slots` minibatches ahead of the device. The minibatches decode the
   same bytes the pass checked, so no row reaches the loss unchecked. In debug iterations the loop
   keeps the check as well; an extension actor term's loss runs with it on, because a term may run the
-  actor on rows the pass never saw; and every caller outside the loop (rollout, evaluation, a model
-  used on its own) keeps it at construction. A cell that is not trainable never reaches the loss,
-  whatever its bytes hold: the bootstrap row, a cell no worker ever wrote (zero bytes, no-op bit
-  clear), or one a dead worker left holding an earlier iteration's row. So the check covers the
-  trainable cells, and a failure names how many there are and the first sixteen as (cycle, slot).
+  actor on rows the pass never saw; and every caller outside the loop but the rollout (evaluation, a
+  model used on its own) keeps it at construction. The rollout's forwards build their distributions
+  without it too: they read the no-op bit back in the same copy as the actions, and a row without it
+  stops the round there. A cell that is not trainable never reaches the loss, whatever its bytes
+  hold: the bootstrap row, a cell no worker ever wrote (zero bytes, no-op bit clear), or one a dead
+  worker left holding an earlier iteration's row. So the check covers the trainable cells, and a
+  failure names how many there are and the first sixteen as (cycle, slot).
 - On every iteration, two numpy comparisons check every trainable forced cell: its stored
   log-probability must be exactly 0.0 and its action the no-op. Anything else raises and names up to
   ten cells. This is the evidence for the zero-gradient argument the skip rests on, and it is the only

@@ -188,9 +188,10 @@ unmasked policy. Do not retune anything. Read the bundle, then re-run
 must be the ones the current weights produce on the stored bytes, so the ratio must be 1 to
 tolerance. It is the cheapest detector there is for a mask, codec or weight-version drift.
 Shipped tolerances are 1e-4 for float32 and 2e-2 for bfloat16 (`config.PPOConfig.ratio_atol`), so
-the alarm fires above 5e-4 or 0.1 depending on your run's precision. The metric is only computed
-on some iterations (`ppo.check_ratio_invariant_every`, 50, and `ppo.debug_assert_iterations`, 10
-from a start), so the alarm is only asked on those. Do nothing about learning rates: this is a
+the alarm fires above 5e-4 or 0.1 depending on your run's precision. The metric is measured on
+every iteration, and the alarm reads it every time. The hard assertion inside the update runs only
+on some iterations (the first `ppo.debug_assert_iterations`, 10, then every
+`ppo.check_ratio_invariant_every`, 50). Do nothing about learning rates: this is a
 code or version mismatch, and the bundle carries the outliers.
 
 **`nonfinite`.** A loss, a gradient or a logit was not finite. Usually an entirely masked

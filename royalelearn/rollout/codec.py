@@ -79,8 +79,9 @@ STORAGE_UINT8 = "uint8"
 STORAGE_FLOAT16 = "float16"
 #: A plane the layout declares static: held once per seat, never per row.
 STORAGE_STATIC = "static"
-#: A plane the learner can reconstruct from something else in the row. Nothing on the shipped
-#: observation is one; the mask planes, which are derived, are not spatial planes.
+#: Reserved for a plane the learner could rebuild from something else in the row. Nothing
+#: rebuilds one yet, so ``bind`` refuses a table that uses it. Nothing on the shipped observation
+#: would be one; the mask planes, which are derived, are not spatial planes.
 STORAGE_DERIVED = "derived"
 
 STORAGE: tuple[str, ...] = (STORAGE_UINT8, STORAGE_FLOAT16, STORAGE_STATIC, STORAGE_DERIVED)

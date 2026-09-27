@@ -59,7 +59,8 @@ measurements at the top of this page came from.
 
 ### What bench prints
 
-Ten lines, name and value. Here is what each one is.
+Ten lines, name and value, and an eleventh under `run_exact`, the default tier. Here is what each
+one is.
 
 | Line | What it means |
 |---|---|
@@ -72,6 +73,7 @@ Ten lines, name and value. Here is what each one is.
 | `rollout_capacity_ratio` | Update seconds divided by collection seconds. Above 1 means collection is the cheaper half. |
 | `vram_peak_mb` | Peak graphics memory this iteration, in decimal MB. A 4096 MiB card is 4,295 decimal MB, so read the percentage carefully. |
 | `ratio_max_abs_dev`, `ratio_atol` | Not throughput. They are a correctness check on the stored log probabilities, printed here because this is the command that has them. |
+| `checked_iteration` | Only under `run_exact`. True when the last timed iteration is one the harness checks: the first ten, then every fiftieth. A checked iteration also fills fresh memory before use, which costs a few percent of the update, and so does the first iteration of any process. At the shipped settings every bench iteration is a checked one, so bench's update rate includes that cost and a long run's later iterations are a little faster. |
 
 One caveat on `codec_us_per_row`. It is measured in the parent process, by packing a zero-filled
 observation 200 times, not in the workers on real battle data (`_codec_microseconds` in
@@ -136,11 +138,10 @@ Every iteration writes a row of metrics. The timing keys are defined in
 | `time/checkpoint`, `time/gate` | Saving, and judging a candidate against the frozen pool. |
 | `time/residual` | Iteration seconds not attributed to any phase above. |
 
-Three keys in that schema are written as `0.0` on every iteration today:
-`time/critic_pass`, `time/gae` and `time/overlap_saved` (`coordinator.py`, lines 1769 to 1774).
-The critic pass and GAE are not free, they simply happen inside the update, so their cost is
-already inside `time/update` and is not broken out. Do not read those zeros as "this part is
-instant".
+`time/critic_pass` and `time/gae` are measured. Both run inside the update, before its first
+epoch, so their seconds are also inside `time/update`: read them as parts of it, not in addition
+to it. `time/overlap_saved` is in the schema but not written, because overlapped collection does
+not exist yet.
 
 `time/residual` is the honest one to watch. Anything the harness spends that is not collection,
 update, checkpoint or gate shows up there as itself rather than being quietly absorbed.

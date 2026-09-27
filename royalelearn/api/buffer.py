@@ -40,7 +40,8 @@ class CodecTable(msgspec.Struct, frozen=True, omit_defaults=True):
 
     ``plane`` is one entry per spatial plane: its name, its storage in
     {"uint8", "float16", "static", "derived"}, and the divisor that takes the stored integer
-    back to the value the environment produced. Two runs whose tables differ are not comparable,
+    back to the value the environment produced. "derived" is reserved: nothing rebuilds such a
+    plane yet, so the codec refuses it at bind. Two runs whose tables differ are not comparable,
     and ``digest()`` is what says so.
     """
 

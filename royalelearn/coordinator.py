@@ -1528,9 +1528,12 @@ class LearningCoordinator:
         The batch is judged before anything learns from it. Every invariant, the probe's
         legality check among them, reads only what collection wrote, so asking first costs
         nothing -- and asking after the update is how a real run trained a refused batch of
-        22,627 rows for 18 optimizer steps and then saved the result. From the update's first
-        change until the row reporting it is written, the learner in memory is one no row
-        describes; ``_emergency`` is what that window is marked for.
+        22,627 rows for 18 optimizer steps and then saved the result. One check still runs
+        after the update: the drain of the rollout's statistics, when the row is built, compares
+        the rows they were taken over with the decoded masks' choice rows. From the update's
+        first change until the row reporting it is written, the learner in memory is one no row
+        describes; ``_emergency`` is what that window is marked for, so a failure of that check
+        saves no checkpoint of the moved learner.
         """
         began = time.perf_counter()
         sched = self.schedules.state(

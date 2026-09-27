@@ -37,9 +37,11 @@ from ..api.policy import ActionDistribution
 
 __all__ = ["MaskedCategorical", "noop_checked_upstream"]
 
-#: Set only inside the update's minibatch loop, after the critic pass has checked the no-op bit of
-#: every cell that loop can train on (docs/harness-spec.md section 18.1, "How a row is classed,
-#: and what checks it"). Everywhere else it is False and every distribution checks its own mask.
+#: Set in two places. Inside the update's minibatch loop, after the critic pass has checked the
+#: no-op bit of every cell that loop can train on (docs/harness-spec.md section 18.1, "How a row
+#: is classed, and what checks it"). And in the rollout's forwards, which read the no-op bit back
+#: in the same copy as the actions and refuse the round there. Everywhere else it is False and
+#: every distribution checks its own mask.
 _NOOP_CHECKED_UPSTREAM: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "noop_checked_upstream", default=False
 )
@@ -50,11 +52,12 @@ def noop_checked_upstream(active: bool = True) -> Iterator[None]:
     """Build distributions without their per-construction no-op check, inside this block only.
 
     The check is a device read-back, so inside a loop over minibatches it drains the stream once
-    a minibatch. Enter this only where every row the block can see has already been checked by
-    something else; the update enters it around each minibatch, after the critic pass, and not
-    in debug iterations. ``active=False`` turns the check back ON for its block, even inside an
-    enclosing one: the update uses it for extension terms, which may build distributions over
-    rows the critic pass never saw.
+    a minibatch. Enter this only where something else checks every row the block can see before
+    its result is used. The update enters it around each minibatch, after the critic pass, and
+    not in debug iterations. The rollout enters it around each forward, and checks the no-op bit
+    from the copy that brings the actions home. ``active=False`` turns the check back ON for its
+    block, even inside an enclosing one: the update uses it for extension terms, which may build
+    distributions over rows the critic pass never saw.
     """
     token = _NOOP_CHECKED_UPSTREAM.set(active)
     try:
@@ -122,7 +125,8 @@ class MaskedCategorical(ActionDistribution):
         # No row can be fully masked, because the action mask sets the no-op unconditionally --
         # including after game over (royalegym.action.GridActionParser.action_mask). A row that
         # violates it produces NaN everywhere downstream, so it is caught at the boundary --
-        # here, or, inside the update's minibatch loop, once an iteration in the critic pass.
+        # here; or, inside the update's minibatch loop, once an iteration in the critic pass; or,
+        # in the rollout, from the copy that brings the actions home.
         if not _NOOP_CHECKED_UPSTREAM.get() and not bool(mask[:, NOOP].all()):
             raise AssertionError(_noop_violation(mask))
         self._mask = mask
