@@ -488,6 +488,19 @@ def _compare_the_decodes(
     assert torch.isnan(new.spatial).any(), "random halves should include a NaN; the draw is weak"
 
 
+def test_a_plane_stored_as_derived_is_refused_because_nothing_writes_it(
+    codec: SpatialObsCodec, env_spec: EnvSpec
+) -> None:
+    """The storage kind is reserved; unpack writes byte, half and static planes and no other, so
+    a derived plane would reach the network as whatever that memory held before."""
+    table = codec._table
+    assert table is not None
+    name, _, divisor = table.plane[0]
+    derived = msgspec.structs.replace(table, plane=((name, "derived", divisor), *table.plane[1:]))
+    with pytest.raises(PreflightError, match="nothing in this codec reconstructs"):
+        SpatialObsCodec(derived).bind(env_spec)
+
+
 def test_a_plane_listed_twice_is_refused_rather_than_resolved() -> None:
     from royalelearn.rollout.codec import _plane_runs
 

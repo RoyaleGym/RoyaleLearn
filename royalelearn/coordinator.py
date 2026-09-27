@@ -872,6 +872,10 @@ class LearningCoordinator:
         self._learner_ahead_of_rows = False
         #: The env step and folder of the last checkpoint this process wrote or resumed from.
         self._saved_at: tuple[int, Path] | None = None
+        #: False until this process has run an iteration: under run_exact the first one keeps
+        #: the fill of unwritten memory on whatever its number, which after a resume is where a
+        #: process's leftovers first differ from those of a run that never stopped.
+        self._iterated_in_this_process = False
 
     # -- construction --------------------------------------------------------
 
@@ -1534,6 +1538,18 @@ class LearningCoordinator:
             cumulative_env_steps=self.cumulative_env_steps,
             cumulative_timesteps=self.cumulative_timesteps,
         )
+        if self.config.determinism.tier == "run_exact":
+            # Unwritten memory is filled only in the iterations the harness checks, and in the
+            # first one this process runs, where a resumed run's leftovers first differ from a
+            # straight run's: a guard that costs a full write of every fresh buffer and changes
+            # no value of a program that reads only what it wrote (docs/harness-spec.md 5.1).
+            # The whole iteration runs under it, its gate, probe and checkpoint included.
+            from .determinism import set_fill_uninitialized
+            from .learn.ppo import checks_due
+
+            first = not self._iterated_in_this_process
+            set_fill_uninitialized(first or checks_due(self.config.ppo, self.iteration))
+        self._iterated_in_this_process = True
         self.rng.iteration = self.iteration
         self.rng.shard_streams = self.rollout_component.shard_streams()
 

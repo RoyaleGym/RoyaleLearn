@@ -38,11 +38,13 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from royalegym.action import NOOP
+
 from ..api.policy import ObsBatch
 from ..api.rollout import GROUP_DEAD, GROUP_LEARNER, GROUP_SCRIPTED
 from ..seeding import ACT_CYCLE, derive_generator, stream_path
 from .buffer import _StagingRing
-from .distribution import MaskedCategorical
+from .distribution import MaskedCategorical, noop_checked_upstream, noop_violation_message
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.ladder import SnapshotStore
@@ -217,6 +219,12 @@ class BatchedInference:
         self._uniforms: np.ndarray | None = None
         self._uniform_cycle = -1
         self._stats = _StatAccumulator()
+        # What goes up to the device each forward, staged in pinned memory so the copy does not
+        # wait for the stream. One of each is enough: every forward ends in the blocking read of
+        # its actions, which cannot complete before the copies queued ahead of it have.
+        pin = self.device.type == "cuda" and torch.cuda.is_available()
+        self._uniform_staging = torch.empty(self.n_slots, dtype=torch.float32, pin_memory=pin)
+        self._choice_staging = torch.empty(self.n_slots, dtype=torch.int64, pin_memory=pin)
 
     # -- the iteration ------------------------------------------------------
 
@@ -282,9 +290,11 @@ class BatchedInference:
             obs = self.gather.observations(
                 np.full(rows.size, round_.cycle, dtype=np.int64), row_slots
             )
-            u = torch.from_numpy(np.ascontiguousarray(draw[row_slots])).to(self.device)
+            u = self._up(self._uniform_staging, draw[row_slots])
             if gid == GROUP_LEARNER:
-                chosen, chosen_log_probs = self._act_learner(obs, u)
+                chosen, chosen_log_probs = self._act_learner(
+                    obs, u, self._choice_rows(round_.cycle, row_slots)
+                )
                 log_probs[rows] = chosen_log_probs
             else:
                 chosen = self._act_frozen(self._snapshot(gid), obs, u)
@@ -292,26 +302,74 @@ class BatchedInference:
         self._stats.round(forwards=forwards, seconds=time.perf_counter() - started)
         return InferenceResult(actions=actions, log_probs=log_probs)
 
-    def _act_learner(self, obs: ObsBatch, uniforms: Tensor) -> tuple[np.ndarray, np.ndarray]:
+    def _act_learner(
+        self, obs: ObsBatch, uniforms: Tensor, choice_rows: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Sample the learner's seats, and record what the policy looked like doing it.
 
         Under ``no_grad`` and not ``inference_mode``: the actor sampled from here is the one the
         update differentiates, and a tensor produced in inference mode carries a flag that
         refuses to take part in a later autograd graph.
+
+        One read back to the host, not several: the actions, the log-probabilities' bits and the
+        no-op check travel in one copy, and the policy statistics wait on the device until the
+        iteration's collection is drained.
         """
         actor: Any = self.behaviour if self.behaviour is not None else self.model
-        with torch.no_grad():
+        n = int(uniforms.numel())
+        with torch.no_grad(), noop_checked_upstream():
             distribution = MaskedCategorical(actor.logits(obs).float(), obs.mask)
             actions = distribution.sample(uniforms)
             log_probs = distribution.log_prob(actions)
-            self._stats.policy(distribution, actions.numel())
-            return _numpy(actions, np.int64), _numpy(log_probs, np.float32)
+            self._stats.policy(
+                distribution,
+                actions.numel(),
+                self._up(self._choice_staging, choice_rows),
+                int(choice_rows.size),
+            )
+            host = _numpy(
+                torch.cat(
+                    [
+                        actions,
+                        log_probs.contiguous().view(torch.int32).to(torch.int64),
+                        _noop_flag(obs.mask),
+                    ]
+                ),
+                np.int64,
+            )
+        _refuse_without_noop(host, obs.mask)
+        # The log-probabilities crossed as their own bit patterns, so they are the same floats.
+        return host[:n].copy(), host[n : 2 * n].astype(np.int32).view(np.float32).copy()
 
     def _act_frozen(self, actor: Actor, obs: ObsBatch, uniforms: Tensor) -> np.ndarray:
         """Sample a pool opponent's seats. Nothing here is ever differentiated."""
-        with torch.inference_mode():
+        with torch.inference_mode(), noop_checked_upstream():
             distribution = MaskedCategorical(actor.logits(obs).float(), obs.mask)
-            return _numpy(distribution.sample(uniforms), np.int64)
+            actions = distribution.sample(uniforms)
+            host = _numpy(torch.cat([actions, _noop_flag(obs.mask)]), np.int64)
+        _refuse_without_noop(host, obs.mask)
+        return host[:-1].copy()
+
+    def _up(self, staging: Tensor, values: np.ndarray) -> Tensor:
+        """``values`` on the device, through ``staging``, in a copy that does not wait."""
+        staged = staging[: values.size]
+        staged.numpy()[...] = values
+        out = torch.empty(values.size, dtype=staging.dtype, device=self.device)
+        out.copy_(staged, non_blocking=True)
+        return out
+
+    def _choice_rows(self, cycle: int, slots: np.ndarray) -> np.ndarray:
+        """Which of these rows offered more than the no-op, counted from the stored mask bits.
+
+        Counted on the host from the same bytes the device decodes, so the policy statistics can
+        select the choice rows with an index instead of a mask: a boolean mask is a read-back,
+        because the size of what it selects is only known once the device has counted it.
+        """
+        layout = self.buffer.codec.layout
+        rows = self.buffer._stack_rows(np.full(slots.size, cycle, dtype=np.int64), slots)[0][:, 0]
+        packed = self.buffer.obs_view[rows, layout.mask_start : layout.mask_stop]
+        bits = np.unpackbits(packed, axis=1, count=layout.n_actions, bitorder="little")
+        return np.flatnonzero(bits.sum(axis=1) > 1)
 
     def _snapshot(self, group: int) -> Actor:
         """The frozen actor a group index names, through the plan's resident table."""
@@ -348,6 +406,7 @@ class _StatAccumulator:
     """Running sums over the rounds of one iteration."""
 
     __slots__ = (
+        "_pending",
         "choice_n_legal",
         "choice_rows",
         "entropy",
@@ -370,6 +429,9 @@ class _StatAccumulator:
         self._reset()
 
     def _reset(self) -> None:
+        #: Per round, not yet read: the float32, float64 and int64 sums, the host's count of
+        #: choice rows, the decoded masks' own choice flags, and the index the sums were taken on.
+        self._pending: list[tuple[Tensor, Tensor, Tensor, int, Tensor, Tensor]] = []
         self.rows = 0
         self.forwards = 0
         self.rounds = 0
@@ -392,35 +454,118 @@ class _StatAccumulator:
         self.rounds += 1
         self.seconds += seconds
 
-    def policy(self, distribution: MaskedCategorical, rows: int) -> None:
-        """The learner's own rows only: a frozen opponent's entropy is not this run's."""
+    def policy(
+        self,
+        distribution: MaskedCategorical,
+        rows: int,
+        choice_index: Tensor | None = None,
+        choice_count: int | None = None,
+    ) -> None:
+        """The learner's own rows only: a frozen opponent's entropy is not this run's.
+
+        Every sum is computed here, on the device, exactly as it always was; only the reading of
+        it waits for ``drain``, which reads a whole iteration's rounds in three copies instead of
+        twelve reads a round, each of which waited for the stream. The rollout passes the choice
+        rows as the host's own index (``choice_index``, ``choice_count``), which picks the same
+        rows in the same order as the device's mask would, without asking the device how many
+        there are. A caller without one gets them from the mask, and pays that one read.
+        """
         self.rows += rows
         p_noop = distribution.p_noop()
         n_legal = distribution.n_legal()
-        self.entropy += float(distribution.entropy().sum().item())
-        self.p_noop += float(p_noop.sum().item())
-        self.n_legal += float(n_legal.sum().item())
+        offered = n_legal > 1
+        if choice_index is None:
+            choice_index = torch.nonzero(offered).view(-1)
+            choice_count = int(choice_index.numel())
+        assert choice_count is not None
         # A row with one legal action holds with probability 1 and lifts by exactly 1, whatever
         # the policy is. Nine decisions in ten are that row on this environment, so a mean over
         # every row would report the elixir curve dragging a concentrated policy back towards
         # uniform -- the same defect that took `noop_entropy` and `entropy_normalised` onto
         # choice rows only.
-        choice = n_legal > 1
-        held = p_noop[choice]
-        widths = n_legal[choice].to(held.dtype)
-        self.choice_rows += int(choice.sum().item())
-        self.hold += float(held.sum().item())
-        self.hold_lift += float((held * widths).sum().item())
-        self.choice_n_legal += float(widths.sum().item())
-        gap = distribution.hold_gap()[choice].to(torch.float64)
+        held = p_noop.index_select(0, choice_index)
+        widths = n_legal.index_select(0, choice_index).to(held.dtype)
+        gap = distribution.hold_gap().index_select(0, choice_index).to(torch.float64)
         legal_log = widths.to(torch.float64).log()
-        self.gap += float(gap.sum().item())
-        self.gap_sq += float((gap * gap).sum().item())
-        self.legal_log += float(legal_log.sum().item())
-        self.legal_log_sq += float((legal_log * legal_log).sum().item())
-        self.gap_legal_log += float((gap * legal_log).sum().item())
+        self._pending.append(
+            (
+                torch.stack(
+                    [
+                        distribution.entropy().sum(),
+                        p_noop.sum(),
+                        held.sum(),
+                        (held * widths).sum(),
+                        widths.sum(),
+                    ]
+                ),
+                torch.stack(
+                    [
+                        gap.sum(),
+                        (gap * gap).sum(),
+                        legal_log.sum(),
+                        (legal_log * legal_log).sum(),
+                        (gap * legal_log).sum(),
+                    ]
+                ),
+                torch.stack([n_legal.sum(), offered.sum()]),
+                int(choice_count),
+                offered,
+                choice_index,
+            )
+        )
+
+    def _read_pending(self) -> None:
+        """The rounds' device sums, read and added in the order they were taken.
+
+        Each field is added up round by round in Python floats, as it was when every round read
+        its own sums, so the totals are the same numbers. The rows the statistics took as choice
+        rows are checked here, row by row, against the decoded masks': the two come from the
+        same stored bits by different routes, and a disagreement -- another row counted, or the
+        right count over the wrong rows -- means the statistics were taken over the wrong rows.
+        """
+        if not self._pending:
+            return
+        f32 = torch.stack([entry[0] for entry in self._pending]).tolist()
+        f64 = torch.stack([entry[1] for entry in self._pending]).tolist()
+        i64 = torch.stack([entry[2] for entry in self._pending]).tolist()
+        offered = torch.cat([entry[4] for entry in self._pending]).tolist()
+        indices = torch.cat([entry[5] for entry in self._pending]).tolist()
+        taken, cut = [], 0
+        for entry in self._pending:
+            taken.append(indices[cut : cut + entry[5].numel()])
+            cut += entry[5].numel()
+        start = 0
+        for index, (singles, doubles, counts, host_choice) in enumerate(
+            zip(f32, f64, i64, (entry[3] for entry in self._pending), strict=True)
+        ):
+            rows = self._pending[index][4].shape[0]
+            device_rows = [i for i, flag in enumerate(offered[start : start + rows]) if flag]
+            start += rows
+            entropy, p_noop, hold, hold_lift, choice_n_legal = singles
+            gap, gap_sq, legal_log, legal_log_sq, gap_legal_log = doubles
+            n_legal, _device_count = counts
+            if device_rows != taken[index] or len(device_rows) != host_choice:
+                raise AssertionError(
+                    f"rollout round {index} of this iteration: the decoded masks offered a choice "
+                    f"on rows {device_rows[:16]} and the statistics were taken over rows "
+                    f"{taken[index][:16]}; the codec and the host read the mask differently"
+                )
+            self.entropy += entropy
+            self.p_noop += p_noop
+            self.n_legal += float(n_legal)
+            self.choice_rows += host_choice
+            self.hold += hold
+            self.hold_lift += hold_lift
+            self.choice_n_legal += choice_n_legal
+            self.gap += gap
+            self.gap_sq += gap_sq
+            self.legal_log += legal_log
+            self.legal_log_sq += legal_log_sq
+            self.gap_legal_log += gap_legal_log
+        self._pending = []
 
     def drain(self) -> RoundStats:
+        self._read_pending()
         stats = RoundStats(
             rows=self.rows,
             forwards=self.forwards,
@@ -441,6 +586,17 @@ class _StatAccumulator:
         )
         self._reset()
         return stats
+
+
+def _noop_flag(mask: Tensor) -> Tensor:
+    """``(1,)`` int64: whether every row has its no-op, to ride home with the actions."""
+    return mask[:, NOOP].all().to(torch.int64).view(1)
+
+
+def _refuse_without_noop(host: np.ndarray, mask: Tensor) -> None:
+    """The distribution's own check, read from the copy the actions came home in."""
+    if not host[-1]:
+        raise AssertionError(noop_violation_message(mask))
 
 
 def _numpy(tensor: Tensor, dtype: Any) -> np.ndarray:

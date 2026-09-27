@@ -52,6 +52,7 @@ _EXPORTS: dict[str, str] = {
     "autocast_context": ".actor_critic",
     "bootstrap_values": ".gae",
     "build_schedule": ".schedules",
+    "checks_due": ".ppo",
     "chunked_critic_pass": ".ppo",
     "clipped_fraction": ".ppo",
     "discounted_returns": ".returns",

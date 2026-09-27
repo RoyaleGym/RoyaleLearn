@@ -343,6 +343,15 @@ class SpatialObsCodec(ObsCodec):
                     f"plane {name!r} is stored as {storage!r}, which is not one of "
                     f"{', '.join(STORAGE)}"
                 )
+            if storage == STORAGE_DERIVED:
+                # The storage kind is reserved and nothing reconstructs it yet: unpack writes the
+                # byte, half and static planes and no other, so a derived plane would reach the
+                # network holding whatever that memory held before -- NaN only in the iterations
+                # run_exact still fills (docs/harness-spec.md section 5.1).
+                raise PreflightError(
+                    f"plane {name!r} is stored as {STORAGE_DERIVED!r}, which nothing in this "
+                    "codec reconstructs; unpack would leave the plane unwritten"
+                )
         self._table = bound
         self._spec = spec
         self._layout = self._compute_layout(spec, bound)

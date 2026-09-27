@@ -524,6 +524,13 @@ def _bench(args: argparse.Namespace) -> int:
         )
     for name, value in report.items():
         print(f"{name:<32} {value:.6g}" if isinstance(value, float) else f"{name:<32} {value}")
+    if config.determinism.tier == "run_exact":
+        # A checked iteration pays run_exact's fill of unwritten memory and a run's later ones
+        # mostly do not (docs/harness-spec.md section 5.1), so say which one this row was.
+        from .learn.ppo import checks_due
+
+        checked = checks_due(config.ppo, int(report["iterations"]) - 1)
+        print(f"{'checked_iteration':<32} {checked}")
     print(
         "\npaste the block above into docs/throughput.md under a dated heading; "
         "nothing writes that page for you"

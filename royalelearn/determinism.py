@@ -39,6 +39,7 @@ __all__ = [
     "apply_blas_thread_env",
     "apply_cublas_workspace_config",
     "require_cublas_workspace_config",
+    "set_fill_uninitialized",
 ]
 
 #: The tiers a config may ask for. T1 is unconditional and is therefore not one of them.
@@ -95,6 +96,17 @@ def require_cublas_workspace_config(
     )
 
 
+def set_fill_uninitialized(on: bool) -> None:
+    """Turn torch's fill of unwritten memory on or off (docs/harness-spec.md section 5.1).
+
+    It has an effect only while deterministic algorithms are on. Read at every allocation, so a
+    change takes effect at the next one; nothing already allocated is touched.
+    """
+    import torch.utils.deterministic
+
+    torch.utils.deterministic.fill_uninitialized_memory = bool(on)
+
+
 def apply(
     tier: str, *, torch_threads: int = 1, entry_point: str = "royalelearn.cli"
 ) -> dict[str, Any]:
@@ -119,6 +131,7 @@ def apply(
         torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
+        set_fill_uninitialized(True)
         applied.update(
             deterministic_algorithms=True,
             cudnn_deterministic=True,

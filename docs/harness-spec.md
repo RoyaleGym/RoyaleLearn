@@ -117,7 +117,8 @@ row_bytes  = H*W * ( (S - s - f) * 1 + f * 2 )  +  2 * V  +  ceil(A / 8)
 float_row  = 4 * ( H*W * S + V )  +  A  +  H*W * hand_size
 ```
 
-On the catalogue the engine ships today, 95 cards, that is `S = 20`, `s = 2` static planes held once
+On the 95-card catalogue of 2026-09-22 (the engine's catalogue has grown since, and the vector with
+it; the arithmetic is the example, not a pin), that is `S = 20`, `s = 2` static planes held once
 per seat, `f = 2` hit-point planes, `H·W = 576`, `V = 1177`, `A = 2305`, `hand_size = 4`, giving
 `576*(16 + 2*2) + 2*1177 + 289 = 9 216 + 2 304 + 2 354 + 289 = 14 163 B` against
 `4*(576*20 + 1177) + 2 305 + 2 304 = 55 397 B`, 3.91 times smaller **[A]**. The final term of
@@ -884,6 +885,34 @@ torch.backends.cudnn.allow_tf32 = False
 torch.set_num_threads(config.determinism.torch_threads)      # default 1
 ```
 
+**The fill of memory nothing has written.** With deterministic algorithms on, torch also fills what
+it allocates without values -- `torch.empty`, `empty_like`, `new_empty`, `resize_` and the ops that
+allocate through them -- before handing it over: NaN for floating types, the largest value for
+integers, and True for bool (`torch.utils.deterministic.fill_uninitialized_memory`, on by default).
+It is a guard, not part of the arithmetic. For floats it turns a read of memory nothing wrote into a
+NaN the same in every run; for bool and uint8 it is not loud at all (an unwritten mask would read as
+every action legal). A program that reads only what it wrote computes the same bits with it off. It
+is also an extra full write of every such buffer: on the S3 update, 0.45-0.76 s of 8-9 s, 6-8%
+(RoyaleTraining D1, 2026-09-26, a profiler trace of one update).
+
+So T2 keeps it where the harness is checking and turns it off elsewhere. `determinism.apply` turns it
+on, so start-up (preflight, the VRAM probe) runs with it, and so does anything outside an iteration
+(`royalelearn eval`, `gate`, `play`). At the top of every iteration the coordinator sets it from
+`learn.ppo.checks_due(config.ppo, iteration)` -- on in every iteration whose ratio invariant is
+checked, the first `ppo.debug_assert_iterations` included -- and also on in the first iteration a
+process runs, because after a resume that is where the process's leftovers first differ from a run
+that never stopped. The whole iteration runs under that setting, collection, update, gate and probe
+battles and checkpoint alike. Nothing records the setting; it is recomputed from the config and the
+iteration.
+
+What still guards the iterations it is off in: every allocation on the harness's own path writes
+what it allocates (read, 2026-09-26, and `tests/test_fill_policy.py` compares the learner's digest
+with the fill off and forced on, on the CPU, walking the critic_only update); the ratio-invariant and
+non-finite alarms run every iteration; and for torch's own CUDA kernels, a two-run digest comparison
+past the debug window -- the A/B the training runs are measured with -- is the evidence. The
+determinism and resume tests in the suite stay inside the debug window and do not reach a fill-off
+iteration.
+
 `CUBLAS_WORKSPACE_CONFIG=:4096:8` must be set before torch initialises CUDA, so `cli.py` sets it from
 the config **before importing torch** and `determinism.apply` asserts it is already set, raising a
 message that names the entry point if not. Every worker sets `OMP_NUM_THREADS`,
@@ -1374,7 +1403,7 @@ Any other key is refused too, and that is new. The codec used to read the three 
 ignore the rest, so the day a builder started sending card identity, the planes would have been
 dropped from every row before the network saw them.
 
-On today's 95-card catalogue with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
+On the 95-card catalogue of 2026-09-22 with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
 `uint8` planes, the two hit-point planes as `float16`, and the two static planes. The hit-point planes
 are the only ones whose declared `high` reaches 64, since every other plane is a small integer count
 or an indicator in [0, 1]. They are also the only ones that fail the integer test, because they carry
@@ -1742,7 +1771,7 @@ vfeat    cat([pooled_c, Linear(V, E)(vector), legal_frac])        (B, 2C + E + P
 value    Linear(2C+E+P, value_hidden) ReLU Linear(value_hidden, 1) -> squeeze   (B,)
 ```
 
-*Worked example, the shipped defaults on today's 95-card catalogue:* `k = 1`, `S = 20`, `P = 4`, `E = 32`,
+*Worked example, the shipped defaults on the 95-card catalogue of 2026-09-22:* `k = 1`, `S = 20`, `P = 4`, `E = 32`,
 `C = 64`, `H x W = 32 x 18`, `V = 1177`, `A = 2305`, so `spatial` is `(B, 20, 32, 18)`, the trunk takes
 `1*(20 + 4) + 2 + 32 = 58` input channels and the stem is `Conv2d(58, 64, 3)`. Those numbers are an
 illustration of the expressions above and never appear in the code: on `MockEngine`'s 16-card
@@ -2913,7 +2942,7 @@ that absence is printed, so a resume the record could not vouch for does not rea
 
 On resume the store diffs the loaded config against the current one and **prints every difference**
 before continuing. A difference in an identity-hashed field is a refusal, not a warning: a policy
-trained on `MockEngine`'s 229-wide vector cannot load into the 1 177-wide one of the full catalogue, and
+trained on `MockEngine`'s 229-wide vector cannot load into the `12n + 37`-wide one of an n-card catalogue, and
 today nothing announces that mismatch.
 
 `load_checkpoint(folder, strict)` defaults to `strict=True` for a resume and is only `False` for
