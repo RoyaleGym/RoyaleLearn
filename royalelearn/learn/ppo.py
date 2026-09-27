@@ -77,6 +77,7 @@ __all__ = [
     "PPOUpdate",
     "adam_eps_floor_frac",
     "approx_kl",
+    "checks_due",
     "chunked_critic_pass",
     "clipped_fraction",
     "dual_clipped_fraction",
@@ -263,6 +264,19 @@ def chunked_critic_pass(
 
 #: How many offending cells a failed no-op check names and decodes for its message.
 _NOOP_CELLS_SHOWN = 16
+
+
+def checks_due(config: PPOConfig, iteration: int) -> bool:
+    """Whether ``iteration`` is one the harness checks: its ratio invariant is asserted.
+
+    Every debug iteration is one, and after them every ``check_ratio_invariant_every``-th. One
+    rule for the update's own check and for everything that follows it, such as run_exact's fill
+    of unwritten memory (docs/harness-spec.md section 5.1), so the two cannot drift apart.
+    """
+    if iteration < config.debug_assert_iterations:
+        return True
+    every = config.check_ratio_invariant_every
+    return every > 0 and iteration % every == 0
 
 
 def _row_validity(buffer: RectBuffer) -> Tensor:
@@ -1122,10 +1136,7 @@ class PPOUpdate(Update):
         return iteration < self.config.debug_assert_iterations
 
     def _ratio_check_due(self, iteration: int) -> bool:
-        if iteration < self.config.debug_assert_iterations:
-            return True
-        every = self.config.check_ratio_invariant_every
-        return every > 0 and iteration % every == 0
+        return checks_due(self.config, iteration)
 
     def _ratio_atol(self) -> float:
         dtype = getattr(self.model, "autocast_dtype", torch.float32)

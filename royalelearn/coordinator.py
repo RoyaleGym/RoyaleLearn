@@ -1534,6 +1534,15 @@ class LearningCoordinator:
             cumulative_env_steps=self.cumulative_env_steps,
             cumulative_timesteps=self.cumulative_timesteps,
         )
+        if self.config.determinism.tier == "run_exact":
+            # Unwritten memory is filled with NaN only in the iterations the harness checks,
+            # collection and update alike: a guard that costs a full write of every fresh
+            # buffer, and changes no value of a program that reads only what it wrote
+            # (docs/harness-spec.md section 5.1).
+            from .determinism import set_fill_uninitialized
+            from .learn.ppo import checks_due
+
+            set_fill_uninitialized(checks_due(self.config.ppo, self.iteration))
         self.rng.iteration = self.iteration
         self.rng.shard_streams = self.rollout_component.shard_streams()
 
