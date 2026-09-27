@@ -117,7 +117,8 @@ row_bytes  = H*W * ( (S - s - f) * 1 + f * 2 )  +  2 * V  +  ceil(A / 8)
 float_row  = 4 * ( H*W * S + V )  +  A  +  H*W * hand_size
 ```
 
-On the catalogue the engine ships today, 95 cards, that is `S = 20`, `s = 2` static planes held once
+On the 95-card catalogue of 2026-09-22 (the engine's catalogue has grown since, and the vector with
+it; the arithmetic is the example, not a pin), that is `S = 20`, `s = 2` static planes held once
 per seat, `f = 2` hit-point planes, `H·W = 576`, `V = 1177`, `A = 2305`, `hand_size = 4`, giving
 `576*(16 + 2*2) + 2*1177 + 289 = 9 216 + 2 304 + 2 354 + 289 = 14 163 B` against
 `4*(576*20 + 1177) + 2 305 + 2 304 = 55 397 B`, 3.91 times smaller **[A]**. The final term of
@@ -1402,7 +1403,7 @@ Any other key is refused too, and that is new. The codec used to read the three 
 ignore the rest, so the day a builder started sending card identity, the planes would have been
 dropped from every row before the network saw them.
 
-On today's 95-card catalogue with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
+On the 95-card catalogue of 2026-09-22 with `Reveal` off, `S = 20` and that rule splits them 16 / 2 / 2: sixteen
 `uint8` planes, the two hit-point planes as `float16`, and the two static planes. The hit-point planes
 are the only ones whose declared `high` reaches 64, since every other plane is a small integer count
 or an indicator in [0, 1]. They are also the only ones that fail the integer test, because they carry
@@ -1770,7 +1771,7 @@ vfeat    cat([pooled_c, Linear(V, E)(vector), legal_frac])        (B, 2C + E + P
 value    Linear(2C+E+P, value_hidden) ReLU Linear(value_hidden, 1) -> squeeze   (B,)
 ```
 
-*Worked example, the shipped defaults on today's 95-card catalogue:* `k = 1`, `S = 20`, `P = 4`, `E = 32`,
+*Worked example, the shipped defaults on the 95-card catalogue of 2026-09-22:* `k = 1`, `S = 20`, `P = 4`, `E = 32`,
 `C = 64`, `H x W = 32 x 18`, `V = 1177`, `A = 2305`, so `spatial` is `(B, 20, 32, 18)`, the trunk takes
 `1*(20 + 4) + 2 + 32 = 58` input channels and the stem is `Conv2d(58, 64, 3)`. Those numbers are an
 illustration of the expressions above and never appear in the code: on `MockEngine`'s 16-card
@@ -2941,7 +2942,7 @@ that absence is printed, so a resume the record could not vouch for does not rea
 
 On resume the store diffs the loaded config against the current one and **prints every difference**
 before continuing. A difference in an identity-hashed field is a refusal, not a warning: a policy
-trained on `MockEngine`'s 229-wide vector cannot load into the 1 177-wide one of the full catalogue, and
+trained on `MockEngine`'s 229-wide vector cannot load into the `12n + 37`-wide one of an n-card catalogue, and
 today nothing announces that mismatch.
 
 `load_checkpoint(folder, strict)` defaults to `strict=True` for a resume and is only `False` for
