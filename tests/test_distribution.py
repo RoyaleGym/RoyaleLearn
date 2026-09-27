@@ -185,6 +185,48 @@ def test_a_fully_masked_row_is_refused(torch: Any) -> None:
         MaskedCategorical(logits, mask)
 
 
+def test_the_check_is_skipped_inside_the_update_s_scope_and_nowhere_else(torch: Any) -> None:
+    """Only the update's minibatch loop may skip it, and only because the critic pass checked
+    every row it can see. The scope must end where it ends, and ``active=False`` must not skip."""
+    from royalelearn.learn.distribution import MaskedCategorical, noop_checked_upstream
+
+    logits = torch.zeros(4, 16)
+    mask = torch.ones(4, 16, dtype=torch.bool)
+    mask[2, 0] = False
+    with noop_checked_upstream():
+        MaskedCategorical(logits, mask)
+        with noop_checked_upstream(active=False):
+            MaskedCategorical(logits, mask)
+    with pytest.raises(AssertionError, match=r"mask\[NOOP\]"):
+        MaskedCategorical(logits, mask)
+    with noop_checked_upstream(active=False), pytest.raises(AssertionError, match=r"mask\[NOOP\]"):
+        MaskedCategorical(logits, mask)
+
+
+@pytest.mark.filterwarnings("ignore:Synchronization debug mode is a prototype feature")
+def test_on_cuda_a_distribution_in_the_update_s_scope_does_not_drain_the_stream(
+    torch: Any,
+) -> None:
+    """Why the scope exists: outside it the check reads the mask back and drains the stream,
+    which torch's sync debug mode turns into an error; inside it nothing is read back."""
+    from royalelearn.learn.distribution import MaskedCategorical, noop_checked_upstream
+
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA device on this machine, so there is no stream to drain")
+    logits = torch.zeros(4, 16, device="cuda")
+    mask = torch.ones(4, 16, dtype=torch.bool, device="cuda")
+    actions = torch.zeros(4, dtype=torch.int64, device="cuda")
+    torch.cuda.synchronize()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        with noop_checked_upstream():
+            MaskedCategorical(logits, mask).log_prob(actions)
+        with pytest.raises(RuntimeError, match="synchronizing"):
+            MaskedCategorical(logits, mask)
+    finally:
+        torch.cuda.set_sync_debug_mode("default")
+
+
 @pytest.mark.parametrize("dtype_name", ["bfloat16", "float16", "float64"])
 def test_logits_that_are_not_float32_are_refused(torch: Any, dtype_name: str) -> None:
     """Masking in bf16 is the bug this catches: ``finfo(bfloat16).min`` and a ``log_softmax``

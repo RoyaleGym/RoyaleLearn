@@ -24,6 +24,10 @@ torch's global generator.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+from collections.abc import Iterator
+
 import torch
 from torch import Tensor
 
@@ -31,7 +35,36 @@ from royalegym.action import NOOP
 
 from ..api.policy import ActionDistribution
 
-__all__ = ["MaskedCategorical"]
+__all__ = ["MaskedCategorical", "noop_checked_upstream"]
+
+#: Set only inside the update's minibatch loop, after the critic pass has checked the no-op bit of
+#: every cell that loop can train on (docs/harness-spec.md section 18.1, "How a row is classed,
+#: and what checks it"). Everywhere else it is False and every distribution checks its own mask.
+_NOOP_CHECKED_UPSTREAM: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "noop_checked_upstream", default=False
+)
+
+
+@contextlib.contextmanager
+def noop_checked_upstream(active: bool = True) -> Iterator[None]:
+    """Build distributions without their per-construction no-op check, inside this block only.
+
+    The check is a device read-back, so inside a loop over minibatches it drains the stream once
+    a minibatch. Enter this only where every row the block can see has already been checked by
+    something else; the update enters it for its minibatch loop, after the critic pass, and not
+    in debug iterations. ``active=False`` is a no-op, so a caller can decide at run time.
+    """
+    token = _NOOP_CHECKED_UPSTREAM.set(True) if active else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            _NOOP_CHECKED_UPSTREAM.reset(token)
+
+
+def noop_violation_message(mask: Tensor) -> str:
+    """The message a row without its no-op raises, for a caller that checked it elsewhere."""
+    return _noop_violation(mask)
 
 
 def _noop_violation(mask: Tensor) -> str:
@@ -87,8 +120,9 @@ class MaskedCategorical(ActionDistribution):
             )
         # No row can be fully masked, because the action mask sets the no-op unconditionally --
         # including after game over (royalegym.action.GridActionParser.action_mask). A row that
-        # violates it produces NaN everywhere downstream, so it is caught at the boundary.
-        if not bool(mask[:, NOOP].all()):
+        # violates it produces NaN everywhere downstream, so it is caught at the boundary --
+        # here, or, inside the update's minibatch loop, once an iteration in the critic pass.
+        if not _NOOP_CHECKED_UPSTREAM.get() and not bool(mask[:, NOOP].all()):
             raise AssertionError(_noop_violation(mask))
         self._mask = mask
         self._logp = torch.log_softmax(

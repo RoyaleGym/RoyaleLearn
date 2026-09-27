@@ -58,6 +58,7 @@ from ..api.update import ActorTermInputs, Update, UpdateResult, check_actor_term
 from ..config import PPOConfig
 from ..errors import CheckpointFormatError
 from ..seeding import PPO_MINIBATCH, derive_generator, stream_path
+from .distribution import noop_checked_upstream, noop_violation_message
 from .inference import RectGather
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -227,13 +228,27 @@ def chunked_critic_pass(
     n_legal = torch.zeros((cycles + 1, slots), dtype=torch.int64, device=buffer.device)
     flat, flat_legal = values.view(-1), n_legal.view(-1)
     total = (cycles + 1) * slots
+    # The no-op check for every cell the update can train on, made here because every mask is
+    # already unpacked here, and read once after the pass rather than once a minibatch in the loop
+    # (docs/harness-spec.md section 18.1). The bootstrap row is never trained on; a cell no worker
+    # wrote is zero bytes, no-op bit included, and is not trainable either.
+    trainable = np.zeros((cycles + 1, slots), dtype=bool)
+    trainable[:cycles] = buffer.trainable()
+    checked = torch.from_numpy(trainable.reshape(-1)).to(buffer.device)
+    missing = torch.zeros(total, dtype=torch.bool, device=buffer.device)
     step = max(1, int(chunk))
     for start in range(0, total, step):
         cells = np.arange(start, min(start + step, total), dtype=np.int64)
         obs = gather.observations(cells // slots, cells % slots)
+        stop = start + cells.size
         with torch.no_grad():
-            flat[start : start + cells.size] = model.value(obs).float()
-            flat_legal[start : start + cells.size] = obs.mask.sum(-1)
+            flat[start:stop] = model.value(obs).float()
+            flat_legal[start:stop] = obs.mask.sum(-1)
+            missing[start:stop] = checked[start:stop] & ~obs.mask[:, NOOP]
+    if bool(missing.any()):
+        offending = torch.nonzero(missing).view(-1).cpu().numpy()
+        obs = gather.observations(offending // slots, offending % slots)
+        raise AssertionError(noop_violation_message(obs.mask))
     return values * _row_validity(buffer), n_legal
 
 
@@ -521,15 +536,19 @@ class PPOUpdate(Update):
                 )
                 if first:
                     self._ratio_unchecked = False
-                self._minibatch(
-                    minibatch,
-                    sched,
-                    diagnostics,
-                    epoch,
-                    check=checking,
-                    first=first,
-                    actor_scale=actor_scale,
-                )
+                # The critic pass checked every trainable cell's no-op bit this iteration, so the
+                # distributions built below skip their own check, which would drain the stream
+                # once a minibatch. Debug iterations keep it anyway.
+                with noop_checked_upstream(active=not checking):
+                    self._minibatch(
+                        minibatch,
+                        sched,
+                        diagnostics,
+                        epoch,
+                        check=checking,
+                        first=first,
+                        actor_scale=actor_scale,
+                    )
             if self._skip_forced and not self._frozen:
                 self._zero_the_actors_missing_gradients()
             diagnostics.gradients(

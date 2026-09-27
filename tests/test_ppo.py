@@ -927,6 +927,46 @@ def test_the_stored_legal_count_is_checked_against_the_mask_a_minibatch_carries(
         update_for(model).step(buffer, SCHEDULE)
 
 
+def _clear_the_noop_bit(buffer: Any, cycle: int, slot: int) -> None:
+    """Corrupt one stored row the way a bad write would: its mask's no-op bit, bit 0 of the
+    mask's first byte (the codec packs least significant bit first)."""
+    row = buffer.layout.row_index(cycle, slot)
+    buffer.obs_view[row, buffer.codec.layout.mask_start] &= 0xFE
+
+
+def test_a_trainable_cell_without_its_noop_stops_the_update_before_any_step(
+    rect: Fixture,
+) -> None:
+    """The check moved out of the minibatch loop and into the critic pass, so it is tested where
+    it now is: past the debug iterations, where the loop no longer checks at all, a corrupted
+    trainable row must still stop the update, and before the optimizers have moved anything."""
+    model = build_model(rect.spec)
+    buffer = collect(rect, model)
+    assert buffer.trainable()[2, 3], "the corrupted cell must be one the update trains on"
+    _clear_the_noop_bit(buffer, 2, 3)
+    before = [p.detach().clone() for p in model.parameters()]
+    config = msgspec.structs.replace(CONFIG, debug_assert_iterations=0)
+
+    with pytest.raises(AssertionError, match=r"mask\[NOOP\]"):
+        update_for(model, config).step(buffer, msgspec.structs.replace(SCHEDULE, iteration=5))
+
+    assert all(torch.equal(a, b) for a, b in zip(before, model.parameters(), strict=True)), (
+        "the update stepped before the check stopped it"
+    )
+
+
+def test_a_cell_nobody_trains_on_may_lack_its_noop(rect: Fixture) -> None:
+    """The bootstrap row is valued and never trained on, and a cell no worker wrote is zero bytes
+    with its no-op bit clear by construction. The check covers the trainable cells; one that
+    covered the whole rectangle would stop every iteration that had a dead worker in it."""
+    model = build_model(rect.spec)
+    buffer = collect(rect, model)
+    _clear_the_noop_bit(buffer, CYCLES, 0)
+    config = msgspec.structs.replace(CONFIG, debug_assert_iterations=0)
+
+    update_for(model, config).step(buffer, msgspec.structs.replace(SCHEDULE, iteration=5))
+
+
 def test_the_asserts_stop_after_the_iterations_they_were_asked_for(rect: Fixture) -> None:
     """They are a start-up gate on a run's wiring, not a per-sample cost for its whole life."""
     from royalelearn.learn.inference import RectGather
