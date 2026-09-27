@@ -18,20 +18,26 @@ command block on this page is written for Windows PowerShell, the shell that ope
 Windows 10 and 11. One command trains:
 
 ```
-python -m royalelearn train --config examples\configs\smoke.json
+..\.venv\Scripts\python -m royalelearn train --config examples/configs/smoke.json
 ```
 
 Run that from inside the `RoyaleLearn` folder, because the config path is relative to the folder
-you are in. A line that spells out `.venv\Scripts\python` always runs the right Python. A line
-that says plain `python`, like the one above, runs whichever Python you get when you type
-`python`, and for a `royalelearn` command that has to be the virtual environment you make in
-Install below. On macOS and Linux everything here is the same, except that `.venv\Scripts\python`
-becomes `.venv/bin/python`.
+you are in. `..\.venv\Scripts\python` is the Python of the virtual environment you make in Install
+below, and a line that spells it out always runs the right Python. A line that says plain
+`python` assumes that virtual environment is active: `..\.venv\Scripts\Activate.ps1` in
+PowerShell, `source ../.venv/bin/activate` on macOS and Linux. Without it, `python` is your system
+Python, and the error names a missing package such as msgspec.
+
+On macOS and Linux everything here is the same except four things. `.venv\Scripts\python` becomes
+`.venv/bin/python`. Paths use forward slashes, because bash eats a backslash. `cp` replaces
+`Copy-Item`. And where Windows sets a variable, you write `export X=Y`. So the line above becomes
+`../.venv/bin/python -m royalelearn train --config examples/configs/smoke.json`.
 
 Two things to know before you try it.
 
 It needs torch, which is an extra rather than part of the plain install:
-`pip install -e "RoyaleLearn[torch]"`. Skip it and `train`, `doctor` and `bench` all stop with
+`.venv\Scripts\python -m pip install -e "RoyaleLearn[torch]"`, run from the `Royale` folder
+(Stage 6 of Install below). Skip it and `train`, `doctor` and `bench` all stop with
 `ModuleNotFoundError: No module named 'torch'`. Everything else works without torch on purpose,
 and the suite checks that it does.
 
@@ -62,6 +68,10 @@ second training run had still not finished after 46 minutes. A useful run is man
 Two complete iterations have happened, which is a loop that works rather than a result about
 learning. Nobody knows yet whether a bot trained this way is any good, and the harness logs
 `run/cumulative_timesteps` beside the rating so the first real run measures what it costs.
+
+Those times are on a graphics card. No GPU? `train` falls back to the CPU and says so, and
+`--device cpu` forces it. The update step is many times slower there: one update took 302 s on a
+4-CPU Linux machine with no GPU on 2026-09-27.
 
 Everything else is here and tested, and runs today. The configuration tree, the run identity,
 the networks, the observation codec, the rollout workers, the ladder, the metrics sinks and the
@@ -164,7 +174,9 @@ One step is one decision, and a decision is half a second of game time by defaul
 When a battle ends, its last observation goes to `infos["final_obs"]` and `infos["final_info"]`,
 and that row already holds the first observation of the next battle. Nothing stalls.
 
-To watch it, set `ROYALEVISER=127.0.0.1:9870` and run
+To watch it, set the variable `ROYALEVISER` in the terminal that runs the block. In PowerShell
+that is `$env:ROYALEVISER = "127.0.0.1:9870"`, in cmd `set ROYALEVISER=127.0.0.1:9870`, and on
+macOS and Linux `export ROYALEVISER=127.0.0.1:9870`. Then run
 `python -m royaleviser --stream 127.0.0.1:9870` in another terminal. That is how the picture at the
 top left of the grid was made.
 
@@ -198,10 +210,10 @@ line of the install below.
 All four of these work. `train` needs the torch extra; so do `doctor` and `bench`.
 
 ```
-python -m royalelearn train --config examples/configs/laptop.json
-python -m royalelearn config --profile laptop -o run.json
-python -m royalelearn doctor --config run.json
-python -m royalelearn bench
+..\.venv\Scripts\python -m royalelearn train --config examples/configs/laptop.json
+..\.venv\Scripts\python -m royalelearn config --profile laptop -o run.json
+..\.venv\Scripts\python -m royalelearn doctor --config run.json
+..\.venv\Scripts\python -m royalelearn bench
 ```
 
 In that order: `train` trains a bot. `config` writes a config file for you to edit. `doctor` runs
@@ -225,8 +237,10 @@ run, give it a name of its own, for example
 `python -m royalelearn train --config examples/configs/laptop.json --run-name second`.
 
 The config profiles are `laptop`, `workstation` and `many_core`. The first two also ship as files
-in `examples/configs/`. `workstation.json` has not been run yet. Its minibatch, the number of
-decisions the graphics card works through at once, is 2048, and nobody has measured it. If that
+in `examples/configs/`. All three ask for a graphics card (`"device": "cuda"`). Without one,
+`train` uses the CPU instead and says so, as above. `workstation.json` has not been run yet. Its
+minibatch, the number of decisions the graphics card works through at once, is 2048, and nobody
+has measured it. If that
 does not fit on your card, `train` stops at start-up and names a smaller value to use.
 
 If you would rather edit Python than a command line, start from `examples/train_1v1.py`. It is a
@@ -328,17 +342,23 @@ You now have four folders inside `Royale`. Every stage below starts from `Royale
 there.
 
 Stage 2 makes the virtual environment the four repos share and puts the build tools in it. The
-first line says plain `python`, and that is the Python already on your machine, because the venv
-does not exist yet. Every command after it names the venv's Python instead. pip prints a wall of
-text as it downloads. That is normal.
+venv must be Python 3.12 or newer, so the first line picks that Python by name. The second line
+checks it: it must print 3.12 or newer before you go on. Every command after that names the venv's
+Python. pip prints a wall of text as it downloads. That is normal.
 
 ```
-python -m venv .venv
-.venv\Scripts\python -m pip install maturin pytest hypothesis ruff
+py -3.12 -m venv .venv
+.venv\Scripts\python --version
+.venv\Scripts\python -m pip install maturin pytest hypothesis ruff numpy msgspec
 ```
 
-Stage 3 generates RoyaleSim's data tables into `RoyaleSim/data/derived/`. Those tables are
-generated rather than stored, so a fresh clone does not have them. This stage takes seconds.
+On macOS and Linux the first line is `python3.12 -m venv .venv`, and the check is
+`.venv/bin/python --version`. If plain `python --version` already prints 3.12 or newer,
+`python -m venv .venv` works too. An older Python compiles the engine for several minutes and is
+only refused at the install step.
+
+Stage 3 generates RoyaleSim's data tables into `RoyaleSim/data/derived/`. A clone carries only
+`cards-15.535.json` there; these lines generate the rest. This stage takes seconds.
 
 ```
 cd RoyaleSim
@@ -349,9 +369,12 @@ Copy-Item data\derived\cards-15.535.json data\derived\cards.json
 cd ..
 ```
 
-Stage 4 builds the engine into the venv. This is the long one. Give it a few minutes and some
-free memory. It compiles Rust and says almost nothing while it does, so a quiet terminal here is
-work in progress rather than a hang.
+On macOS and Linux the copy line is `cp data/derived/cards-15.535.json data/derived/cards.json`,
+and the other lines use `../.venv/bin/python` and forward slashes.
+
+Stage 4 builds the engine into the venv. This is the long one. It took 163 s and about 1 GB of
+memory on a 4-CPU Linux machine on 2026-09-27. It can go quiet for a minute or more on the engine
+itself; let it finish.
 
 ```
 cd RoyaleSim
@@ -376,6 +399,17 @@ else on this page still works, and `train`, `doctor` and `bench` stop with
 ```
 .venv\Scripts\python -m pip install -e "RoyaleLearn[torch]"
 ```
+
+No NVIDIA GPU? Install CPU torch first, then the line above:
+
+```
+.venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+On macOS and Linux that is
+`.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu`. On
+Linux the default torch download pulls about 5 GB of CUDA wheels (measured on a 4-CPU Linux
+machine on 2026-09-27).
 
 ## Status (2026-09-23)
 
