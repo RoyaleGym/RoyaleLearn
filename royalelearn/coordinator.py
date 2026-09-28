@@ -1398,13 +1398,14 @@ class LearningCoordinator:
         try:  # pragma: no cover
             self._probe_backward(torch)
         except Exception as exc:  # pragma: no cover - a failure here is the update's to report
-            # Not silent. The gate not running is survivable; what is not is that vram_needed_mb
-            # is then never set, so `vram_spilling` -- which compares against it -- stays quiet
-            # for the whole run and the row looks healthy because nothing measured it.
+            # Not silent. The gate not running is survivable, but then nothing checked at the
+            # start that one minibatch fits the card, and health/vram_needed_mb is never set.
+            # The vram_spilling alarm does not read that key (it watches time/update and the
+            # driver's free memory, since 6feaa23), so it still watches this run.
             self.printer(
                 f"the VRAM gate did not run: the probe raised {type(exc).__name__}: {exc}. "
-                "health/vram_needed_mb will be absent and the vram_spilling alarm cannot fire "
-                "for this run"
+                "Nothing checked that one minibatch fits the card, and health/vram_needed_mb "
+                "will be absent; the vram_spilling alarm still watches the update's time"
             )
             return
         peak = torch.cuda.max_memory_reserved()  # pragma: no cover

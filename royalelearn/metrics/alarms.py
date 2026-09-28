@@ -425,13 +425,13 @@ def default_alarms(
                 "means one of them has stopped telescoping rather than that a weight is wrong"
             ),
         ),
-        # The only threshold here measured on the machine it is applied to. `needed` is the
-        # device peak the preflight measured for THIS minibatch on THIS card, plus the
-        # configured headroom; `available` is free memory plus what this process already holds,
-        # which is what it could occupy if it asked. The preflight guards the first instant and
-        # nothing guarded the rest: another process taking memory at hour three produces the
-        # same several-times-slower run, silently, because this platform backs an oversubscribed
-        # allocation with host RAM rather than refusing it.
+        # The only threshold here measured on the run it is applied to: the update against this
+        # run's own best, while the driver reports the card full (SpillAlarm says why not the
+        # memory the preflight measured, which is what the first version compared). The
+        # preflight guards the first instant and nothing guarded the rest: another process
+        # taking memory at hour three produces the same several-times-slower run, silently,
+        # because this platform backs an oversubscribed allocation with host RAM rather than
+        # refusing it.
         #
         # It warns rather than halting, deliberately. Stopping a nine-hour run because a
         # neighbour got greedy is worse than the slowdown it would prevent, and the preflight

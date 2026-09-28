@@ -1729,9 +1729,9 @@ Their results go into the run identity and the checkpoint.
    reserved, and raises `PreflightError` naming the next legal minibatch when that peak plus the
    headroom exceeds what the driver reports free. The platform backs an oversubscribed allocation with
    host memory rather than refusing it, so without this the run would not fail, it would be several
-   times slower for its whole life. The peak plus the headroom is kept as `health/vram_needed_mb` for
-   the `vram_spilling` alarm. A probe that raises is let through silently and leaves that key unset;
-   that is open.
+   times slower for its whole life. The peak plus the headroom is kept as `health/vram_needed_mb`, a
+   reading for the row: the `vram_spilling` alarm does not use it (section 13.3). A probe that raises is
+   let through with a printed line saying the gate did not run, and leaves that key unset.
 
 ---
 
@@ -3202,7 +3202,7 @@ anchors under their older names.
 `rows_dropped_dead_worker`, `obs_codec_clipped`, `samples_unused_frac`, `nan_guard_trips`,
 `housekeeping_failures` (plus `housekeeping/{kind}` for each kind that has failed),
 `vram_peak_mb`, `rss_peak_mb`, `buffer_fill_frac`, and the device-memory regime read at the end of
-each iteration whenever CUDA is available: `vram_reserved_mb`, `vram_inactive_split_mb`,
+each iteration when the run's device is a CUDA device: `vram_reserved_mb`, `vram_inactive_split_mb`,
 `vram_driver_free_mb`, `vram_alloc_retries`, `vram_available_mb` (driver free plus what this process
 reserves) and `vram_needed_mb` (one minibatch's peak measured at startup plus
 `doctor.vram_headroom_mb`). The `vram_spilling` alarm reads `time/update` and `vram_driver_free_mb`;
