@@ -120,6 +120,25 @@ def test_the_host_and_the_device_must_agree_on_the_choice_rows() -> None:
         stats.drain()
 
 
+def test_the_right_count_over_the_wrong_rows_is_refused_too() -> None:
+    """One choice row swapped for a row with no choice: the count still agrees, the rows do not.
+
+    The test above drops a row, which a guard comparing only the counts also catches. This is the
+    case only a row-by-row comparison sees, and it is the one a codec reading the mask with its
+    rows in the wrong order would produce.
+    """
+    dist = _rounds("test/rollout-reads/disagree")[0]
+    host = np.flatnonzero(dist.mask.numpy().sum(axis=1) > 1)
+    single = np.flatnonzero(dist.mask.numpy().sum(axis=1) <= 1)
+    assert host.size and single.size, "the draw must have both kinds of row"
+    wrong = np.sort(np.concatenate([host[1:], single[:1]]))
+    assert wrong.size == host.size and not np.array_equal(wrong, host)
+    stats = _StatAccumulator()
+    stats.policy(dist, 12, torch.from_numpy(wrong), int(wrong.size))
+    with pytest.raises(AssertionError, match="read the mask differently"):
+        stats.drain()
+
+
 def _engine(
     env_spec: Any, observations: Any, device: str, *, forced: tuple[tuple[int, int], ...] = ()
 ) -> tuple[Fixture, Any, Any]:
