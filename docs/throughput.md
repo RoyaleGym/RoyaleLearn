@@ -75,6 +75,7 @@ one is.
 | `vram_peak_mb` | Peak graphics memory this iteration, in decimal MB. A 4096 MiB card is 4,295 decimal MB, so read the percentage carefully. |
 | `ratio_max_abs_dev`, `ratio_atol` | Not throughput. They are a correctness check on the stored log probabilities, printed here because this is the command that has them. |
 | `checked_iteration` | Only under `run_exact`. True when the last timed iteration is one the harness checks: the first ten, then every fiftieth. A checked iteration also fills fresh memory before use, and so does the first iteration of any process. In one timed comparison, on an RTX 4070 Ti on 2026-09-26 and on an older learner, that fill cost a few tenths of a second of a 7 to 9 second update (harness-spec section 5.1). Nobody has timed it on other cards. At the shipped settings every bench iteration is a checked one, so bench's update rate includes that cost, and a long run's later iterations skip it. |
+| `filled_iteration` | Only under `run_exact`. True when the last timed iteration filled fresh memory: a checked one, or the first iteration of the process. It differs from `checked_iteration` only for a one-iteration bench with no checks due, which the shipped settings never produce. |
 
 One caveat on `codec_us_per_row`. It is measured in the parent process, by packing a zero-filled
 observation 200 times, not in the workers on real battle data (`_codec_microseconds` in

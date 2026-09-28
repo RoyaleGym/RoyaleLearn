@@ -460,6 +460,20 @@ def _timesteps_for(config: RunConfig, iterations: int) -> int:
     return max(1, iterations) * config.ppo.timesteps_per_iteration
 
 
+def bench_fill_flags(ppo: Any, iterations: int) -> tuple[bool, bool]:
+    """Whether bench's last timed iteration was a checked one, and whether run_exact filled it.
+
+    Two answers because they differ: a process fills its first iteration whatever the checks
+    say (docs/harness-spec.md section 5.1), and a bench is one process, so a one-iteration bench
+    with no checks due was filled. ``checked_iteration`` alone printed False for it, and read as
+    a timing without the fill.
+    """
+    from .learn.ppo import checks_due
+
+    checked = checks_due(ppo, iterations - 1)
+    return checked, checked or iterations == 1
+
+
 def bench_report(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -530,12 +544,11 @@ def _bench(args: argparse.Namespace) -> int:
     for name, value in report.items():
         print(f"{name:<32} {value:.6g}" if isinstance(value, float) else f"{name:<32} {value}")
     if config.determinism.tier == "run_exact":
-        # A checked iteration pays run_exact's fill of unwritten memory and a run's later ones
+        # A filled iteration pays run_exact's fill of unwritten memory and a run's later ones
         # mostly do not (docs/harness-spec.md section 5.1), so say which one this row was.
-        from .learn.ppo import checks_due
-
-        checked = checks_due(config.ppo, int(report["iterations"]) - 1)
+        checked, filled = bench_fill_flags(config.ppo, int(report["iterations"]))
         print(f"{'checked_iteration':<32} {checked}")
+        print(f"{'filled_iteration':<32} {filled}")
     print(
         "\npaste the block above into docs/throughput.md under a dated heading; "
         "nothing writes that page for you"

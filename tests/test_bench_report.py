@@ -81,3 +81,28 @@ def test_the_report_carries_the_tolerance_its_deviation_is_judged_against() -> N
         "ratio_max_abs_dev",
         "ratio_atol",
     }
+
+
+@pytest.mark.parametrize(
+    ("debug", "every", "iterations", "flags"),
+    [
+        (0, 0, 1, (False, True)),  # the first iteration of the process: filled, not checked
+        (0, 0, 3, (False, False)),
+        (10, 50, 1, (True, True)),  # the shipped settings: iteration 0 is a checked one
+        (1, 2, 3, (True, True)),  # iteration 2 is due a ratio check
+    ],
+)
+def test_filled_is_checked_or_the_first_iteration_of_the_process(
+    debug: int, every: int, iterations: int, flags: tuple[bool, bool]
+) -> None:
+    """``checked_iteration`` alone printed False for a one-iteration bench with no checks due,
+    whose one iteration was filled because it was the first the process ran."""
+    import msgspec
+
+    from royalelearn import config as cfg
+    from royalelearn.cli import bench_fill_flags
+
+    ppo = msgspec.structs.replace(
+        cfg.laptop().ppo, debug_assert_iterations=debug, check_ratio_invariant_every=every
+    )
+    assert bench_fill_flags(ppo, iterations) == flags
