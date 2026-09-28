@@ -2223,8 +2223,9 @@ to `1e-4`. Under bf16 autocast they do not: the rollout forward is one policy gr
 to a hundred and fifty rows and the update forward is a minibatch of 256 on the laptop, cuDNN picks an
 algorithm per shape, and bf16's three significant digits put the resulting fp32 logits about 1e-2
 apart (section 8.2). `ratio_atol` is therefore `1e-4` with autocast off and `2e-2` under bf16, and
-`royalelearn bench` measures the actual `ratio_max_abs_dev` over ten rounds on the machine it is run
-on and prints it beside the tolerance, so a user can see the margin rather than trust it.
+`royalelearn bench` prints the actual `ratio_max_abs_dev` on the machine it is run on, beside the
+tolerance, so a user can see the margin rather than trust it. It is one reading: the last timed
+iteration's, taken on the first minibatch whose actor ran, not a maximum over several rounds.
 
 **AND THE TOLERANCE IS NOT A PROPERTY OF THE PRECISION ALONE. It is a property of the precision AND
 of how peaked the policy is, and a run at `net.noop_bias 8.0` died at iteration 6 on 2026-09-23

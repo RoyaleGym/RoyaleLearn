@@ -208,7 +208,8 @@ class CommittedElixirPotential(PotentialReward):
     then, while the copy lives, a Mirror play reads as its whole cost thrown away, for either
     seat, and
     ``test_a_mirror_play_puts_the_copied_cards_elixir_on_the_board`` is marked as an expected
-    failure. Only a catalogue with the Mirror in it is affected.
+    failure. Since RoyaleSim 6ad6793 the default catalogue holds the Mirror, so every run that
+    draws random decks from it is affected; a run on named decks without the Mirror is not.
 
     SPELLS ARE CHARGED AT THE TAP, through the bar, by construction: the bar drops by the spell's
     cost and nothing it leaves on the board is priced, so the elixir comes back only through what
