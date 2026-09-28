@@ -26,7 +26,8 @@ you are in. `..\.venv\Scripts\python` is the Python of the virtual environment y
 below, and a line that spells it out always runs the right Python. A line that says plain
 `python` assumes that virtual environment is active: `..\.venv\Scripts\Activate.ps1` in
 PowerShell, `source ../.venv/bin/activate` on macOS and Linux. Without it, `python` is your system
-Python, and the error names a missing package such as msgspec.
+Python, and the error names a missing package such as msgspec. If PowerShell refuses to run
+`Activate.ps1`, use the venv's python by path instead, as the lines that spell it out do.
 
 On macOS and Linux everything here is the same except four things. `.venv\Scripts\python` becomes
 `.venv/bin/python`. Paths use forward slashes, because bash eats a backslash. `cp` replaces
