@@ -196,7 +196,7 @@ def test_a_resume_restores_the_learner_byte_for_byte(tmp_path: Path) -> None:
 
 
 def test_a_resume_continues_the_original_row_for_row(tmp_path: Path) -> None:
-    """Six iterations straight through against three then three, compared field by field.
+    """Five iterations straight through against three then two, compared field by field.
 
     Episodes are four decisions and an iteration is four cycles, so every episode ends on an
     iteration boundary and the checkpoint is never taken mid-episode -- which is the condition
@@ -268,6 +268,98 @@ def test_an_episode_in_flight_is_not_replayed(tmp_path: Path) -> None:
     assert phase, (
         "a resume taken mid-episode reproduced the original's episode phase. If resuming "
         "inside an episode is now offered, widen the guarantee above and delete this test."
+    )
+
+
+#: A metric key that is a wall-clock reading under another prefix: the gate's share of the run's
+#: time. Left out beside ``time/`` and the rest in the test below, the one here where a gate runs.
+GATE_CLOCK = frozenset({"ladder/gate_seconds_frac"})
+
+
+def limit_config(tmp_path: Path) -> cfg.RunConfig:
+    """``aligned_config`` with a periodic checkpoint and a gate every two iterations (16 env
+    steps each), so a run stopped at iteration three stops between two of each."""
+    config = aligned_config(tmp_path)
+    config.checkpoint = msgspec.structs.replace(config.checkpoint, every_env_steps=16)
+    gate = msgspec.structs.replace(
+        config.ladder.gate,
+        champion_games=8,
+        anchor_games=8,
+        stratified_snapshots=2,
+        stratified_games=8,
+        bootstrap_resamples=200,
+    )
+    config.ladder = msgspec.structs.replace(
+        config.ladder, candidate_every_env_steps=16, gate=gate
+    )
+    # The gate's battles in this process rather than an evaluation farm's: a toy gate, cheaply.
+    config.rollout = msgspec.structs.replace(config.rollout, eval_workers=1)
+    return config
+
+
+def checkpoints_of(run_dir: Path) -> dict[int, int]:
+    """``{env step: iteration}`` for every checkpoint in the run, read from each manifest."""
+    found = {}
+    for manifest in sorted((run_dir / "checkpoints").glob("*/manifest.json")):
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        found[data["cumulative_env_steps"]] = data["iteration"]
+    return found
+
+
+def test_a_run_that_reached_its_limit_continues_from_its_end(tmp_path: Path) -> None:
+    """Five iterations straight through against a run to three extended to five, row by row.
+
+    A run used to close at its limit without a checkpoint, so everything since its last
+    periodic one existed nowhere and an extension replayed it. Three is not a multiple of the
+    two-iteration cadence, so a run stopped there had iteration two as its newest checkpoint.
+
+    A gate runs every two iterations as well, because extending from the end also needs the
+    gate's cadence where a straight run has it. A resume used to start the gate's cadence, and
+    the floor's and the checkpoint's, at the checkpoint it loaded: resumed at iteration three,
+    the gate ran at five where the straight run's ran at four. Where a gate admits a snapshot
+    that changes who the learner trains against.
+    """
+    whole_dir = run_to(limit_config(tmp_path / "whole"), SPLIT + AFTER)
+    whole = rows(whole_dir)
+    assert whole[SPLIT]["ladder/gate_attempts"] > whole[SPLIT - 1]["ladder/gate_attempts"], (
+        f"no gate ran at iteration {SPLIT + 1} of the straight run, so this test cannot see "
+        "where a resumed run's gate runs"
+    )
+
+    config = limit_config(tmp_path / "split")
+    split_dir = run_to(config, SPLIT)
+    newest = max(checkpoints_of(split_dir).values())
+    assert newest == SPLIT, (
+        f"the run stopped at iteration {SPLIT} and its newest checkpoint is iteration {newest}: "
+        "what it learned since is on no disk"
+    )
+
+    done = resume(split_dir, until=timesteps_for(config, SPLIT + AFTER))
+    skip_if_a_sibling_moved(done)
+    assert done.returncode == 0, f"resume failed:\n{done.stdout}\n{done.stderr}"
+    continued = rows(split_dir)
+    assert len(continued) == len(whole) == SPLIT + AFTER, (
+        f"{len(continued)} rows against {len(whole)}: the extension replayed or skipped iterations"
+    )
+    for index in range(SPLIT, SPLIT + AFTER):
+        original, resumed = whole[index], continued[index]
+        assert resumed["run/state_digest"] == original["run/state_digest"], (
+            f"iteration {index + 1} of the extended run reached a different state than the same "
+            f"iteration of a straight run"
+        )
+        differing = {
+            key: (original.get(key), resumed.get(key))
+            for key in sorted(set(original) | set(resumed))
+            if key not in MACHINE_READINGS | GATE_CLOCK
+            and not key.startswith(("time/", "throughput/", "run/wall_seconds"))
+            and original.get(key) != resumed.get(key)
+        }
+        assert not differing, f"iteration {index + 1} differs in {differing}"
+
+    straight, extended = checkpoints_of(whole_dir), checkpoints_of(split_dir)
+    assert set(straight) <= set(extended), (
+        f"the extended run saved at env steps {sorted(extended)}, which misses the straight "
+        f"run's {sorted(set(straight) - set(extended))}: its checkpoint cadence moved"
     )
 
 

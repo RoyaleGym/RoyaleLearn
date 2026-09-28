@@ -173,6 +173,10 @@ entirely; the manual `c`, the quit save, and the crash save all still work.
 A checkpoint is also written when:
 
 - you write `c` or `q` to the control file, or press Ctrl-C;
+- the run reaches its `timestep_limit` (or `--until-timesteps`), unless the last periodic save
+  already holds that learner. This save does not move the periodic schedule, so a run you extend
+  from it saves where one run straight through would have. Before this, a run that finished kept
+  only its last periodic save, and everything after it was lost;
 - an alarm halts the run (it checkpoints, then writes a diagnostic bundle, then raises);
 - the run crashes, with one important exception described next.
 
@@ -313,17 +317,27 @@ The practical effect:
 | an episode boundary for every battle | the following iterations reproduce the original run field for field, including the state digest |
 | the middle of some battles | the same battles against the same opponents, but the episode counts and episode length averages in the first rows after the resume differ from an uninterrupted run |
 
+A checkpoint also records where each schedule last fired: the periodic save, the gate's next
+candidate, and the floor's admission. A resume puts them back, so the gate runs at the same
+iterations it would have without the stop. A resume used to restart all three at the checkpoint
+it loaded. Then a gate that was due between the save and the next one ran a whole cadence late,
+and a gate that admits a snapshot changes who the learner trains against. A checkpoint written
+before these were recorded still resumes the old way.
+
 Both of those are tested rather than asserted in prose.
-`tests/test_resume.py::test_a_resume_continues_the_original_row_for_row` runs six iterations
-straight through, then three plus three, and compares every metric field.
+`tests/test_resume.py::test_a_resume_continues_the_original_row_for_row` runs five iterations
+straight through, then three plus two, and compares every metric field.
 `tests/test_resume.py::test_an_episode_in_flight_is_not_replayed` measures the gap, and is written
 so that it fails if resuming inside an episode ever becomes possible.
+`tests/test_resume.py::test_a_run_that_reached_its_limit_continues_from_its_end` stops a run at
+iteration three, between two periodic saves and two gates, extends it to five, and compares every
+metric field with a run straight to five.
 
 ```bash
 python -m pytest tests/test_resume.py --collect-only -q -m slow
 ```
 
-Those five tests are marked `slow` and are excluded from the default suite, so you have to ask for
+Those six tests are marked `slow` and are excluded from the default suite, so you have to ask for
 them by name.
 
 Two smaller things that also do not come back: the wall clock columns (`time/`, `throughput/`) are

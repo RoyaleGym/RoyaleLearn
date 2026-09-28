@@ -427,6 +427,12 @@ def _is_publisher(value: Any) -> bool:
     return value is not True and value is not False and hasattr(value, "publish")
 
 
+def _recorded(step: int | None, checkpoint_step: int) -> int:
+    """A cadence's last step as a manifest recorded it, or the checkpoint's own step for a
+    manifest written before cadences were recorded, which is what every resume used then."""
+    return checkpoint_step if step is None else int(step)
+
+
 class PolicyProbe(RowBehaviour):
     """What the policy did, measured on a bounded sample of the iteration's own cells.
 
@@ -1496,6 +1502,11 @@ class LearningCoordinator:
         The whole loop is wrapped, ``KeyboardInterrupt`` explicitly: it is not an ``Exception``,
         so a bare ``except Exception`` would skip its own emergency save on Ctrl-C, which is
         the one crash a long run actually experiences.
+
+        A run that reaches its limit saves itself on the way out. It used to close without a
+        checkpoint, so everything since the last periodic one existed nowhere: the train
+        session's IL3 stopped at iteration 199 with its newest checkpoint at 119, and a launcher
+        that took the newest checkpoint for the run's end resumed it from 119 twelve times.
         """
         if not self._entered:
             raise RuntimeError("a LearningCoordinator runs inside its own with-block")
@@ -1505,6 +1516,8 @@ class LearningCoordinator:
             while self.cumulative_timesteps < limit:
                 if self._iterate(started) == "q":
                     break
+            else:
+                self._final_checkpoint()
         except (Exception, KeyboardInterrupt) as exc:
             self._emergency(exc)
             raise
@@ -2194,16 +2207,34 @@ class LearningCoordinator:
             state_digest=self.state_digest(),
             component_versions={},
             files={},
+            last_checkpoint_step=self._last_checkpoint_step,
+            last_candidate_step=self._last_candidate_step,
+            last_floor_step=self._last_floor_step,
         )
 
-    def _checkpoint(self) -> Path:
+    def _final_checkpoint(self) -> None:
+        """Save the learner a run that reached its limit ends with, unless it is on disk already.
+
+        On disk already means the last iteration's periodic save holds it, or the run was
+        resumed at its limit and the learner is the checkpoint it loaded. The save does not
+        move the checkpoint cadence: a run extended from here saves where one run straight
+        through would have.
+        """
+        if self._saved_at is not None and self._saved_at[0] == self.cumulative_env_steps:
+            return
+        self._checkpoint(moves_cadence=False)
+
+    def _checkpoint(self, *, moves_cadence: bool = True) -> Path:
         started = time.perf_counter()
         self.rng.iteration = self.iteration
         self.rng.shard_streams = self.rollout_component.shard_streams()
+        # The cadence moves BEFORE the manifest is built, so the manifest records where it
+        # stands after this save and a resume from here continues it from the same place.
+        if moves_cadence:
+            self._last_checkpoint_step = self.cumulative_env_steps
         path = self.store.write(self.components, self.manifest())
         self._saved_at = (self.cumulative_env_steps, path)
         self.store.prune(keep=self.config.checkpoint.keep)
-        self._last_checkpoint_step = self.cumulative_env_steps
         self._last_checkpoint_seconds = time.perf_counter() - started
         self.printer(f"checkpoint    {path}")
         return path
@@ -2264,10 +2295,14 @@ class LearningCoordinator:
         )
         self.gate_seconds_unknown = manifest.gate_seconds is None
         self.gate_seconds_total = manifest.gate_seconds or 0.0
-        self._last_checkpoint_step = manifest.cumulative_env_steps
-        self._saved_at = (manifest.cumulative_env_steps, Path(path))
-        self._last_candidate_step = manifest.cumulative_env_steps
-        self._last_floor_step = manifest.cumulative_env_steps
+        # Each cadence continues from where it last fired, as recorded. Starting them at this
+        # checkpoint instead moved the gate: resumed from a save between two gates, the next
+        # gate ran a whole cadence after the save rather than where the run had it due.
+        here = manifest.cumulative_env_steps
+        self._last_checkpoint_step = _recorded(manifest.last_checkpoint_step, here)
+        self._saved_at = (here, Path(path))
+        self._last_candidate_step = _recorded(manifest.last_candidate_step, here)
+        self._last_floor_step = _recorded(manifest.last_floor_step, here)
         self.ratings = self.rater.table
         if self.ratings is not None:
             self.pool.note_refit(self.ratings)

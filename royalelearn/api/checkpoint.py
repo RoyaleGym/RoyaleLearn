@@ -73,6 +73,13 @@ class Manifest(msgspec.Struct):
     #: Stored as plain data and converted by the coordinator, so this module need not import
     #: the ladder's types: ``api.ladder`` already imports this one.
     last_decision: dict[str, Any] | None = None
+    #: The env step each cadence last fired at: the periodic checkpoint, the gate's candidate
+    #: and the floor's admission. A resume puts them back, so each fires where it would have in
+    #: a run that never stopped. None on a manifest written before they were recorded; a resume
+    #: then starts all three at this checkpoint's env step, as every resume did before.
+    last_checkpoint_step: int | None = None
+    last_candidate_step: int | None = None
+    last_floor_step: int | None = None
 
 
 class RngState(msgspec.Struct):

@@ -707,6 +707,100 @@ def test_the_gate_state_survives_a_resume(tmp_path: Path) -> None:
         assert again.gate_seconds_total == pytest.approx(seconds)
 
 
+def _checkpoints(run_dir: Path) -> dict[int, dict[str, Any]]:
+    """``{env step: manifest}`` for every checkpoint the run holds."""
+    import json
+
+    return {
+        int(manifest.parent.name): json.loads(manifest.read_text(encoding="utf-8"))
+        for manifest in (Path(run_dir) / "checkpoints").glob("*/manifest.json")
+    }
+
+
+def test_a_run_that_reaches_its_limit_saves_on_the_way_out(tmp_path: Path) -> None:
+    """No periodic save falls inside a tiny run, so the one checkpoint is the save at the limit.
+
+    It used to close without one. The save records the periodic cadence where it stood, at 0, so
+    a run extended from it saves where one run straight through would have.
+    """
+    config = tiny_config(tmp_path, alarms=cfg.AlarmConfig(enabled=False))
+    with coordinator(config) as run:
+        run.learn(until_timesteps=config.ppo.timesteps_per_iteration)
+        run_dir, iteration, here = run.run_dir, run.iteration, run.cumulative_env_steps
+    saved = _checkpoints(run_dir)
+    assert list(saved) == [here], f"checkpoints at {sorted(saved)}, the run stopped at {here}"
+    assert saved[here]["iteration"] == iteration
+    assert saved[here]["last_checkpoint_step"] == 0, "the save at the limit moved the cadence"
+
+
+def test_the_save_at_the_limit_is_skipped_when_the_learner_is_on_disk(tmp_path: Path) -> None:
+    """Once when the last iteration's periodic save holds the learner, and once when a run is
+    resumed already at its limit: no iteration ran, and the learner is the one it loaded.
+
+    The first is counted in writes, not folders: a second save of one learner lands in the same
+    folder, so a count of folders cannot see it.
+    """
+    config = tiny_config(
+        tmp_path,
+        checkpoint=cfg.CheckpointConfig(every_env_steps=1),
+        alarms=cfg.AlarmConfig(enabled=False),
+    )
+    limit = config.ppo.timesteps_per_iteration
+    with coordinator(config) as run:
+        writes: list[Path] = []
+        write = run.store.write
+
+        def counted(*args: Any, **kwargs: Any) -> Path:
+            writes.append(write(*args, **kwargs))
+            return writes[-1]
+
+        run.store.write = counted
+        run.learn(until_timesteps=limit)
+        run_dir = run.run_dir
+    assert len(writes) == 1, f"one learner written {len(writes)} times: {writes}"
+    saved = _checkpoints(run_dir)
+    assert len(saved) == 1, f"one learner saved as {len(saved)} checkpoints: {sorted(saved)}"
+    folder = Path(run_dir) / "checkpoints" / f"{next(iter(saved)):012d}"
+    before = (folder / "manifest.json").read_bytes()
+
+    with coordinator(config, resume=folder, run_dir=run_dir) as again:
+        again.learn(until_timesteps=limit)
+    assert list(_checkpoints(run_dir)) == list(saved)
+    assert (folder / "manifest.json").read_bytes() == before, "the loaded checkpoint was rewritten"
+
+
+def test_a_resume_puts_each_cadence_back_where_it_last_fired(tmp_path: Path) -> None:
+    """The periodic save, the gate's candidate and the floor's admission continue from where the
+    manifest says they last fired. A manifest without them, an older checkpoint's, starts all
+    three at the checkpoint, which every resume did before they were recorded.
+
+    A tiny run's gate and floor never fire, so they last fired at 0 while the checkpoint sits
+    past 0, and the two readings differ in two fields of three.
+    """
+    import json
+
+    config = tiny_config(tmp_path)
+    with coordinator(config) as first:
+        first.iterate()
+        saved = first.checkpoint()
+        run_dir, here = first.run_dir, first.cumulative_env_steps
+    assert here > 0
+
+    def cadences(run: Any) -> tuple[int, int, int]:
+        return (run._last_checkpoint_step, run._last_candidate_step, run._last_floor_step)
+
+    with coordinator(config, resume=saved, run_dir=run_dir) as again:
+        assert cadences(again) == (here, 0, 0)
+
+    manifest = saved / "manifest.json"
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    for key in ("last_checkpoint_step", "last_candidate_step", "last_floor_step"):
+        del raw[key]
+    manifest.write_text(json.dumps(raw), encoding="utf-8")
+    with coordinator(config, resume=saved, run_dir=run_dir) as older:
+        assert cadences(older) == (here, here, here)
+
+
 @pytest.mark.slow  # a real gate plays out on the resumed iteration: about fifty seconds
 def test_a_checkpoint_from_before_the_gate_state_resumes_and_leaves_the_total_out(
     tmp_path: Path,

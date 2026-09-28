@@ -2971,7 +2971,24 @@ class Manifest(msgspec.Struct):
     state_digest: str
     component_versions: dict[str, int]
     files: dict[str, str]                # every file in this checkpoint -> its sha256
+    gate_seconds: float | None = None; last_decision: dict | None = None
+    last_checkpoint_step: int | None = None   # where each cadence last fired; a resume
+    last_candidate_step: int | None = None    # restores them, None (an older manifest)
+    last_floor_step: int | None = None        # starts them at this checkpoint's env step
 ```
+
+**A resume continues each cadence from where it last fired**, as the manifest recorded it: the
+periodic save, the gate's candidate and the floor's admission. Restarting them at the loaded
+checkpoint, which every resume did until these were recorded, moved the gate: resumed from a save
+between two gates, the next gate ran a whole cadence after the save instead of where the run had it
+due, and a gate that admits a snapshot changes the opponents the learner trains against.
+
+**A run that reaches its limit saves on the way out**, unless the last periodic save already holds
+that learner, and that save does not move the periodic cadence, so a run extended from it saves
+where one run straight through would have. Until it did, a finished run's learner since its last
+periodic save was on no disk. `tests/test_resume.py::test_a_run_that_reached_its_limit_continues_from_its_end`
+stops a run between two periodic saves and two gates, extends it, and compares every metric field
+and the state digest with a run straight through.
 
 `read()` verifies every hash and raises `CheckpointFormatError` naming the first mismatch. That turns
 a truncated write from a crash six weeks ago from a silent wrong resume into an error.
@@ -3392,6 +3409,8 @@ while cumulative_timesteps < limit:
         store.write(components, manifest())
     sched.advance(cumulative_env_steps)
     iteration += 1
+if not saved(cumulative_env_steps):                   # the limit: section 12.2
+    store.write(components, manifest())               # moves no cadence
 ```
 
 Every invariant reads only what collection wrote, so the batch is judged before anything learns from
