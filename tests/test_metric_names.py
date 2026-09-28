@@ -74,6 +74,8 @@ PUBLISHED_KEYS = (
     "ladder/gate_passes",
     "ladder/gate_seconds_frac",
     "ladder/paired_rho",
+    "ladder/pfsp_effective",
+    "ladder/pfsp_learner_step",
     "ladder/pool_size",
     "ladder/probe_seconds_frac",
     "ladder/rating_above_v0",

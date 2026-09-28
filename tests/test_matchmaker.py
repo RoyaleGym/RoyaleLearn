@@ -452,7 +452,7 @@ def test_weights_are_floored_so_the_tail_stays_reachable(pool: LadderPool) -> No
         converged=True,
         iterations=4,
     )
-    weights = matchmaker.weights(members, ratings, "hard")
+    weights = matchmaker.weights(members, ratings, "hard", 1500.0)
     assert weights.sum() == pytest.approx(1.0)
     assert weights.min() >= config.weight_floor_scale / len(members) * 0.99
     assert weights[members.index(members[0])] > 0.0
@@ -508,3 +508,75 @@ def test_a_checkpoint_written_before_the_rectangle_was_stored_still_loads(tmp_pa
     loaded.plan(0, _pool(tmp_path, "resumed"), None, shape)
     assert loaded.n_battles == shape.n_battles
     assert loaded.learner_rows == shape.learner_rows
+
+
+# -- PFSP's stand-in for the learner (docs/harness-spec.md section 11.3) ---------------------------
+
+
+def _rated_pool(tmp_path) -> tuple[LadderPool, object]:
+    """Six snapshots, where the newest (snap:5, the learner's stand-in) crushes snap:0-2 and loses
+    to snap:3-4, fitted by the rater a run uses, from evaluation games in the pool's own log."""
+    from royalelearn.ladder.rating import BradleyTerryDavidsonRater
+    from royalelearn.ladder.results import GameResult
+
+    ladder = _pool(tmp_path, "rated", members=6)
+    scores = {"snap:0": 0.95, "snap:1": 0.9, "snap:2": 0.9, "snap:3": 0.2, "snap:4": 0.15}
+    games = []
+    for opponent, score in scores.items():
+        for index in range(40):
+            games.append(
+                GameResult(
+                    a="snap:5",
+                    b=opponent,
+                    score_a=1.0 if index < round(score * 40) else 0.0,
+                    seed_index=index,
+                    side_a="blue" if index % 2 else "red",
+                    context="ctx",
+                    kind="eval",
+                    run_id="run",
+                    iteration=0,
+                    wall="",
+                )
+            )
+    ladder.record(games)
+    return ladder, BradleyTerryDavidsonRater().fit(ladder.eval_view())
+
+
+def test_pfsp_draws_the_opponents_that_beat_the_learners_newest_snapshot(tmp_path) -> None:
+    """Through the path a run takes: evaluation games in the log, the run's rater, and the
+    per-episode draw. ``hard`` must favour the snapshots that beat the stand-in. Until 2026-09-27
+    the matchmaker looked up an id the fit never holds, and this draw was uniform."""
+    ladder, ratings = _rated_pool(tmp_path)
+    stand_in = ladder.learner_stand_in(ratings)
+    assert stand_in is not None and stand_in[:2] == ("snap:5", 5000)
+    assert "learner" not in ratings.rating, "the fit holds no learner id, as in a real run"
+    config = LadderConfig(mix=(0.0, 1.0, 0.0), max_resident_opponents=8)
+    matchmaker = MixMatchmaker(SEED, config, n_battles=8)
+    counts = dict.fromkeys(ladder.sampler(), 0)
+    for ordinal in range(400):
+        for battle in range(8):
+            counts[matchmaker.assign(battle, ordinal, ladder, ratings).opponent_id] += 1
+    beaten = counts["snap:0"] + counts["snap:1"]
+    beating = counts["snap:3"] + counts["snap:4"]
+    assert beating > 3 * beaten, counts
+
+
+def test_without_a_rated_stand_in_the_draw_is_uniform_and_the_row_says_so(tmp_path) -> None:
+    from royalelearn.metrics.records import ladder_fields
+
+    ladder, ratings = _rated_pool(tmp_path)
+    rated = ladder_fields(ladder, ratings=ratings)
+    assert rated["ladder/pfsp_effective"] == 1
+    assert rated["ladder/pfsp_learner_step"] == 5000
+
+    # No fit yet, and a fit that has not rated the newest snapshot: both fall back.
+    unfitted = ladder_fields(ladder, ratings=None)
+    assert unfitted["ladder/pfsp_effective"] == 0
+    assert "ladder/pfsp_learner_step" not in unfitted
+    ladder.add("snap:6", step=6000)
+    assert ladder.learner_stand_in(ratings) is None
+    stale = ladder_fields(ladder, ratings=ratings)
+    assert stale["ladder/pfsp_effective"] == 0 and "ladder/pfsp_learner_step" not in stale
+    matchmaker = MixMatchmaker(SEED, LadderConfig(), n_battles=8)
+    weights = matchmaker.weights(list(ladder.sampler()), ratings, "hard", None)
+    assert weights == pytest.approx(np.full(len(weights), 1.0 / len(weights)))

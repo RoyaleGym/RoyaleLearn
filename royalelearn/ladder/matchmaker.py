@@ -131,7 +131,6 @@ class MixMatchmaker(Matchmaker):
         config: LadderConfig,
         *,
         n_battles: int | None = None,
-        learner_id: str = "learner",
         scripted_ids: Sequence[str] = SCRIPTED_IDS,
     ) -> None:
         mix = tuple(float(share) for share in config.mix)
@@ -140,7 +139,6 @@ class MixMatchmaker(Matchmaker):
         self.master_seed = int(master_seed)
         self.config = config
         self.mix = mix
-        self.learner_id = learner_id
         self.scripted_ids = tuple(scripted_ids)
         if not self.scripted_ids and (mix[1] > 0.0 or mix[2] > 0.0):
             # A pool battle plays scripted until the first snapshot is admitted, so a pool share
@@ -275,7 +273,13 @@ class MixMatchmaker(Matchmaker):
         if len(candidates) <= limit:
             chosen = tuple(candidates)
         else:
-            weights = self.weights(candidates, ratings, self.config.pfsp_weighting)
+            stand_in = pool.learner_stand_in(ratings)
+            weights = self.weights(
+                candidates,
+                ratings,
+                self.config.pfsp_weighting,
+                stand_in[2] if stand_in is not None else None,
+            )
             rng = derive_generator(
                 self.master_seed,
                 stream_path(MATCH_BATTLE, battle=RESIDENCY_BATTLE, ordinal=epoch),
@@ -286,7 +290,11 @@ class MixMatchmaker(Matchmaker):
         return chosen
 
     def weights(
-        self, candidates: Sequence[str], ratings: RatingTable | None, weighting: str
+        self,
+        candidates: Sequence[str],
+        ratings: RatingTable | None,
+        weighting: str,
+        learner_rating: float | None = None,
     ) -> np.ndarray:
         """The normalised draw weights over ``candidates``.
 
@@ -300,7 +308,10 @@ class MixMatchmaker(Matchmaker):
         if count == 0:
             return np.zeros(0, dtype=np.float64)
         predicted = np.array(
-            [self._predicted_score(candidate, ratings) for candidate in candidates],
+            [
+                self._predicted_score(candidate, ratings, learner_rating)
+                for candidate in candidates
+            ],
             dtype=np.float64,
         )
         shaped = pfsp_shape(predicted, weighting, self.config.pfsp_power)
@@ -310,20 +321,24 @@ class MixMatchmaker(Matchmaker):
         weights = np.maximum(weights, self.config.weight_floor_scale / count)
         return weights / weights.sum()
 
-    def _predicted_score(self, opponent: str, ratings: RatingTable | None) -> float:
+    def _predicted_score(
+        self, opponent: str, ratings: RatingTable | None, learner_rating: float | None
+    ) -> float:
         """P(the learner scores against ``opponent``) under the current fit.
 
         Read off the fitted ratings rather than asked of the rater, so that a matchmaker holds
         a rating table and not a fitting object, and a plan built from a stored table is the
-        plan that table implies.
+        plan that table implies. ``learner_rating`` is the learner's stand-in's
+        (``LadderPool.learner_stand_in``): until 2026-09-27 this looked the id ``learner`` up
+        in the fit, which never holds it, so every prediction was 0.5 and ``hard`` was
+        uniform in every run. Without a stand-in it is 0.5 still, and the row says so.
         """
-        if ratings is None:
+        if ratings is None or learner_rating is None:
             return 0.5
-        learner = ratings.rating.get(self.learner_id)
         other = ratings.rating.get(opponent)
-        if learner is None or other is None:
+        if other is None:
             return 0.5
-        return 1.0 / (1.0 + 10.0 ** ((other - learner) / 400.0))
+        return 1.0 / (1.0 + 10.0 ** ((other - learner_rating) / 400.0))
 
     # -- the draw -----------------------------------------------------------
 
@@ -374,7 +389,13 @@ class MixMatchmaker(Matchmaker):
             opponent = self.scripted_ids[int(rng.integers(len(self.scripted_ids)))]
             other = GROUP_SCRIPTED
         else:
-            weights = self.weights(residents, ratings, self.config.pfsp_weighting)
+            stand_in = pool.learner_stand_in(ratings)
+            weights = self.weights(
+                residents,
+                ratings,
+                self.config.pfsp_weighting,
+                stand_in[2] if stand_in is not None else None,
+            )
             position = int(rng.choice(len(residents), p=weights))
             opponent = residents[position]
             other = position

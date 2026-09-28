@@ -511,6 +511,19 @@ METRICS: dict[str, MetricSpec] = {
         "count", "The env step the champion was snapshotted at.", dtype="int"
     ),
     "ladder/pool_size": _m("count", "Snapshots in the archive.", dtype="int"),
+    "ladder/pfsp_effective": _m(
+        "flag",
+        "1 when PFSP weighed the pool by a fitted rating this iteration, 0 when it fell back "
+        "to uniform because no rated snapshot stood in for the learner. An arm meant to "
+        "train against ladder.pfsp_weighting reads this first.",
+        dtype="int",
+    ),
+    "ladder/pfsp_learner_step": _m(
+        "count",
+        "The env step of the snapshot standing in for the learner in PFSP: its newest "
+        "archived snapshot. It lags the live learner by up to a snapshot cadence.",
+        dtype="int",
+    ),
     "ladder/sampler_size": _m("count", "Snapshots the matchmaker draws from.", dtype="int"),
     "ladder/gate_attempts": _m("count", "Gates run so far in this run.", dtype="int"),
     "ladder/gate_passes": _m("count", "Gates passed so far in this run.", dtype="int"),
@@ -914,6 +927,7 @@ CONDITIONAL: dict[str, str] = {
     ),
     "ladder/transitivity_residual": "a rating fit exists",
     "ladder/rating_above_v0": "the fit holds both the learner and the first snapshot",
+    "ladder/pfsp_learner_step": "the fit has rated the learner's newest archived snapshot",
     "ladder/gate_observed_rate": "a gate decision carries its champion condition",
     "ladder/gate_lower_bound": "a gate decision carries its champion condition",
     # Absent without a device rather than zero. A zero here would read as "no fragmentation"

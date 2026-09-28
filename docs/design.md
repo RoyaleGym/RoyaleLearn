@@ -109,10 +109,10 @@ What it deliberately does not do is give the learner a fitted rating. Its games 
 `kind="probe"` and the authoritative fit never reads them, because a probe names a player that
 exists for one moment: admitting them would add a column per probe to the fit every ladder
 decision is made on, each too thinly played to place, and would let the rating scale move
-because the run measured itself. So `ladder/rating_above_v0` is still absent and the PFSP
-weighting still has no rating for the live policy. Both of those want a rated player rather than
-a reading against a ruler, and the nearest rated player is the newest snapshot, one gate cadence
-stale. Whether that is what `rating_above_v0` should publish is open.
+because the run measured itself. So `ladder/rating_above_v0` is still absent. It wants a rated
+player rather than a reading against a ruler, and the nearest rated player is the newest
+snapshot, one gate cadence stale. Since 2026-09-27 the PFSP weighting uses exactly that as the
+live policy's stand-in. Whether `rating_above_v0` should publish it too is open.
 
 Also open: the four scripted opponents beyond the two anchors (`first_affordable`, `defend`,
 `push`, `patient`) are still played by nothing in a default run. The matchmaker's scripted slots

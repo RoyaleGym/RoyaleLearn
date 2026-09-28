@@ -462,6 +462,7 @@ def ladder_fields(
     from ..ladder.gate import failed_condition
     from ..ladder.pool import SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL
 
+    stand_in = pool.learner_stand_in(ratings)
     fields: dict[str, MetricValue] = {
         "ladder/champion_id": pool.champion or "",
         "ladder/champion_step": pool.step_of(pool.champion) if pool.champion else 0,
@@ -471,6 +472,9 @@ def ladder_fields(
         "ladder/gate_passes": pool.state.gate_passes,
         "ladder/consecutive_gate_failures": pool.state.consecutive_gate_failures,
         "ladder/evictions": pool.state.evictions,
+        # Whether PFSP weighed the pool by a rating this iteration or fell back to uniform,
+        # and which snapshot stood in for the learner (docs/harness-spec.md section 11.3).
+        "ladder/pfsp_effective": int(stand_in is not None),
         # Counted from the log rather than from ``pool.state.eval_games``. That counter lives in
         # ``LadderPool.record`` (pool.py:226) and is keyed on KIND_EVAL correctly, but the only
         # caller of ``record`` in the package is ``record_training_results``, which hardcodes
@@ -485,6 +489,8 @@ def ladder_fields(
     # is a statement: an Elo of zero, seats that are uncorrelated, a gate that cost nothing. A
     # reader cannot tell such a number from a measurement, and a plot of it draws a flat line
     # through the part of the run where nothing was computed.
+    if stand_in is not None:
+        fields["ladder/pfsp_learner_step"] = stand_in[1]
     if elo is not None:
         fields["ladder/elo_readout"] = float(elo)
     if paired_rho is not None:

@@ -172,6 +172,26 @@ class LadderPool:
         spine the ladder's own history is told along."""
         return tuple(self.state.champion_chain)
 
+    def learner_stand_in(self, ratings: RatingTable | None) -> tuple[str, int, float] | None:
+        """PFSP's stand-in for the live learner: ``(member, env step, fitted rating)``, or None.
+
+        The live policy never plays an evaluation game under its own id, so the fit never rates
+        it: a gate rates snapshots, and the probe's games are not the fit's (docs/harness-spec.md
+        section 11.3). Its newest archived snapshot, the last copy of it a gate admitted, stands
+        in. None while nothing is archived or the fit has not rated that snapshot yet; the draw
+        is then uniform, and ``ladder/pfsp_effective`` says so.
+        """
+        if ratings is None:
+            return None
+        snapshots = self.snapshot_ids()
+        if not snapshots:
+            return None
+        newest = max(snapshots, key=lambda member: (self.step_of(member), member))
+        rating = ratings.rating.get(newest)
+        if rating is None:
+            return None
+        return newest, self.step_of(newest), float(rating)
+
     @property
     def v0(self) -> str | None:
         """The run's first snapshot, which ``rating_above_v0`` is measured against."""

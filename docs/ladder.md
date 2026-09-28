@@ -110,29 +110,32 @@ config loads.
 At most `max_resident_opponents` snapshots are loaded on the GPU at once. That defaults to
 **2**. Those two are redrawn only when the pool changes, never in the middle of an iteration.
 
-### One thing the config says and the code does not do yet
+### How opponents are weighted
 
 The config asks for **PFSP** weighting. PFSP means "prioritised fictitious self-play", and in
 plain words it means picking opponents that still beat you rather than picking uniformly at
 random, because those are the ones there is something to learn from. `pfsp_weighting`
 defaults to `"hard"`.
 
-Right now that weighting comes out uniform. The weight of an opponent depends on how well
-the *live* bot is predicted to score against it, and the live bot has no fitted rating,
-because it is never measured under its own name (see the broken rows section below). With no
-rating for the live bot, `matchmaker._predicted_score` returns 0.5 for every candidate, and
-a constant prediction gives every candidate the same weight.
+The weight of an opponent depends on how well the *live* bot is predicted to score against it.
+The live bot has no fitted rating of its own, because it is never measured under its own name
+(see the broken rows section below). So its newest snapshot stands in for it: the last copy of
+the bot that a gate admitted. That copy can be up to one snapshot cadence behind the live bot.
 
-You can see it in one command:
+Until 2026-09-27 nothing stood in. Every prediction was 0.5, and every run drew its opponents
+uniformly. Before the first snapshot has been rated, the draw is still uniform. Each metrics row
+says which happened: `ladder/pfsp_effective` is 1 when the draw used a rating and 0 when it fell
+back to uniform, and `ladder/pfsp_learner_step` is the env step of the snapshot that stood in.
+
+You can see the weighting in one command. The last argument is the stand-in's rating:
 
 ```
-python -c "from royalelearn.config import LadderConfig; from royalelearn.api.ladder import RatingTable; from royalelearn.ladder.matchmaker import MixMatchmaker; m=MixMatchmaker(1,LadderConfig()); t=RatingTable(rating={'snap:v0':0.0,'snap:v1':200.0,'snap:v2':400.0,'snap:v3':-200.0},se={},anchor='scripted:noop',draw_nu=None,n_games={},transitivity_residual=0.0,converged=True,iterations=3); print(m.weights(('snap:v0','snap:v1','snap:v2','snap:v3'),t,'hard'))"
+python -c "from royalelearn.config import LadderConfig; from royalelearn.api.ladder import RatingTable; from royalelearn.ladder.matchmaker import MixMatchmaker; m=MixMatchmaker(1,LadderConfig()); t=RatingTable(rating={'snap:v0':0.0,'snap:v1':200.0,'snap:v2':400.0,'snap:v3':-200.0},se={},anchor='scripted:noop',draw_nu=None,n_games={},transitivity_residual=0.0,converged=True,iterations=3); print(m.weights(('snap:v0','snap:v1','snap:v2','snap:v3'),t,'hard',t.rating['snap:v0']))"
 ```
 
-Measured 2026-09-22, that prints `[0.25 0.25 0.25 0.25]`. Add a `'learner'` entry to the
-rating table and it prints `[0.082 0.233 0.630 0.054]`, which is the PFSP behaviour the config
-describes. So the opponent draw is currently uniform over the resident snapshots. That is not
-wrong, it is just not what the name suggests, and it has not been fixed yet.
+Measured 2026-09-27, that prints `[0.16686453 0.31982403 0.43632903 0.0769824 ]`: the
+strongest snapshot, `snap:v2`, is drawn most. Leave off the last argument and it prints
+`[0.25 0.25 0.25 0.25]`, the uniform fallback.
 
 ## The two scripted anchors
 
