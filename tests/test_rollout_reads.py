@@ -120,6 +120,32 @@ def test_the_host_and_the_device_must_agree_on_the_choice_rows() -> None:
         stats.drain()
 
 
+def test_a_frozen_seat_s_row_without_its_noop_is_refused() -> None:
+    """The pool opponent's forward builds its distribution with the per-construction no-op check
+    off, and checks the no-op bit from the copy the actions come home in instead. So that copy's
+    check is the only one: a row without its no-op must stop the round, and a batch with it on
+    every row must not.
+    """
+    from royalelearn.learn.distribution import NOOP
+
+    class Actor:
+        def logits(self, obs: Any) -> torch.Tensor:
+            return torch.zeros(obs.mask.shape, dtype=torch.float32)
+
+    class Obs:
+        def __init__(self, mask: torch.Tensor) -> None:
+            self.mask = mask
+
+    engine = BatchedInference.__new__(BatchedInference)  # _act_frozen reads nothing of its own
+    healthy = torch.ones((3, 5), dtype=torch.bool)
+    uniforms = torch.full((3,), 0.5)
+    assert engine._act_frozen(Actor(), Obs(healthy), uniforms).shape == (3,)
+    broken = healthy.clone()
+    broken[1, NOOP] = False
+    with pytest.raises(AssertionError, match=r"mask\[NOOP\] must be True on every row"):
+        engine._act_frozen(Actor(), Obs(broken), uniforms)
+
+
 def test_the_right_count_over_the_wrong_rows_is_refused_too() -> None:
     """One choice row swapped for a row with no choice: the count still agrees, the rows do not.
 
