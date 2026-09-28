@@ -83,12 +83,43 @@ def test_the_fill_is_on_exactly_in_the_iterations_the_harness_checks(tmp_path: P
     assert seen == [True, False, True, False]
 
 
+def test_a_resumed_process_fills_its_first_iteration_past_the_debug_window(
+    tmp_path: Path,
+) -> None:
+    """The first iteration a process runs is filled wherever the run stands, because that is
+    where a resumed run's leftovers first differ from a straight run's. Resumed at iteration
+    three, with the one-iteration debug window behind it and no ratio check ever due, the first
+    is filled and the second is not. A clause that asked for iteration 0 instead of the first
+    in the process leaves both unfilled, and nothing tested past iteration 0 until this.
+    """
+    config = exact_config(tmp_path, debug=1, every=0)
+    with coordinator(config) as first:
+        for _ in range(3):
+            first.iterate()
+        saved = first.checkpoint()
+        run_dir = first.run_dir
+    seen: list[bool] = []
+    with coordinator(config, resume=saved, run_dir=run_dir) as again:
+        assert again.iteration == 3
+        step = again.update.step
+
+        def recording(buffer: Any, sched: Any) -> Any:
+            seen.append(bool(torch_deterministic.fill_uninitialized_memory))
+            return step(buffer, sched)
+
+        again.update.step = recording
+        again.iterate()
+        again.iterate()
+    assert seen == [True, False], seen
+
+
 def _run(
     tmp_path: Path, name: str, *, fill_always: bool, monkeypatch: Any
-) -> tuple[list[str], list[bool], list[bool]]:
-    """Four iterations with no checks due; each iteration's digest, and the flag as collection
-    and the update each saw it. ``fill_always`` keeps the real switch and forces it on, so the
-    arm measures a fill that is ON rather than one nobody turned off."""
+) -> tuple[list[str], list[bool], list[bool], list[float]]:
+    """Four iterations with no checks due; each iteration's digest, the flag as collection and
+    the update each saw it, and each iteration's share of forced rows. ``fill_always`` keeps the
+    real switch and forces it on, so the arm measures a fill that is ON rather than one nobody
+    turned off."""
     real = determinism.set_fill_uninitialized
     if fill_always:
         monkeypatch.setattr(determinism, "set_fill_uninitialized", lambda on: real(True))
@@ -96,6 +127,7 @@ def _run(
     digests: list[str] = []
     at_update: list[bool] = []
     at_collection: list[bool] = []
+    forced: list[float] = []
     with coordinator(config) as run:
         step, act = run.update.step, run.inference.act
 
@@ -112,8 +144,9 @@ def _run(
         for _ in range(4):
             run.iterate()
             digests.append(run.state_digest())
+            forced.append(float(run.rows[-1]["ppo/forced_frac"]))
     monkeypatch.undo()
-    return digests, at_update, at_collection
+    return digests, at_update, at_collection, forced
 
 
 def test_turning_the_fill_off_moves_no_bit_of_the_learner(
@@ -128,10 +161,15 @@ def test_turning_the_fill_off_moves_no_bit_of_the_learner(
     critic_only path included, are fully written. It is not evidence about torch's CUDA kernels;
     that is a two-arm digest comparison on the GPU past the debug window, which is the A/B the
     training runs are measured with."""
-    off, off_update, off_collection = _run(
+    off, off_update, off_collection, off_forced = _run(
         tmp_path, "off", fill_always=False, monkeypatch=monkeypatch
     )
-    on, on_update, on_collection = _run(tmp_path, "on", fill_always=True, monkeypatch=monkeypatch)
+    on, on_update, on_collection, on_forced = _run(
+        tmp_path, "on", fill_always=True, monkeypatch=monkeypatch
+    )
+    # critic_only is the path under test only where a batch holds both kinds of row: all forced
+    # and the actor never runs, none forced and it is the ``all`` path.
+    assert all(0.0 < share < 1.0 for share in off_forced + on_forced), (off_forced, on_forced)
     assert on_update == [True] * 4 and on_collection and all(on_collection)
     assert off_update == [True, False, False, False], "the first iteration of a process is checked"
     assert off_collection[0] and not off_collection[-1]
