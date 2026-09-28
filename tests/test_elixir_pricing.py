@@ -25,16 +25,13 @@ from royalegym.protocol import (
     EntityKind,
     EntityState,
     MatchSetup,
-    Placement,
     ShuffleMode,
+    card_is_spell,
     to_engine,
 )
 from royalelearn.rewards import CommittedElixirPotential
 
 TOWERS = (EntityKind.KING_TOWER, EntityKind.PRINCESS_TOWER)
-#: The catalogue's own ways of saying "this card puts nothing of its own on the board", spelled
-#: out here from the engine's placement classes rather than taken from the term under test.
-SPELL_PLACEMENTS = (Placement.SPELL, Placement.ROLLING, Placement.SPELL_NOT_ON_WATER)
 ENGINES = [
     "mock",
     pytest.param("rust", marks=pytest.mark.engine),
@@ -125,7 +122,11 @@ def test_one_tap_of_every_card_puts_exactly_its_elixir_on_the_board(kind: str) -
     for card, seat, put_down in _tap_everything(engine):
         taps += 1
         on_board = sum((term.unit_value(entity) for entity in put_down), Fraction(0))
-        expected = Fraction(0) if card.placement in SPELL_PLACEMENTS else Fraction(card.elixir)
+        # A spell puts nothing of its own on the board. Decided by WHAT the card is, its kind,
+        # and not by where it may be played: since RoyaleSim 95698c5 Heal, a spell placed by a
+        # troop's rule, has a troop's placement and is still a spell. Taken from RoyaleGym
+        # rather than from the term under test.
+        expected = Fraction(0) if card_is_spell(card) else Fraction(card.elixir)
         if on_board != expected:
             off.append((card.name, seat, len(put_down), str(on_board), str(expected)))
     assert off == [], f"plays priced at something other than the card's elixir: {off}"
