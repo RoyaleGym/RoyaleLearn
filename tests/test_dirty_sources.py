@@ -151,3 +151,52 @@ def test_bench_and_verify_resume_leave_folders_of_their_own(monkeypatch) -> None
         with pytest.raises(_Stop):
             cli.main(argv)
     assert seen[0].startswith("bench-") and seen[1].startswith("verify-resume-")
+
+
+@pytest.mark.parametrize(
+    ("resumed_line", "code"),
+    [
+        ("resumed       iteration 2 at 16 env steps, state 0123456789abcdef\n", 0),
+        ("resumed       iteration 2 at 16 env steps, state fedcba9876543210\n", 1),
+        ("", 1),  # no reading at all: nothing was compared, and that is not a pass
+    ],
+)
+def test_verify_resume_passes_only_on_a_digest_it_actually_compared(
+    monkeypatch, capsys, resumed_line: str, code: int
+) -> None:
+    """The second half's printed digest against the first half's, and a missing one refused.
+
+    A missing line used to fall through to "the same learner state, byte for byte".
+    """
+    import contextlib
+    import subprocess
+
+    from royalelearn import cli
+
+    class _Run:
+        run_dir, iteration = "runs/verify-resume-x", 2
+
+        def learn(self, **_kwargs):
+            pass
+
+        def checkpoint(self):
+            pass
+
+        def state_digest(self):
+            return "0123456789abcdef" + "0" * 48
+
+    @contextlib.contextmanager
+    def fake(_config, **_kwargs):
+        yield _Run()
+
+    monkeypatch.setattr(cli, "_coordinator", fake)
+    monkeypatch.setattr(cli, "_config_of", lambda _args: __import__("royalelearn").config.laptop())
+    monkeypatch.setattr("royalelearn.identity.dirty_sources", lambda *_a, **_k: ())
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_a, **_k: subprocess.CompletedProcess([], 0, stdout=resumed_line, stderr=""),
+    )
+    assert cli.main(["verify-resume", "--config", "x.json"]) == code
+    if not resumed_line:
+        assert "nothing was compared" in capsys.readouterr().err

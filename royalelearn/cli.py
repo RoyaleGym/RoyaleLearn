@@ -431,7 +431,16 @@ def _verify_resume(args: argparse.Namespace) -> int:
     if done.returncode != 0:
         print(done.stderr, file=sys.stderr)
         return done.returncode
-    if loaded and not digest.startswith(loaded):
+    if not loaded:
+        # No reading is not a match. This used to fall through to the success line below,
+        # which said "byte for byte" about a comparison that never happened.
+        print(
+            "the resumed process printed no 'resumed ... state <digest>' line, so nothing was "
+            "compared",
+            file=sys.stderr,
+        )
+        return 1
+    if not digest.startswith(loaded):
         print(f"the resumed process loaded {loaded}, and the checkpoint holds {digest[:16]}")
         return 1
     print("the resumed process loaded the same learner state, byte for byte")
