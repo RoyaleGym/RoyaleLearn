@@ -37,6 +37,7 @@ __all__ = [
     "DiskSnapshotStore",
     "SnapshotSpec",
     "check_compatible",
+    "weights_sha256",
 ]
 
 SNAPSHOT_FORMAT_VERSION = 1
@@ -138,6 +139,30 @@ class DiskSnapshotStore(SnapshotStore):
         self._write_index()
         return digest
 
+    def import_folder(self, snapshot_id: str, source: str | Path) -> str:
+        """Archive a frozen actor another run or tool wrote, under ``snapshot_id``.
+
+        ``source`` holds ``actor.safetensors`` and ``spec.json``, the layout ``put`` writes and
+        a RoyaleImitate actor artifact shares. Refused, with every differing field named, when
+        its spec disagrees with this run's on what the tensors mean. The weights are copied as
+        they are and content-addressed the way ``put`` addresses its own, so the run holds its
+        own copy and never reads ``source`` again. Returns the digest.
+        """
+        source = Path(source)
+        stored = msgspec.json.decode((source / SPEC_NAME).read_bytes(), type=SnapshotSpec)
+        if self.template is not None:
+            check_compatible(stored, self.template)
+        payload = (source / WEIGHTS_NAME).read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()[:16]
+        folder = self.root / digest
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / WEIGHTS_NAME).write_bytes(payload)
+        spec = msgspec.structs.replace(stored, snapshot_id=snapshot_id)
+        (folder / SPEC_NAME).write_bytes(msgspec.json.encode(spec))
+        self._index[snapshot_id] = digest
+        self._write_index()
+        return digest
+
     # -- reading ------------------------------------------------------------
 
     def list(self) -> list[str]:
@@ -212,6 +237,11 @@ class DiskSnapshotStore(SnapshotStore):
 
     def _write_index(self) -> None:
         (self.root / INDEX_NAME).write_bytes(msgspec.json.encode(self._index))
+
+
+def weights_sha256(folder: str | Path) -> str:
+    """The full sha256 of a snapshot folder's ``actor.safetensors``, as hex."""
+    return hashlib.sha256((Path(folder) / WEIGHTS_NAME).read_bytes()).hexdigest()
 
 
 def _encode_tensors(state: Mapping[str, Any]) -> bytes:

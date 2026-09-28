@@ -17,6 +17,7 @@ a JSON config names one and overrides what it likes on top.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,7 @@ __all__ = [
     "RolloutConfig",
     "RunConfig",
     "ScheduleSpec",
+    "SeedSnapshot",
     "SinkSpec",
     "check_consistency",
     "config_hash",
@@ -352,6 +354,22 @@ class RaterConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     draws: str = "davidson"
 
 
+class SeedSnapshot(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """A frozen actor the pool holds from the run's first iteration and never evicts.
+
+    ``path`` is a folder holding ``actor.safetensors`` and ``spec.json``: a run's own snapshot
+    (``<run>/snapshots/<digest>``) or an actor artifact RoyaleImitate wrote. A relative path is
+    read from the folder the command runs in. ``sha256`` is of ``actor.safetensors``, and it is
+    what the run's identity records, so the same path holding other weights is another run; a
+    run whose folder does not match is refused, and the refusal prints the digest it found.
+    """
+
+    #: Its pool id is ``seed:<name>``.
+    name: str
+    path: str
+    sha256: str
+
+
 class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Who the learner plays, and when a snapshot joins the pool."""
 
@@ -407,6 +425,11 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: opponent that places forward on purpose. Only training moves: the rating anchor, the
     #: gate's anchors and the probe's default rungs do not change with this list.
     scripted_opponents: tuple[str, ...] = ("scripted:noop", "scripted:random_legal")
+    #: Frozen actors admitted to the pool before the first iteration, each as ``seed:<name>``,
+    #: drawn like any member and never evicted. Not the run's ``v0``, which is its own first
+    #: snapshot. To train against one fixed opponent: one seed, ``mix`` (0, 1, 0), and the gate's
+    #: and the floor's cadences past the run's end, so nothing else is ever admitted.
+    seed_snapshots: tuple[SeedSnapshot, ...] = ()
     #: The three probe fields are in the run identity, and they are meant to be, although the
     #: integrator measured that two runs differing only in them produce the same weights at every
     #: iteration. That measurement is about the WEIGHTS and the identity's question is wider: a
@@ -835,6 +858,34 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
     return problems
 
 
+def _seed_snapshot_problems(ladder: LadderConfig) -> list[str]:
+    """Everything wrong with the seed snapshots that can be seen without reading their folders.
+
+    The folders themselves, their digests and whether this run can load them, are checked when
+    the run starts, because only then is the run's own architecture known.
+    """
+    problems = []
+    names = [seed.name for seed in ladder.seed_snapshots]
+    for seed in ladder.seed_snapshots:
+        if not seed.name or ":" in seed.name:
+            problems.append(
+                f"ladder.seed_snapshots has a name {seed.name!r}: it becomes the pool id "
+                f"seed:<name>, so it must be non-empty and hold no ':'"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", seed.sha256):
+            problems.append(
+                f"ladder.seed_snapshots {seed.name!r}: sha256 {seed.sha256!r} is not 64 lowercase "
+                "hex digits (the sha256 of the folder's actor.safetensors)"
+            )
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        problems.append(
+            f"ladder.seed_snapshots names {', '.join(repeated)} more than once; each becomes one "
+            "pool id"
+        )
+    return problems
+
+
 def _scripted_opponent_problems(ladder: LadderConfig) -> list[str]:
     """Everything wrong with the scripted share's training opponents.
 
@@ -1006,6 +1057,7 @@ def check_consistency(config: RunConfig) -> list[str]:
         problems.append(f"ladder.rater.draws {config.ladder.rater.draws!r} is not a draw model")
     problems.extend(_probe_problems(config.ladder))
     problems.extend(_scripted_opponent_problems(config.ladder))
+    problems.extend(_seed_snapshot_problems(config.ladder))
     problems.extend(_extension_problems(config))
     problems.extend(_alarm_override_problems(config))
     if config.checkpoint.keep < 1:

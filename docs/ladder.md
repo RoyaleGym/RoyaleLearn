@@ -75,10 +75,44 @@ Snapshots are kept forever in the archive. What is bounded is how many the match
 from, because that draw runs in Python once per battle. `pool_working_size` in
 `royalelearn/config.py` defaults to 48. When the sampler grows past that,
 `ladder/eviction.py` drops members, and it does not drop the oldest. It keeps a spread across
-the rating range, plus the two scripted anchors, the run's very first snapshot, and every
-snapshot that was ever champion. Dropping the oldest would throw away exactly the weak
-opponents the pool exists to preserve. Evicted snapshots leave the sampler but stay in the
-archive and in the result log, so their results still count toward everyone's rating.
+the rating range, plus the two scripted anchors, the run's very first snapshot, every
+snapshot that was ever champion, and every seed snapshot (next section). Dropping the oldest
+would throw away exactly the weak opponents the pool exists to preserve. Evicted snapshots
+leave the sampler but stay in the archive and in the result log, so their results still count
+toward everyone's rating.
+
+### Starting the pool with a policy you already have
+
+`ladder.seed_snapshots` puts frozen policies in the pool before the first battle. Each one
+joins as `seed:<name>`, is drawn like any other member, and is never evicted. It is not the
+run's first snapshot, so `rating_above_v0` still measures from the run's own start.
+
+A seed is a folder holding `actor.safetensors` and `spec.json`. That is what a run writes
+under `runs/<run>/snapshots/<digest>/`, and what a RoyaleImitate actor artifact holds. The
+config pins the weights by their sha256, so the same folder holding other weights is a
+different run:
+
+```json
+"seed_snapshots": [
+  {"name": "frozen", "path": "runs/<old-run>/snapshots/<digest>", "sha256": "<64 hex>"}
+]
+```
+
+To get the digest:
+
+```bash
+python -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" runs/<old-run>/snapshots/<digest>/actor.safetensors
+```
+
+The run refuses to start if the digest does not match, and prints the one it found. It also
+refuses a policy built for a different network or observation, and names each field that
+differs. The run copies the weights into its own `snapshots/` folder, so a resume does not
+need the original folder.
+
+To train against one fixed opponent and nothing else: one seed, `mix` set to `[0, 1, 0]`, and
+`candidate_every_env_steps` and `floor_admit_every_env_steps` set past the run's end, so the gate
+never adds anything. `tests/test_seed_snapshots.py` checks that every pool battle of such a run
+meets the seed.
 
 ## Who the bot plays in a given battle
 

@@ -25,7 +25,8 @@ __all__ = ["HallOfFameEviction"]
 
 
 class HallOfFameEviction(EvictionPolicy):
-    """Keep the anchors, the run's first snapshot, the champion chain and a spread of the rest.
+    """Keep the anchors, the run's first snapshot, the champion chain, the seeds and a spread of
+    the rest.
 
     Snapshots flagged ``meta["cycle"]`` are preferred within their stratum: those are the ones
     that beat the champion and lost to the wider pool, which makes them the most diverse
@@ -42,10 +43,11 @@ class HallOfFameEviction(EvictionPolicy):
         if len(sampled) <= max_sampled:
             return []
         chain = set(pool.champion_chain)
+        seeded = set(pool.seeded)
         protected = [
             member
             for member in sampled
-            if pool.is_anchor(member) or member == pool.v0 or member in chain
+            if pool.is_anchor(member) or member == pool.v0 or member in chain or member in seeded
         ]
         optional = [member for member in sampled if member not in set(protected)]
         budget = max(0, max_sampled - len(protected))

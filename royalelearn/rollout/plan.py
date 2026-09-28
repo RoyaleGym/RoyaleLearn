@@ -215,7 +215,8 @@ class SlotPlanner:
 def opponent_index(plan: SlotPlan, assignment: Assignment) -> int:
     """Where a battle's opponent sits in the table its ``group`` refers to.
 
-    A pool opponent indexes the plan's resident snapshots and a scripted one indexes
+    A pool opponent -- a snapshot the gate admitted (``snap:``) or one ``ladder.seed_snapshots``
+    put there (``seed:``) -- indexes the plan's resident snapshots, and a scripted one indexes
     ``scripted.SCRIPTED_NAMES``; a mirror has neither. The index rather than the name crosses
     to the worker because the worker needs one byte per slot, and because the only thing it
     does with it is pick a scripted opponent out of a fixed tuple.
@@ -232,7 +233,7 @@ def opponent_index(plan: SlotPlan, assignment: Assignment) -> int:
                 f"battle {assignment.battle} was assigned scripted opponent {name!r}, which is "
                 f"not one of {', '.join(SCRIPTED_NAMES)}"
             ) from None
-    if kind == "snap":
+    if kind in ("snap", "seed"):
         try:
             return plan.resident_snapshots.index(opponent)
         except ValueError:

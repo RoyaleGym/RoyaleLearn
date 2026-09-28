@@ -103,6 +103,9 @@ class PoolState(msgspec.Struct):
     #: candidate that fails its gate is still a name that has been used, and a name reused after
     #: a resume would put two different sets of weights under one id in the result log.
     snapshots_issued: int = 0
+    #: The members ``ladder.seed_snapshots`` put in the pool before the first iteration. Never
+    #: evicted, and never the run's ``v0``. Empty in a pool saved before seeds existed.
+    seeded: list[str] = msgspec.field(default_factory=list)
 
 
 class LadderPool:
@@ -226,6 +229,23 @@ class LadderPool:
             if member in self.state.evicted:
                 self.state.evicted.remove(member)
         self.state.residency_epoch += 1
+
+    def seed(self, member: str, meta: Mapping[str, Any] | None = None) -> None:
+        """Admit a frozen actor this run did not train, before its first iteration.
+
+        It joins the sampler like any admitted snapshot and is never evicted. It is not the
+        run's ``v0``: that is the run's own first snapshot, the one ``rating_above_v0`` is
+        measured from, and a seed would make it the distance from somebody else's policy.
+        """
+        v0 = self.state.v0
+        self.add(member, step=0, meta={**dict(meta or {}), "seeded": True})
+        self.state.v0 = v0
+        if member not in self.state.seeded:
+            self.state.seeded.append(member)
+
+    @property
+    def seeded(self) -> tuple[str, ...]:
+        return tuple(self.state.seeded)
 
     def issue_candidate_id(self) -> str:
         """The next candidate's id, and the pool remembers that it has been handed out.

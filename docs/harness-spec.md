@@ -1258,6 +1258,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `probe_games` | 40 | battles per rung | paired, so 20 seeds of the frozen set, each from both sides |
 | `probe_opponents` | `("scripted:noop", "scripted:random_legal")` | | the rungs, refused at config time if one is not a scripted opponent |
 | `scripted_opponents` | `("scripted:noop", "scripted:random_legal")` | | who the scripted share trains against, one drawn uniformly per episode. Refused at config time if one is not a scripted opponent, if one is named twice, or if the list is empty while `mix` has pool or scripted battles. Training only: the gate's anchors and `rater.anchor` do not move. Section 11.3 |
+| `seed_snapshots` | `()` | | frozen actors (`SeedSnapshot`: `name`, `path`, `sha256` of `actor.safetensors`) admitted to the pool as `seed:<name>` before the first iteration, never evicted and never `v0`. At start each folder's weights are checked against `sha256` and its spec against the run's `arch_digest`, `obs_digest` and `codec_table_digest`, then copied into the run's own `snapshots/`. Refused at config time for a repeated name, a name holding `:`, or a `sha256` that is not 64 hex digits. With `mix` (0, 1, 0) and the gate's and floor's cadences past the run's end, every battle meets the seeds and nothing else |
 | `gate.champion_games` | 1000 | battles | 500 seeds times 2 side assignments |
 | `gate.champion_lower_bound` | 0.52 | score rate | requires an observed 55.2% or better, about 35 Elo |
 | `gate.anchor_games` | 200 | battles per anchor | |

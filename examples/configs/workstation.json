@@ -160,6 +160,7 @@
       "scripted:noop",
       "scripted:random_legal"
     ],
+    "seed_snapshots": [],
     "gate": {
       "champion_games": 1000,
       "champion_lower_bound": 0.52,

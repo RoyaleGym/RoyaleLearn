@@ -1050,6 +1050,8 @@ class LearningCoordinator:
         )
         if self.resume_from is not None:
             self._load(self.resume_from)
+        else:
+            self._admit_seed_snapshots()
         self._entered = True
         return self
 
@@ -1845,6 +1847,34 @@ class LearningCoordinator:
             raise AssignmentInsideEpisode(str(exc)) from exc
 
     # -- the ladder ----------------------------------------------------------
+
+    def _admit_seed_snapshots(self) -> None:
+        """Put ``ladder.seed_snapshots`` in the pool before the first iteration plans a battle.
+
+        Each folder's weights are checked against the digest the config pins, which is what
+        the identity records, and its spec against this run's architecture. The run then keeps
+        its own copy, so a resume needs neither the folder nor this step: the pool's checkpoint
+        and the run's snapshot archive already hold the seed.
+        """
+        from .ladder.snapshots import WEIGHTS_NAME, weights_sha256
+
+        for seed in self.config.ladder.seed_snapshots:
+            folder = Path(seed.path)
+            if not (folder / WEIGHTS_NAME).is_file():
+                raise PreflightError(
+                    f"ladder.seed_snapshots {seed.name!r}: no {WEIGHTS_NAME} in {folder.resolve()}"
+                )
+            found = weights_sha256(folder)
+            if found != seed.sha256:
+                raise PreflightError(
+                    f"ladder.seed_snapshots {seed.name!r}: {folder / WEIGHTS_NAME} has sha256 "
+                    f"{found}, and the config pins {seed.sha256}. If the folder is the one you "
+                    "mean, put its digest in the config"
+                )
+            member = f"seed:{seed.name}"
+            digest = self.snapshot_store.import_folder(member, folder)
+            self.pool.seed(member, {"sha256": found})
+            self.printer(f"seed snapshot {member}  {digest}  from {folder}")
 
     def _record_training_results(self, episodes: Sequence[EpisodeRecord]) -> None:
         """File the training battles, tagged so the fit leaves them out."""
