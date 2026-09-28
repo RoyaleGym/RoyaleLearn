@@ -208,7 +208,11 @@ line of the install below.
 
 ## What you type
 
-All four of these work. `train` needs the torch extra; so do `doctor` and `bench`.
+`train` needs the torch extra; so do `doctor` and `bench`. On a fresh install on 2026-09-27,
+`config` and `doctor` worked. `train` and `bench` on `laptop.json` stopped after their first
+collection with `DeployRefused`, because the action mask offered the Heal card on tiles the
+engine refused. RoyaleGym `b0948de` fixed the mask, and those two have not been re-run from a
+fresh install since.
 
 ```
 ..\.venv\Scripts\python -m royalelearn train --config examples/configs/laptop.json
@@ -223,7 +227,8 @@ dirty, and `train` refuses a dirty checkout. `doctor` runs
 the first-run checks. `bench` measures this machine's throughput. Run all four from inside the
 `RoyaleLearn` folder, because those file names are relative to the folder you are in.
 
-Start with the last two, not the first. `doctor` builds one environment, prints the engine build
+Start with `config` and `doctor`, not `train`: `doctor` reads the file `config` writes. `doctor`
+builds one environment, prints the engine build
 digest and the observation shapes, checks the placement mask against the engine for every move
 at one moment of a battle (so only for the cards in hand then),
 prints the memory projection and refuses a run that will not fit. It takes seconds and catches
@@ -234,9 +239,10 @@ long as one iteration does.
 `bench` also leaves a run folder behind in `runs`, named `bench-` and the time it started, so it
 never takes the folder your real run will use. A run's folder is named after its config, so the
 same config on the same code always gets the same folder, and `train` will not start a fresh run
-in a folder that already holds one. So starting one config twice is refused. If you meant to carry
-on the earlier run, the refusal prints the `resume` command for it. If you meant a second fresh
-run, give it a name of its own, for example
+in a folder that already holds one. So starting one config twice is refused, and so is retrying
+a start that failed: it leaves its folder behind, with an iteration-0 checkpoint in it. If you
+meant to carry on the earlier run, the refusal prints the `resume` command for it. If you meant a
+second fresh run, give it a name of its own, or delete that folder under `runs`. For example
 `python -m royalelearn train --config examples/configs/laptop.json --run-name second`.
 
 The config profiles are `laptop`, `workstation` and `many_core`. The first two also ship as files
@@ -249,7 +255,9 @@ does not fit on your card, `train` stops at start-up and names a smaller value t
 If you would rather edit Python than a command line, start from `examples/train_1v1.py`. It is a
 short script: it loads `laptop.json`, changes a few fields such as the run name, then calls
 `run.learn()` inside `with LearningCoordinator(config) as run:`. The command line and the script
-go through the same object. Neither is a wrapper around the other.
+go through the same object. Neither is a wrapper around the other. One thing the command line
+does that a script must do itself: set `CUBLAS_WORKSPACE_CONFIG` before the coordinator starts,
+even on a CPU. Both example scripts call `apply_cublas_workspace_config()` for that.
 
 On memory: the design budgets a laptop run at about 3.3 GB on a 7.8 GB machine. That figure is
 arithmetic on paper, not a measurement of a running loop. `doctor` prints the same arithmetic
@@ -268,8 +276,9 @@ it to the others and names the result in the config. It also lists its own modul
 `extra_component_modules`. Without that line the run refuses to load your code, and the error
 says which setting to add it to. Your reward's source is part of the run's identity too, so an
 edit to it, or to any other file in the same package, makes a new run. If that package sits inside
-a git checkout, `train` refuses while it has uncommitted or untracked files, and names them. Commit
-them first, or pass `--allow-dirty`. The reward is the other main thing a bot creator changes.
+a git checkout, the `train` command refuses while it has uncommitted or untracked files, and names
+them. Commit them first, or pass `--allow-dirty`. A script that builds `LearningCoordinator`
+itself, such as `examples/custom_reward.py`, does not check, so commit before you run it. The reward is the other main thing a bot creator changes.
 
 The three shaping weights are settings in your config, so changing one needs no code. They are
 keyword arguments of the shipped reward, and these are the shipped values:
@@ -419,8 +428,9 @@ machine on 2026-09-27).
 The suite badge is the workflow's own, so it cannot say green while the suite is not. It runs the
 README's install from a clean machine every push -- four clones, the generated data tables, then
 the three packages -- and the first three runs of it were red for three different reasons the
-developer's own box could never have shown. 883 passed on Ubuntu; the handful of tests that differ
-from a Windows count are platform-specific ones that deselect.
+developer's own box could never have shown. The counts move as tests land, so each one here names
+its commit and machine. On a Linux machine on 2026-09-27, at 99da0f9, pytest gave 1146 passed, 13
+skipped and 46 deselected. The tests that differ between platforms skip; they are not deselected.
 
 <p align="center">
   <a href="https://github.com/RoyaleGym/RoyaleLearn/actions/workflows/suite.yml"><img alt="suite" src="https://github.com/RoyaleGym/RoyaleLearn/actions/workflows/suite.yml/badge.svg"></a>
@@ -468,11 +478,12 @@ cd RoyaleLearn
 ..\.venv\Scripts\ruff check .
 ```
 
-With torch installed, on 2026-09-22 at a1d9c56, pytest printed `693 passed, 25 deselected` and
-ruff printed `All checks passed!`.
+With torch installed, on 2026-09-28 at 5b677cf, on a Windows desktop with the graphics card hidden,
+pytest printed `1155 passed, 8 skipped, 47 deselected` and ruff printed `All checks passed!`. The
+8 skipped need a CUDA card.
 
-That run took 67 seconds on a laptop. The count is pinned to a commit because it moves whenever
-tests land, and a bare number here would age badly. The 25 deselected tests are left out by
+That run took about four minutes, beside other jobs. The count is pinned to a commit because it
+moves whenever tests land, and a bare number here would age badly. The 47 deselected tests are left out by
 default so the run stays short. They are the slow ones and the ones that need an engine build matching
 RoyaleSim's data files. Adding `-m ""` to the pytest line runs them too. Without torch, the tests
 that need it are skipped rather than failed, and everything else still runs.

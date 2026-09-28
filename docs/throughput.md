@@ -87,7 +87,7 @@ are in the run folder it just wrote. `metrics.jsonl` holds one JSON object per i
 
 ```
 python -c "import json;
-rows=[json.loads(l) for l in open('runs/royalelearn-<run_id>/metrics.jsonl')];
+rows=[json.loads(l) for l in open('runs/bench-<time>/metrics.jsonl')];
 print([(r['run/iteration'], round(r['time/collection'],1), round(r['time/update'],1)) for r in rows])"
 ```
 

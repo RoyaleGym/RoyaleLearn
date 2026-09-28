@@ -25,7 +25,7 @@ A few words used throughout:
   per lap.
 - **Timestep.** One decision by one bot in one battle.
 - **The update.** The part of an iteration where the network changes. The long quiet part.
-- **Alarm.** A yes-or-no question asked about one row of numbers. 28 of them, in
+- **Alarm.** A yes-or-no question asked about one row of numbers. 24 of them, in
   `royalelearn/metrics/alarms.py`.
 - **Patience.** How many iterations in a row the answer must be yes before the alarm speaks.
 
@@ -141,7 +141,7 @@ an interrupt is a checkpoint rather than a lost afternoon.
 
 Every run has the same 24. A run can have more: section 3.6 lists the two a freeze adds, and a
 package that adds a config section documents its own ([extensions.md](extensions.md)). You can
-print the 24 without starting a run:
+print the 24 without starting a run (on macOS and Linux the interpreter is `../.venv/bin/python`):
 
 ```
 ../.venv/Scripts/python -c "
@@ -441,7 +441,8 @@ check only runs between rounds, and a worker inside a long engine step is not lo
 1. The new run says the learning status port is not available, and nothing else is obviously
    running.
 2. `python -m royalelearn doctor` reports far less free memory than the machine should have.
-3. On Windows, `Get-Process python` lists more interpreters than your current jobs need.
+3. `Get-Process python` on Windows, or `ps aux | grep python` on macOS and Linux, lists more
+   interpreters than your current jobs need.
    Workers are Python processes; the process name does not carry the worker name, so count
    rather than look for a label.
 
