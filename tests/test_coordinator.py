@@ -745,3 +745,35 @@ def test_a_checkpoint_from_before_the_gate_state_resumes_and_leaves_the_total_ou
         assert "ladder/gate_seconds_frac" not in again.rows[-1], (
             "a total nobody recorded was published as a number"
         )
+
+
+def test_a_resume_that_does_not_restore_the_learner_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resume recomputes the learner's digest from what it loaded, prints that, and refuses a
+    state that is not the one the checkpoint recorded.
+
+    Until 2026-09-28 it printed the manifest's record, and verify-resume compared that record
+    with itself: a load that skipped the return scaler passed every fast test (the owner's test
+    audit). Here the scaler's load is skipped the same way.
+    """
+    from royalelearn.errors import CheckpointFormatError
+    from royalelearn.learn.gae import GAE
+
+    config = tiny_config(tmp_path, checkpoint=cfg.CheckpointConfig(every_env_steps=1, keep=2))
+    with coordinator(config) as run:
+        run.iterate()
+        run.iterate()
+        path, run_dir, recorded = run._saved_at[1], run.run_dir, run.state_digest()
+
+    lines: list[str] = []
+    with coordinator(config, resume=path, run_dir=run_dir, printer=lines.append):
+        pass
+    assert any(f"state {recorded[:16]}" in line for line in lines), lines[-5:]
+
+    monkeypatch.setattr(GAE, "load_checkpoint", lambda self, folder, *, strict: None)
+    with (
+        pytest.raises(CheckpointFormatError, match="did not restore"),
+        coordinator(config, resume=path, run_dir=run_dir),
+    ):
+        pass

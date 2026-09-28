@@ -2271,9 +2271,25 @@ class LearningCoordinator:
         self.ratings = self.rater.table
         if self.ratings is not None:
             self.pool.note_refit(self.ratings)
+        # The state this process actually holds, recomputed from what was just loaded, and not
+        # the manifest's record of it: a component that failed to restore would otherwise be
+        # reported as the recorded state, and verify-resume would compare that record with
+        # itself (the owner's test audit, 2026-09-28: a load that skipped the return scaler
+        # passed every fast test). A strict load that does not reproduce the recorded state is
+        # refused; a non-strict or drift-allowed one is an override, so it is said, not refused.
+        loaded = self.state_digest()
+        recorded = manifest.state_digest
+        if recorded and loaded != recorded:
+            message = (
+                f"the checkpoint at {path} recorded learner state {recorded[:16]} and loading "
+                f"it gave {loaded[:16]}: a component did not restore what was saved"
+            )
+            if self.config.checkpoint.strict_load and not self.resumed_with_drift:
+                raise CheckpointFormatError(message)
+            self.printer(f"warning       {message}")
         self.printer(
             f"resumed       iteration {self.iteration} at {self.cumulative_env_steps} env "
-            f"steps, state {manifest.state_digest[:16]}"
+            f"steps, state {loaded[:16]}"
         )
 
     def state_digest(self) -> str:
