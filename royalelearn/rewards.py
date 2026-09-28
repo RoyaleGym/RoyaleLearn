@@ -23,8 +23,9 @@ WHY THESE THREE AND NOT ROYALEGYM'S SHIPPED DEFAULTS
 - ``ElixirLeakPenalty`` is not zero-sum -- both players can leak at once -- which is the
   signature of a term standing in for a potential that is missing.
 
-``CommittedElixirPotential`` replaces both. Playing a card moves elixir from the bar to the
-board and is net zero; losing a unit costs what the unit cost; killing one gains it; and sitting
+``CommittedElixirPotential`` replaces both. Playing a unit card moves elixir from the bar to the
+board and is net zero (a spell is charged at the tap, and a Mirror play is not priced right yet:
+see the class); losing a unit costs what the unit cost; killing one gains it; and sitting
 at ten elixir is penalised on its own, because the opponent's side of the potential keeps rising
 while yours cannot. It replaces the leak penalty's coefficient with a property of the state,
 and it needs no annealing schedule, which is what RoyaleGym's house rule -- weights should
@@ -174,8 +175,8 @@ class CommittedElixirPotential(PotentialReward):
     summoned it. Crown towers are excluded: they were never played, and the tower potential
     already owns what happens to them.
 
-    What the term says, in the four cases that matter: a card played moves elixir from the bar
-    to the board and is worth nothing; a unit lost costs what it cost; a unit killed gains it;
+    What the term says, in the four cases that matter: a unit card played moves elixir from the
+    bar to the board and is worth nothing; a unit lost costs what it cost; a unit killed gains it;
     and holding a full bar loses ground, because the opponent's side keeps rising while yours
     cannot. The last is the one that replaces a leak penalty, and unlike a leak penalty it is
     zero-sum.
@@ -193,8 +194,21 @@ class CommittedElixirPotential(PotentialReward):
     2381149: a golemite is worth something, and this term says zero rather than eight. What it
     keeps true is the property the term needs. ONE PLAY OF A UNIT CARD PUTS EXACTLY THAT CARD'S
     ELIXIR ON THE BOARD: a card's summon count covers exactly the units its row describes, so a
-    Goblin Gang still totals three. ``tests/test_elixir_pricing.py`` taps every card each engine
-    will place, on both seats, because the rule rests on that.
+    Goblin Gang still totals three. ``tests/test_elixir_pricing.py`` taps every card in each
+    engine's catalogue, on both seats, and names any card no tap landed for, because the rule
+    rests on that.
+
+    A MIRROR PLAY IS NOT PRICED RIGHT YET. It pays the copied card's elixir plus its own one, and
+    puts down a copy one level above the copied card. The extra elixir buys that level, which
+    this term does not price, so a Mirror play should lose exactly one elixir of potential. It
+    loses all of it instead: the copy's hitpoints are the higher level's, so it fails its card's
+    row and scores zero. On RoyaleSim 6ad6793 a mirrored Knight has 1938 hitpoints against the
+    row's 1766. The engine does not report a unit's level yet, and scaling the row by a guessed
+    level curve would trade one wrong price for another, so the pricing waits for it. Until
+    then, while the copy lives, a Mirror play reads as its whole cost thrown away, for either
+    seat, and
+    ``test_a_mirror_play_puts_the_copied_cards_elixir_on_the_board`` is marked as an expected
+    failure. Only a catalogue with the Mirror in it is affected.
 
     SPELLS ARE CHARGED AT THE TAP, through the bar, by construction: the bar drops by the spell's
     cost and nothing it leaves on the board is priced, so the elixir comes back only through what

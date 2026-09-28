@@ -2349,11 +2349,13 @@ The reason this composition and not RoyaleGym's shipped `default_reward()`:
   terminal reward. The shaping can outweigh the objective.
 - `ElixirLeakPenalty` is not zero-sum: both players can leak at once. That is the signature of a term
   standing in for a missing potential.
-- The committed-elixir potential replaces both. Playing a card moves elixir from the bar to the board
-  and is net zero; losing a unit costs; killing gains; and sitting at ten elixir is penalised
-  automatically, because the opponent's potential keeps rising while yours does not. There is **no
-  coefficient to re-tune and no annealing schedule**, which is what `royalegym/reward.py`'s own house
-  rule asks for: weights should settle, not drift.
+- The committed-elixir potential replaces both. Playing a unit card moves elixir from the bar to the
+  board and is net zero. A spell is charged at the tap. A Mirror play should lose exactly its own one
+  elixir, and until the engine reports a unit's level it loses its whole cost (see
+  `CommittedElixirPotential` in `royalelearn/rewards.py`). Losing a unit costs; killing gains; and
+  sitting at ten elixir is penalised automatically, because the opponent's potential keeps rising
+  while yours does not. There is **no coefficient to re-tune and no annealing schedule**, which is
+  what `royalegym/reward.py`'s own house rule asks for: weights should settle, not drift.
 
 Unit values use exact `Fraction(card.elixir, card.count)` arithmetic, as RoyaleGym's own elixir term
 does, because the seat-mirror antisymmetry test depends on it: a running float sum of the same values
