@@ -787,7 +787,7 @@ def _refuse_an_occupied_run_dir(run_dir: Path) -> None:
     raise PreflightError(
         f"{run_dir} already holds a run ({' and '.join(held)}). A fresh start here would begin "
         "at iteration 1 and write over its checkpoints.\n"
-        f"  To carry that run on:  royalelearn resume --run {run_dir}\n"
+        f"  To carry that run on:  python -m royalelearn resume --run {run_dir}\n"
         "  To start a separate run: give it another run_name or runs_dir."
     )
 

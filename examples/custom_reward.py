@@ -21,6 +21,7 @@ from msgspec.structs import replace
 from royalegym.protocol import BattleState, Engine, EntityKind
 from royalegym.reward import CombinedReward, WinLossReward
 from royalelearn import LearningCoordinator, load_config
+from royalelearn.determinism import apply_cublas_workspace_config
 from royalelearn.rewards import (
     CommittedElixirPotential,
     PotentialCombinedReward,
@@ -103,6 +104,8 @@ def main() -> None:
         config.env,
         reward_fn=replace(config.env.reward_fn, cls="custom_reward.offensive_reward"),
     )
+    # The command line sets this before the coordinator starts; a script has to, even on a CPU.
+    apply_cublas_workspace_config()
     with LearningCoordinator(config) as run:
         run.learn(until_timesteps=10_000_000)
 

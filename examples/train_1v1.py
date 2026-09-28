@@ -16,6 +16,7 @@ from pathlib import Path
 from msgspec.structs import replace
 
 from royalelearn import LearningCoordinator, load_config
+from royalelearn.determinism import apply_cublas_workspace_config
 
 # Weights and Biases is off unless you turn it on here. It is not installed with the package:
 # it needs `pip install wandb` and a W&B account first. Metrics always go to the run folder's
@@ -26,8 +27,9 @@ USE_WANDB = False
 def main() -> None:
     config = load_config(Path(__file__).parent / "configs" / "laptop.json")
     config.run_name = "my-first-run"
-    # The number to think about: 0.99 gives a credit horizon of about 45 seconds, which is the
-    # deploy-push-tower causal chain. Every run prints its horizon at start-up.
+    # The number to think about: 0.99 lengthens the credit horizon, how far back a reward reaches,
+    # toward the deploy-push-tower causal chain. Every run prints its horizon, in seconds, at
+    # start-up.
     config.advantage = replace(config.advantage, gae_lambda=0.99)
     if USE_WANDB:
         config.metrics = replace(
@@ -35,6 +37,8 @@ def main() -> None:
             sinks=[replace(sink, enabled=True) if sink.kind == "wandb" else sink
                    for sink in config.metrics.sinks],
         )
+    # The command line sets this before the coordinator starts; a script has to, even on a CPU.
+    apply_cublas_workspace_config()
     with LearningCoordinator(config) as run:
         run.learn(until_timesteps=100_000_000)
 

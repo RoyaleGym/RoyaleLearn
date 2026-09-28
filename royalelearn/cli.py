@@ -205,6 +205,11 @@ def _config_of(args: argparse.Namespace) -> RunConfig:
     """The config a command was given, or the profile it named."""
     path = getattr(args, "config", None)
     if path is not None:
+        if not Path(path).is_file():
+            raise PreflightError(
+                f"there is no config file at {path}: write one with "
+                f"`python -m royalelearn config --profile laptop -o {path}`"
+            )
         return validate(load_config(Path(path)))
     return validate(profile(args.profile))
 
