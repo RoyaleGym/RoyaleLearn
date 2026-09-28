@@ -212,12 +212,14 @@ All four of these work. `train` needs the torch extra; so do `doctor` and `bench
 
 ```
 ..\.venv\Scripts\python -m royalelearn train --config examples/configs/laptop.json
-..\.venv\Scripts\python -m royalelearn config --profile laptop -o run.json
-..\.venv\Scripts\python -m royalelearn doctor --config run.json
+..\.venv\Scripts\python -m royalelearn config --profile laptop -o ..\run.json
+..\.venv\Scripts\python -m royalelearn doctor --config ..\run.json
 ..\.venv\Scripts\python -m royalelearn bench
 ```
 
-In that order: `train` trains a bot. `config` writes a config file for you to edit. `doctor` runs
+In that order: `train` trains a bot. `config` writes a config file for you to edit, in the folder
+above RoyaleLearn (`../run.json` on macOS and Linux): a new file inside the checkout makes it
+dirty, and `train` refuses a dirty checkout. `doctor` runs
 the first-run checks. `bench` measures this machine's throughput. Run all four from inside the
 `RoyaleLearn` folder, because those file names are relative to the folder you are in.
 
