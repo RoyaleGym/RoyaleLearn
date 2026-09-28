@@ -63,18 +63,39 @@ def test_anchors_v0_and_the_champion_chain_are_never_evicted(populated) -> None:
 
 
 def test_what_is_kept_spans_the_rating_range(populated) -> None:
+    """Each equal-count rating stratum of the members that may go keeps exactly one of them.
+
+    Counted over the unprotected members only. The protected ones -- the anchors, v0 and the
+    champion chain -- stay whatever their rating, and here v0 is the lowest-rated member and
+    the last champion the highest, so a check over everything kept passed whatever the strata
+    chose: the audit's plant kept the three lowest and it still passed. Nor is "the lowest kept
+    is near the bottom" the property: within a stratum a detected cycle is preferred, so the one
+    kept need not be its extreme.
+    """
     pool, ratings = populated
+    max_sampled = 8
     evicted = set(
-        HallOfFameEviction().select_for_eviction(pool=pool, ratings=ratings, max_sampled=8)
+        HallOfFameEviction().select_for_eviction(
+            pool=pool, ratings=ratings, max_sampled=max_sampled
+        )
     )
     kept = [member for member in pool.sampler() if member not in evicted]
-    assert len(kept) == 8
+    assert len(kept) == max_sampled
+    protected = {*SCRIPTED_IDS, pool.v0, *pool.champion_chain}
     optional = sorted(
-        (ratings.rating[member] for member in kept if member.startswith("snap:")),
+        (member for member in pool.sampler() if member not in protected),
+        key=lambda member: (ratings.rating[member], member),
     )
-    everything = sorted(ratings.rating[member] for member in pool.sampler())
-    assert optional[0] <= everything[2]
-    assert optional[-1] >= everything[-2]
+    budget = max_sampled - len(protected)
+    assert (len(optional), budget) == (17, 3)
+    strata = [
+        optional[index * len(optional) // budget : (index + 1) * len(optional) // budget]
+        for index in range(budget)
+    ]
+    per_stratum = [sum(member in stratum for member in kept) for stratum in strata]
+    assert per_stratum == [1] * budget, (
+        f"kept {sorted(set(kept) - protected)}; per stratum {per_stratum} of {strata}"
+    )
 
 
 def test_a_detected_cycle_is_preferred_within_its_stratum(tmp_path) -> None:
