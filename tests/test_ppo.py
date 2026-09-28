@@ -1261,6 +1261,10 @@ def test_a_quiet_iteration_resets_the_counter(rect: Fixture) -> None:
         lr_critic=2e-4,
     )
     update = _breaching_update(rect, backoff)
+    # A breach already counted, or there is nothing to reset: the counter starts at zero, and
+    # a quiet iteration that never reset it passed (the owner's test audit, 2026-09-28).
+    backoff.load_state(msgspec.structs.replace(backoff.state(), consecutive_breaches=1))
+    assert backoff.consecutive_breaches == 1
 
     update.step(rect.buffer, SCHEDULE)
 

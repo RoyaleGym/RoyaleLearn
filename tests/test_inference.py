@@ -226,18 +226,40 @@ def test_only_the_learner_s_rows_carry_a_log_probability(rect: Fixture) -> None:
 
 
 def test_a_frozen_seat_plays_the_snapshot_it_was_assigned(rect: Fixture) -> None:
-    """With the learner's own actor in the archive, the frozen seats play exactly what the
-    learner would have: the routing is what is under test, not the weights."""
+    """The archive holds a DIFFERENT actor from the learner's, so a frozen seat played by the
+    learner cannot pass: each frozen seat must play exactly what that other actor plays on its
+    own, each learner seat what the learner plays, and the two must differ somewhere.
+
+    Until 2026-09-28 the archive held the learner's own actor, and routing every frozen seat to
+    the learner passed (the owner's test audit).
+    """
     model = build_model(rect.spec)
-    store = _OneActorStore(model.actor)
+    import torch
+
+    snapshot = build_model(rect.spec, seed=SEED + 1)
+    # A fresh policy is near uniform, so two of them sample alike from the same uniforms.
+    # Sharpened, this one plays a different game from the learner's.
+    with torch.no_grad():
+        for parameter in snapshot.actor.parameters():
+            parameter.mul_(20.0)
+    store = _OneActorStore(snapshot.actor)
     engine = inference_for(rect, model=model, snapshots=store)
     engine.begin_iteration(_pool_plan(SLOTS, ("snap:a",)))
-    everyone = engine.act(round_with(np.full(SLOTS, GROUP_LEARNER), buffer=rect.buffer))
+    learner_alone = engine.act(round_with(np.full(SLOTS, GROUP_LEARNER), buffer=rect.buffer))
     groups = np.full(SLOTS, GROUP_LEARNER, dtype=np.int8)
-    groups[1::2] = 0
+    frozen = np.arange(1, SLOTS, 2)
+    groups[frozen] = 0
     mixed = engine.act(round_with(groups, buffer=rect.buffer))
+    other = inference_for(rect, model=snapshot)
+    other.begin_iteration(_pool_plan(SLOTS, ("snap:a",)))
+    snapshot_alone = other.act(round_with(np.full(SLOTS, GROUP_LEARNER), buffer=rect.buffer))
 
-    assert np.array_equal(mixed.actions, everyone.actions)
+    learner_seats = np.arange(0, SLOTS, 2)
+    assert np.array_equal(mixed.actions[learner_seats], learner_alone.actions[learner_seats])
+    assert np.array_equal(mixed.actions[frozen], snapshot_alone.actions[frozen])
+    assert not np.array_equal(snapshot_alone.actions[frozen], learner_alone.actions[frozen]), (
+        "the two actors play alike on these rows, so the routing is not tested"
+    )
 
 
 def test_a_group_the_plan_does_not_name_is_an_error(rect: Fixture) -> None:

@@ -140,8 +140,12 @@ def test_a_real_engine_iteration_completes(tmp_path: Any) -> None:
     """
     pytest.importorskip("torch")
     from royalelearn import config as cfg
+    from royalelearn.errors import StaleEngineBuild
     from test_coordinator import coordinator, tiny_config
 
+    # Only a stale build is a reason to skip. Catching RuntimeError turned every torch shape,
+    # device or dtype error into a SKIP, and a StaleEngineBuild is a PreflightError that it
+    # did not catch at all (the owner's test audit, 2026-09-28).
     try:
         config = tiny_config(
             tmp_path,
@@ -151,5 +155,5 @@ def test_a_real_engine_iteration_completes(tmp_path: Any) -> None:
         with coordinator(config) as run:
             run.learn(until_timesteps=config.ppo.timesteps_per_iteration)
             assert run.iteration >= 1
-    except RuntimeError as exc:
+    except StaleEngineBuild as exc:
         pytest.skip(f"the engine build disagrees with the data on disk: {exc}")

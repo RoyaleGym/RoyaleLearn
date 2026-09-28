@@ -569,10 +569,27 @@ def test_the_schedule_s_discount_reaches_the_reward_during_collection(
             lambda *a, **k: [keep(round_) for round_ in finish_iteration(*a, **k)],
         )
 
+        # And the discount GAE is handed, which is the learner's side of the claim. The row's
+        # run/gamma and the workers' rewards both come from the schedule evaluated at the top of
+        # the iteration, so they agree even when GAE is given another one (the owner's test
+        # audit, 2026-09-28: a schedule one cycle ahead passed to the update kept this green).
+        bootstrapped: list[float] = []
+        compute = run.update.gae.compute
+
+        def recording(**kwargs: Any) -> Any:
+            bootstrapped.append(float(kwargs["gamma"]))
+            return compute(**kwargs)
+
+        monkeypatch.setattr(run.update.gae, "compute", recording)
+
         for gamma in (FIRST_GAMMA, SECOND_GAMMA):
             rounds.clear()
+            bootstrapped.clear()
             run.iterate()
             assert run.rows[-1]["run/gamma"] == gamma
+            assert bootstrapped == [gamma], (
+                f"GAE bootstrapped with {bootstrapped}; the workers paid with {gamma}"
+            )
 
             stepped = [(cycle, paid) for cycle, paid in rounds if cycle > 0]
             assert sorted({cycle for cycle, _ in stepped}) == list(range(1, geometry.cycles + 1))

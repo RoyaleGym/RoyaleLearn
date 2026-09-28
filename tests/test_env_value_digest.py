@@ -108,6 +108,11 @@ def test_the_run_identity_reads_the_value_digest(env_spec: Any) -> None:
     )
     assert left_out.env_spec_digest == written_out.env_spec_digest
     assert identity.run_id(left_out) == identity.run_id(written_out)
+    # The control: agreement alone is also what a digest that ignored the weights would give
+    # (the owner's test audit, 2026-09-28). A different weight is a different identity.
+    heavier = identity.compute_identity(cfg.RunConfig(env=_with_reward({"crown": 0.9})), **facts)
+    assert heavier.env_spec_digest != left_out.env_spec_digest
+    assert identity.run_id(heavier) != identity.run_id(left_out)
 
 
 def test_the_ladder_context_reads_the_value_digest(tmp_path: Any) -> None:
@@ -116,7 +121,7 @@ def test_the_ladder_context_reads_the_value_digest(tmp_path: Any) -> None:
     from test_coordinator import coordinator, tiny_config
 
     contexts = []
-    for kwargs in ({}, {"crown": 0.2, "tower_hp": 0.1, "elixir": 0.05}):
+    for kwargs in ({}, {"crown": 0.2, "tower_hp": 0.1, "elixir": 0.05}, {"crown": 0.9}):
         config = tiny_config(tmp_path / str(len(contexts)))
         config = msgspec.structs.replace(
             config,
@@ -125,3 +130,4 @@ def test_the_ladder_context_reads_the_value_digest(tmp_path: Any) -> None:
         with coordinator(config) as run:
             contexts.append(run.context)
     assert contexts[0] == contexts[1]
+    assert contexts[2] != contexts[0], "a different weight filed under the same context"

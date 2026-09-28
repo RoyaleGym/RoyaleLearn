@@ -175,6 +175,13 @@ def test_a_seed_is_a_function_of_its_name(planner: SlotPlanner, run_config: Any)
     twin = SlotPlanner(geometry(run_config), run_config.master_seed)
     assert planner.env_seed(0, 0, 0) == twin.env_seed(0, 0, 0)
     assert planner.env_seed(0, 0, 0) != planner.env_seed(0, 0, 1)
+    # Every part of the name addresses the stream, not only the generation: a seed that
+    # ignored the worker gave three workers one seed and passed (the owner's test audit,
+    # 2026-09-28).
+    grid = [(w, s, g) for w in range(4) for s in range(3) for g in range(3)]
+    assert len({planner.env_seed(*name) for name in grid}) == len(grid)
+    battles = [(b, o) for b in range(6) for o in range(4)]
+    assert len({planner.match_seed(*name) for name in battles}) == len(battles)
     assert planner.match_seed(1, 0) != planner.match_seed(1, 1)
     assert np.array_equal(planner.uniforms(2, 5), twin.uniforms(2, 5))
     assert not np.array_equal(planner.uniforms(2, 5), planner.uniforms(2, 6))

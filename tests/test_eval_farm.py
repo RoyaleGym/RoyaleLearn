@@ -259,3 +259,40 @@ def test_one_worker_is_no_farm_at_all(tmp_path: Path) -> None:
     )
     with coordinator(config) as run:
         assert run.eval_player is run.player
+
+
+def test_a_worker_hands_the_player_each_battle_s_own_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On MockEngine a battle's score is decided by who plays and which seat, not by the seed, so
+    no comparison of scores can see a worker that plays every battle from another seed (the
+    owner's test audit, 2026-09-28: seed=index passed both tests above). This asks the worker
+    loop itself what it handed the player, battle by battle."""
+    import queue
+
+    from royalelearn.ladder import farm as farm_module
+
+    seen: list[tuple[str, str, int, int, str]] = []
+
+    class Recording:
+        def play(self, *, a: str, b: str, seed: int, a_seat: int, act_path: str) -> float:
+            seen.append((a, b, seed, a_seat, act_path))
+            return 0.5
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(farm_module, "_build_player", lambda config: Recording())
+    spec, eval_env = _setup(tmp_path)
+    config = _farm(spec, eval_env, tmp_path / "snapshots", None, workers=1).config
+    requests = _requests(6)
+    inbox: queue.Queue[Any] = queue.Queue()
+    outbox: queue.Queue[Any] = queue.Queue()
+    for index, request in enumerate(requests):
+        inbox.put((index, request))
+    inbox.put(None)
+
+    farm_module.eval_worker_main(msgspec.msgpack.encode(config), inbox, outbox)
+
+    assert seen == [(r.a, r.b, r.seed, r.a_seat, r.act_path) for r in requests]
+    assert len({r.seed for r in requests}) > 1, "one seed for every battle tests nothing"

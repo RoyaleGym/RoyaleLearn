@@ -386,6 +386,26 @@ def test_condition_three_uses_the_champions_fit_and_not_its_record(tmp_path) -> 
     assert condition.passed
 
 
+def test_condition_three_uses_the_fit_even_where_the_champion_has_a_record(tmp_path) -> None:
+    """A record that disagrees with the fit: the champion went 2-8 against every member, and the
+    fit says 0.55. The reference must be the fit, so a candidate at 0.40 fails. Reading the record
+    where one exists makes the reference 0.2 and promotes the collapsed candidate, and the test
+    above could not see that, because its champion had no record (the owner's test audit,
+    2026-09-28)."""
+    pool = _pool(tmp_path)
+    for member in POOL_MEMBERS:
+        pool.record(_anchor_games(CHAMPION, member, wins=2, losses=8))
+    assert pool.eval_view().record(CHAMPION, POOL_MEMBERS[0]).score_a == pytest.approx(0.2)
+    rater = FlatRater(dict.fromkeys(POOL_MEMBERS, 0.55))
+    decision = _gate(tmp_path, rater).evaluate(
+        CANDIDATE, pool, _runner(QuotaPlayer(_rates(0.60, members=0.40)), tmp_path)
+    )
+    condition = decision.conditions[CONDITION_POOL]
+    assert condition.reference == pytest.approx(0.55)
+    assert not condition.passed
+    assert not decision.promote
+
+
 def test_the_stratified_sample_spans_the_rating_range(tmp_path) -> None:
     pool = _pool(tmp_path)
     gate = _gate(tmp_path, stratified_snapshots=4)
