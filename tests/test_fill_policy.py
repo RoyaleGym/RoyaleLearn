@@ -8,6 +8,7 @@ the harness keeps it only in the iterations it checks.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,79 @@ def test_a_resumed_process_fills_its_first_iteration_past_the_debug_window(
         again.iterate()
         again.iterate()
     assert seen == [True, False], seen
+
+
+def _gate_and_save(tmp_path: Path, name: str, *, fill_always: bool, monkeypatch: Any) -> Any:
+    """Four iterations of eight env steps: a gate at two and four (the second plays the
+    champion, in this process), a periodic save at three. Returns each iteration's digest, the
+    flag as each gate and each save saw it, the decisions without their wall clock, and the
+    saved checkpoint's files by sha256."""
+    real = determinism.set_fill_uninitialized
+    if fill_always:
+        monkeypatch.setattr(determinism, "set_fill_uninitialized", lambda on: real(True))
+    config = exact_config(tmp_path / name, debug=0, every=0, forced_rows="critic_only")
+    gate = msgspec.structs.replace(
+        config.ladder.gate,
+        champion_games=8,
+        anchor_games=8,
+        stratified_snapshots=1,
+        stratified_games=8,
+        bootstrap_resamples=200,
+    )
+    config = msgspec.structs.replace(
+        config,
+        ladder=msgspec.structs.replace(config.ladder, candidate_every_env_steps=16, gate=gate),
+        checkpoint=msgspec.structs.replace(config.checkpoint, every_env_steps=24),
+        # The gate's battles in this process, where the iteration's fill setting reaches them.
+        rollout=msgspec.structs.replace(config.rollout, eval_workers=1),
+    )
+    digests: list[str] = []
+    at_gate: list[bool] = []
+    at_save: list[bool] = []
+    decisions: list[Any] = []
+    with coordinator(config) as run:
+        evaluate, write = run.gate.evaluate, run.store.write
+
+        def recording_gate(*args: Any, **kwargs: Any) -> Any:
+            at_gate.append(bool(torch_deterministic.fill_uninitialized_memory))
+            decision = evaluate(*args, **kwargs)
+            decisions.append(msgspec.structs.replace(decision, wall_seconds=0.0))
+            return decision
+
+        def recording_write(*args: Any, **kwargs: Any) -> Any:
+            at_save.append(bool(torch_deterministic.fill_uninitialized_memory))
+            return write(*args, **kwargs)
+
+        run.gate.evaluate = recording_gate
+        run.store.write = recording_write
+        for _ in range(4):
+            run.iterate()
+            digests.append(run.state_digest())
+        manifests = sorted((Path(run.run_dir) / "checkpoints").glob("*/manifest.json"))
+        files = [json.loads(path.read_text(encoding="utf-8"))["files"] for path in manifests]
+    monkeypatch.undo()
+    return digests, at_gate, at_save, decisions, files
+
+
+@pytest.mark.slow  # two gates, one of them playing the champion, in each of two runs
+def test_a_gate_and_a_checkpoint_in_a_fill_off_iteration_move_no_bit(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Everything the process does in an iteration runs under that iteration's setting, the
+    checkpoint and a gate's own battles included, so with the fill off both must come out bit
+    for bit as they do with it always on: the learner's digest, the gate's decision, and every
+    file of the checkpoint by sha256.
+    """
+    off = _gate_and_save(tmp_path, "off", fill_always=False, monkeypatch=monkeypatch)
+    on = _gate_and_save(tmp_path, "on", fill_always=True, monkeypatch=monkeypatch)
+    off_digests, off_gate, off_save, off_decisions, off_files = off
+    on_digests, on_gate, on_save, on_decisions, on_files = on
+    assert off_gate == [False, False] and off_save == [False], (off_gate, off_save)
+    assert on_gate == [True, True] and on_save == [True], (on_gate, on_save)
+    assert len(off_decisions) == 2 and off_decisions[1].champion is not None, off_decisions
+    assert off_digests == on_digests
+    assert off_decisions == on_decisions
+    assert len(off_files) == 1 and off_files == on_files
 
 
 def _run(
