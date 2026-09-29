@@ -707,6 +707,44 @@ def test_the_gate_state_survives_a_resume(tmp_path: Path) -> None:
         assert again.gate_seconds_total == pytest.approx(seconds)
 
 
+def test_a_cpu_run_asks_the_machine_nothing_about_device_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run on the CPU reads its peak device memory as 0.0 and makes no CUDA memory call, on a
+    machine with a card as on one without.
+
+    In two halves, because pretending CUDA present for a whole iteration trips torch elsewhere.
+    The reading, with CUDA pretended present: with it hidden the old machine-wide reading
+    returned 0.0 before any call as well, so a test could not tell them apart. And the row:
+    the iteration hands the reading its own device. The old reading took none, and ran torch's
+    CUDA initialisation inside a CPU run on a machine with a card.
+    """
+    import torch
+
+    from royalelearn import coordinator as module
+
+    calls: list[str] = []
+    with monkeypatch.context() as patched:
+        patched.setattr(torch.cuda, "is_available", lambda: True)
+        patched.setattr(
+            torch.cuda, "max_memory_allocated", lambda *a, **k: calls.append("peak") or 5e9
+        )
+        patched.setattr(
+            torch.cuda, "reset_peak_memory_stats", lambda *a, **k: calls.append("reset")
+        )
+        assert module._vram_peak_mb("cpu") == 0.0
+        assert module._vram_peak_mb("cuda:0") == 5000.0  # the same fakes do answer a CUDA run
+    assert calls == ["peak", "reset"], calls
+
+    asked: list[Any] = []
+    real = module._vram_peak_mb
+    monkeypatch.setattr(module, "_vram_peak_mb", lambda *a, **k: asked.append(a) or real(*a, **k))
+    with coordinator(tiny_config(tmp_path)) as run:
+        run.iterate()
+        assert run.rows[-1]["health/vram_peak_mb"] == 0.0
+    assert asked == [("cpu",)], asked
+
+
 def _checkpoints(run_dir: Path) -> dict[int, dict[str, Any]]:
     """``{env step: manifest}`` for every checkpoint the run holds."""
     import json

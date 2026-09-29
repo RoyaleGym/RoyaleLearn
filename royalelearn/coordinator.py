@@ -2170,7 +2170,7 @@ class LearningCoordinator:
             "health/obs_codec_clipped": int(getattr(self.codec, "clipped", 0)),
             "health/samples_unused_frac": float(result.samples_unused_frac),
             "health/nan_guard_trips": _nan_guard_trips(result),
-            "health/vram_peak_mb": _vram_peak_mb(),
+            "health/vram_peak_mb": _vram_peak_mb(str(self.device)),
             **_vram_regime(getattr(self, "vram_needed_mb", None), device=str(self.device)),
             **_optional("health/rss_peak_mb", _rss_peak_mb()),
             "health/buffer_fill_frac": _fill_frac(buffer, collection["rounds"], geo),
@@ -2748,8 +2748,13 @@ def _vram_regime(
         return {}
 
 
-def _vram_peak_mb() -> float:
+def _vram_peak_mb(device: str | None = None) -> float:
     """Peak device memory since the previous call, which is what the schema promises.
+
+    ``device`` is the run's. A run that is not on a CUDA device reads 0.0 without importing
+    torch: asking the machine instead ran torch's CUDA initialisation inside a CPU run on a
+    machine with a card, and read memory another process might hold. 0.0 rather than absent,
+    because ``bench`` reads the key unconditionally.
 
     The counter behind this is ``max_memory_allocated``, a high-water mark that torch never
     lowers on its own, so reading it without resetting reports the largest allocation the
@@ -2762,13 +2767,15 @@ def _vram_peak_mb() -> float:
     Resetting here is what makes the key's own description true. Note the unit: this is decimal
     MB against a card quoted in MiB, so 3930.72 is 91.5% of a 4096 MiB device, not 96%.
     """
+    if device is not None and not str(device).startswith("cuda"):
+        return 0.0
     try:
         import torch
 
         if not torch.cuda.is_available():
             return 0.0
-        peak = float(torch.cuda.max_memory_allocated()) / 1e6  # pragma: no cover
-        torch.cuda.reset_peak_memory_stats()  # pragma: no cover
+        peak = float(torch.cuda.max_memory_allocated(device)) / 1e6  # pragma: no cover
+        torch.cuda.reset_peak_memory_stats(device)  # pragma: no cover
         return peak  # pragma: no cover
     except Exception:  # pragma: no cover - torch is optional for everything but a run
         return 0.0
