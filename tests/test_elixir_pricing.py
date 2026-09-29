@@ -44,6 +44,16 @@ ENGINES = [
     pytest.param("rust-training", marks=pytest.mark.engine),
 ]
 
+#: Cards the catalogue test does not price, each graded by a strict xfail of its own. The Tri
+#: Wizards: from RoyaleSim round 9 a tap puts the three wizards down over several ticks, none
+#: of them within the two the catalogue test waits, and the Electro Wizard and Ice Wizard come
+#: down under THEIR OWN card ids (42, 23), so once all three are down the term prices the play
+#: at 7 + 4 + 3. It is an event-only card, and its fix waits with the other event-only cards.
+PRICED_ELSEWHERE = frozenset({"TriWizards"})
+#: How long the Tri Wizards test waits after the tap. On round 9 the last wizard is down 8
+#: ticks after it.
+TRI_WIZARDS_SETTLE_TICKS = 20
+
 
 def _engine(kind: str) -> Any:
     if kind.startswith("rust"):
@@ -83,7 +93,7 @@ def _is_mirror(card: Any) -> bool:
     return card.placement == Placement.MIRROR
 
 
-def _tap_everything(engine: Any):
+def _tap_everything(engine: Any, ticks: int = 2):
     """Tap every card in the catalogue, each seat, and yield a ``Tap`` for each, landed or not.
 
     A TAP, not a hand-built board, because they do not put the same thing down: a tapped Goblin
@@ -96,6 +106,8 @@ def _tap_everything(engine: Any):
     for is yielded with ``put_down=None``, so a caller names it rather than never seeing it.
     The Mirror needs the cycle anyway, because it copies its side's last play; the cycled card
     is the cheapest unit card in the hand, so the copy puts something on the board.
+
+    ``ticks`` is how long after the tap the board is read.
     """
     lockout = (
         int(getattr(engine.rules(), "deploy_lockout_ticks", 0)) if hasattr(engine, "rules") else 0
@@ -146,7 +158,7 @@ def _tap_everything(engine: Any):
             existing = {entity.uid for entity in before.entities}
             x, y = to_engine(arena, seat, 9 * arena.subtile, 6 * arena.subtile)
             command = DeployCommand(team=seat, hand_slot=hand.index(card.card_id), x=x, y=y)
-            status = engine.step([command], 2)[0].status
+            status = engine.step([command], ticks)[0].status
             if status != 0:
                 yield Tap(card, seat, None, copied, why=f"tap refused: {status}")
                 continue
@@ -173,7 +185,7 @@ def test_one_tap_of_every_card_puts_exactly_its_elixir_on_the_board(kind: str) -
     Every card in the catalogue, on both seats, and a card no tap landed for fails by name. A
     card whose play priced at anything else would over- or under-pay every play of it for the
     rest of training. The Mirror is priced by the test after this one, because what it puts
-    down is another card's.
+    down is another card's, and the cards in ``PRICED_ELSEWHERE`` by their own tests.
     """
     engine = _engine(kind)
     term = _term(engine)
@@ -182,7 +194,7 @@ def test_one_tap_of_every_card_puts_exactly_its_elixir_on_the_board(kind: str) -
     assert missed == [], f"cards whose price was never measured, because no tap landed: {missed}"
     off = []
     for t in taps:
-        if _is_mirror(t.card):
+        if _is_mirror(t.card) or t.card.name in PRICED_ELSEWHERE:
             continue
         on_board = sum((term.unit_value(entity) for entity in t.put_down), Fraction(0))
         if on_board != _price(t.card):
@@ -232,6 +244,52 @@ def test_a_mirror_play_puts_the_copied_cards_elixir_on_the_board() -> None:
             off.append((t.seat, t.copied.name, len(t.put_down), str(on_board), str(expected)))
     if off:
         raise MirrorCopyMispriced(f"Mirror copies priced at something other than their card: {off}")
+
+
+class TriWizardsMispriced(AssertionError):
+    """The one failure the Tri Wizards test below is expected to raise, and no other."""
+
+
+@pytest.mark.parametrize("kind", ENGINES[1:])
+@pytest.mark.xfail(
+    strict=True,
+    raises=TriWizardsMispriced,
+    reason=(
+        "RoyaleSim puts the Tri Wizards' Electro and Ice Wizards down under their own card ids "
+        "(42, 23), so the term prices the play 14; stamping the played card's id waits with the "
+        "other event-only cards"
+    ),
+)
+def test_a_tri_wizards_play_puts_exactly_its_elixir_on_the_board(kind: str) -> None:
+    """The Tri Wizards, priced once all three wizards are on the board.
+
+    The catalogue test reads the board two ticks after a tap and the Tri Wizards arrive later,
+    so this test waits ``TRI_WIZARDS_SETTLE_TICKS``. It also requires all three: with only the
+    first wizard down the board prices at exactly 7 and would pass for the wrong reason.
+
+    Expected to fail, and only with ``TriWizardsMispriced``: a catalogue with no Tri Wizards, a
+    tap that did not land or a board without three wizards fails as an ordinary error. When
+    the engine stamps the card's id on all three this passes, ``strict`` turns that into a
+    failure, and the card comes out of ``PRICED_ELSEWHERE`` with the mark.
+    """
+    engine = _engine(kind)
+    term = _term(engine)
+    taps = [
+        t
+        for t in _tap_everything(engine, ticks=TRI_WIZARDS_SETTLE_TICKS)
+        if t.card.name == "TriWizards"
+    ]
+    assert taps, "no Tri Wizards in this catalogue, so there is nothing to price"
+    assert all(t.put_down is not None and len(t.put_down) == 3 for t in taps), [
+        (t.seat, t.why, None if t.put_down is None else len(t.put_down)) for t in taps
+    ]
+    off = []
+    for t in taps:
+        on_board = sum((term.unit_value(entity) for entity in t.put_down), Fraction(0))
+        if on_board != _price(t.card):
+            off.append((t.seat, str(on_board), str(_price(t.card))))
+    if off:
+        raise TriWizardsMispriced(f"Tri Wizards plays priced at something other than 7: {off}")
 
 
 def _entity(card: Any, **stats: Any) -> EntityState:
