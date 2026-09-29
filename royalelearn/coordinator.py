@@ -79,6 +79,7 @@ from .metrics.records import (
     IterationMetrics,
     episode_fields,
     ladder_fields,
+    role_count_fields,
     rollout_policy_fields,
     schedule_fields,
     update_fields,
@@ -2159,7 +2160,8 @@ class LearningCoordinator:
                 probe_seconds_frac=(
                     self.rung_seconds_total / max(1e-9, wall) if self.rung_seconds_total else None
                 ),
-            )
+            ),
+            **role_count_fields(episodes, self.matchmaker.role_of),
         )
 
         failures = getattr(self, "failures_by_kind", {})

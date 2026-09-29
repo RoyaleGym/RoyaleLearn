@@ -170,3 +170,32 @@ def test_a_seed_list_the_config_can_see_is_wrong_is_refused(
     )
     problems = cfg.check_consistency(config)
     assert any(said in problem for problem in problems), problems
+
+
+def test_the_rows_say_whether_pool_battles_played_the_pool(tmp_path: Path) -> None:
+    """``ladder/role_counts``: with every battle a pool battle and nothing admitted, each finished
+    battle played a scripted opponent and is counted as pool_fallback; with a seed in the pool,
+    each played the pool and none fell back. Summed over three iterations, so some finish."""
+
+    def counts(config: cfg.RunConfig) -> dict[str, int]:
+        total: dict[str, int] = {}
+        with coordinator(config) as run:
+            for _ in range(3):
+                run.iterate()
+                for key, value in run.rows[-1].items():
+                    if key.startswith("ladder/role_counts/"):
+                        total[key.rsplit("/", 1)[1]] = total.get(key.rsplit("/", 1)[1], 0) + value
+        return total
+
+    base = tiny_config(tmp_path / "empty")
+    empty = counts(
+        msgspec.structs.replace(base, ladder=msgspec.structs.replace(base.ladder, mix=POOL_ONLY))
+    )
+    assert empty["scripted"] > 0, empty
+    fallback = empty["scripted"]
+    assert empty == {"mirror": 0, "pool": 0, "scripted": fallback, "pool_fallback": fallback}
+
+    folder, sha256 = frozen_actor(tmp_path)
+    full = counts(seeded(tmp_path, folder, sha256, mix=POOL_ONLY))
+    assert full["pool"] > 0, full
+    assert full == {"mirror": 0, "pool": full["pool"], "scripted": 0, "pool_fallback": 0}

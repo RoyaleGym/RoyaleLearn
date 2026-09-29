@@ -31,6 +31,7 @@ from royalelearn.metrics.records import (
     episode_fields,
     flatten,
     ladder_fields,
+    role_count_fields,
     rollout_policy_fields,
     schedule_fields,
     unknown_keys,
@@ -337,16 +338,19 @@ def _row(tmp_path) -> dict:
         run=schedule_fields(state, decision_ms=500),
         ppo=update_fields(_update()),
         env=episode_fields(_episodes(), truncation_steps=600).fields,
-        ladder=ladder_fields(
-            pool,
-            ratings=pool.ratings,
-            elo=1240.0,
-            paired_rho=0.31,
-            gate_seconds_frac=0.04,
-            decision=_decision(),
-            rungs=_probe(),
-            probe_seconds_frac=0.02,
-        ),
+        ladder={
+            **ladder_fields(
+                pool,
+                ratings=pool.ratings,
+                elo=1240.0,
+                paired_rho=0.31,
+                gate_seconds_frac=0.04,
+                decision=_decision(),
+                rungs=_probe(),
+                probe_seconds_frac=0.02,
+            ),
+            **role_count_fields(_episodes(), lambda _battle: 1),
+        },
         policy=rollout_policy_fields(_rollout_stats()),
     )
     return metrics.row()
@@ -773,3 +777,30 @@ def test_the_composite_fans_out_and_nests_its_checkpoints(tmp_path) -> None:
     composite.save_checkpoint(folder)
     assert (folder / "0-JsonlSink" / "jsonl.json").exists()
     composite.load_checkpoint(folder, strict=True)
+
+
+def test_role_counts_count_battles_by_what_they_played() -> None:
+    """One per battle episode, by bucket; the scripted ones planned as pool are the fallback.
+
+    Six records: a mirror battle's two learner seats (one battle), a pool battle, a battle the
+    plan laid out as scripted, and one battle laid out as pool that finished twice, at two
+    ordinals, playing scripted both times (two fallback battles).
+    """
+    import msgspec
+
+    base = _record(0, 0, WON)
+    records = [
+        msgspec.structs.replace(base, battle=0, seat=0, bucket="mirror", opponent_id="learner"),
+        msgspec.structs.replace(base, battle=0, seat=1, bucket="mirror", opponent_id="learner"),
+        msgspec.structs.replace(base, battle=1, bucket="pool", opponent_id="snap:v0"),
+        msgspec.structs.replace(base, battle=2, bucket="scripted", opponent_id="scripted:noop"),
+        msgspec.structs.replace(base, battle=3, ordinal=0, bucket="scripted"),
+        msgspec.structs.replace(base, battle=3, ordinal=1, bucket="scripted"),
+    ]
+    planned = {0: 0, 1: 1, 2: 2, 3: 1}  # ROLE_MIRROR, ROLE_POOL, ROLE_SCRIPTED
+    assert role_count_fields(records, planned.__getitem__) == {
+        "ladder/role_counts/mirror": 1,
+        "ladder/role_counts/pool": 1,
+        "ladder/role_counts/scripted": 3,
+        "ladder/role_counts/pool_fallback": 2,
+    }

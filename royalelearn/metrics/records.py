@@ -14,7 +14,7 @@ fixed record per finished episode, and what this module does with those is arith
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import msgspec
@@ -431,6 +431,38 @@ def schedule_fields(state: ScheduleState, *, decision_ms: int) -> dict[str, Metr
         "run/lr_critic": state.lr_critic,
         "ppo/lr_backoff_events": state.lr_backoff_events,
     }
+
+
+def role_count_fields(
+    episodes: Sequence[EpisodeRecord], planned_role: Callable[[int], int]
+) -> dict[str, MetricValue]:
+    """``ladder/role_counts/*``: the training battles that finished this iteration, by what they
+    played, and how many of the scripted ones the plan laid out as pool.
+
+    One per battle episode, ``(battle, ordinal)``, whichever seats wrote a record: a mirror
+    battle's two learner seats are one battle. ``mirror``, ``pool`` and ``scripted`` are the
+    battle's bucket, which is what it played. ``pool_fallback`` is the scripted ones whose planned
+    role (``planned_role``, the matchmaker's layout) is pool: until the first snapshot is
+    admitted a pool battle plays a scripted opponent. The config's split, ``role_counts``,
+    cannot show that; the train session's S3b arm planned 17 pool battles and every one of them
+    played scripted until its first gate.
+    """
+    from ..api.rollout import BUCKETS, ROLE_POOL
+
+    played: dict[tuple[int, int], str] = {}
+    for record in episodes:
+        played.setdefault((record.battle, record.ordinal), record.bucket)
+    counts = dict.fromkeys(BUCKETS, 0)
+    fallback = 0
+    for (battle, _ordinal), bucket in played.items():
+        counts[bucket] += 1
+        if bucket == "scripted" and planned_role(battle) == ROLE_POOL:
+            fallback += 1
+    fields: dict[str, MetricValue] = {
+        f"ladder/role_counts/{bucket}": count for bucket, count in counts.items()
+    }
+    fields["ladder/role_counts/pool_fallback"] = fallback
+    return fields
 
 
 def ladder_fields(

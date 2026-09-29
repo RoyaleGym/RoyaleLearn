@@ -575,6 +575,30 @@ METRICS: dict[str, MetricSpec] = {
         "count", "Evaluation battles played so far in this run.", dtype="int"
     ),
     "ladder/evictions": _m("count", "Snapshots removed from the sampler so far.", dtype="int"),
+    "ladder/role_counts/mirror": _m(
+        "count",
+        "Training battles that finished this iteration as mirror battles, one per battle episode.",
+        dtype="int",
+    ),
+    "ladder/role_counts/pool": _m(
+        "count",
+        "Training battles that finished this iteration against a pool snapshot, one per battle "
+        "episode.",
+        dtype="int",
+    ),
+    "ladder/role_counts/scripted": _m(
+        "count",
+        "Training battles that finished this iteration against a scripted opponent, one per "
+        "battle episode, pool_fallback included.",
+        dtype="int",
+    ),
+    "ladder/role_counts/pool_fallback": _m(
+        "count",
+        "Of role_counts/scripted, the battles the plan laid out as pool: before the first "
+        "snapshot is admitted a pool battle plays a scripted opponent, so the plan's pool share "
+        "can be scripted play in fact. Zero once anything is in the pool.",
+        dtype="int",
+    ),
     # -- health ------------------------------------------------------------
     "health/illegal_action_rate": _m(
         "fraction",
