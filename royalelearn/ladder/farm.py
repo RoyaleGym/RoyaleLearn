@@ -132,13 +132,33 @@ def _build_player(config: EvalWorkerConfig) -> Any:
     )
 
 
+def _pin_threads() -> None:
+    """One thread for this worker's torch and BLAS, which ``royalelearn.cli`` already gives
+    every process it starts.
+
+    The CLI sets the BLAS thread variables before numpy loads, and a spawned worker inherits
+    them. A caller that builds the coordinator as a library has no such setting, and each of the
+    K workers then took every core: under a loaded machine on 2026-09-28 a two-worker gate that
+    runs in 28 s in one process did not answer in 180 s, and passed in 40 s with the variables
+    set. The variables are set for anything this process loads later, and torch's own count is
+    set because torch has already read them by the time this runs.
+    """
+    import torch
+
+    from ..determinism import apply_blas_thread_env
+
+    apply_blas_thread_env()
+    torch.set_num_threads(1)
+
+
 def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
     """One worker: build a player, then answer battles until told to stop.
 
     CPU on purpose. A batch-of-one forward is latency-bound rather than throughput-bound, and K
     workers sharing one device would serialise on it anyway; the point of the farm is the K
-    environments, which are the expensive half.
+    environments, which are the expensive half. One thread each, before anything else.
     """
+    _pin_threads()
     config = msgspec.msgpack.decode(payload, type=EvalWorkerConfig)
     try:
         player = _build_player(config)

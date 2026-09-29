@@ -296,3 +296,46 @@ def test_a_worker_hands_the_player_each_battle_s_own_seed(
 
     assert seen == [(r.a, r.b, r.seed, r.a_seat, r.act_path) for r in requests]
     assert len({r.seed for r in requests}) > 1, "one seed for every battle tests nothing"
+
+
+def test_an_eval_worker_pins_itself_to_one_thread_before_anything_else(monkeypatch) -> None:
+    """Pinned first: before the payload is even decoded, so a worker that fails to start
+    still started single-threaded."""
+    import msgspec
+
+    from royalelearn.ladder import farm
+
+    calls: list[str] = []
+    monkeypatch.setattr(farm, "_pin_threads", lambda: calls.append("pin"))
+    with pytest.raises(msgspec.DecodeError):
+        farm.eval_worker_main(b"not a payload", None, None)
+    assert calls == ["pin"]
+
+
+def test_the_pin_leaves_torch_one_thread_in_a_process_that_had_no_setting() -> None:
+    """In a fresh interpreter with the BLAS variables removed, as a library caller's worker
+    starts: torch had a thread per core, and after the pin it has one. A subprocess, because the
+    pin is process-wide and this one runs the rest of the suite."""
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k not in farm_vars()}
+    script = (
+        "import torch; before = torch.get_num_threads(); "
+        "from royalelearn.ladder.farm import _pin_threads; _pin_threads(); "
+        "import os; print(before, torch.get_num_threads(), os.environ['OMP_NUM_THREADS'])"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=300
+    )
+    assert done.returncode == 0, done.stderr
+    before, after, omp = done.stdout.split()
+    assert int(before) > 1, "this machine has one core, so the pin changes nothing to see"
+    assert (int(after), omp) == (1, "1")
+
+
+def farm_vars() -> tuple[str, ...]:
+    from royalelearn.determinism import BLAS_THREAD_VARS
+
+    return BLAS_THREAD_VARS
