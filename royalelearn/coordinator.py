@@ -1477,7 +1477,9 @@ class LearningCoordinator:
             self.source, self.source.planner, self.matchmaker
         )
         self.rng = RngComponent(
-            master_seed=self.config.master_seed, eval_seed_set_sha=self.seeds.sha()
+            master_seed=self.config.master_seed,
+            eval_seed_set_sha=self.seeds.sha(),
+            device=self.device,
         )
         return {
             "actor_critic": _ModelComponent(

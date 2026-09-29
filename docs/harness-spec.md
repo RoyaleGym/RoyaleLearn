@@ -1103,7 +1103,8 @@ After loading a checkpoint written at the end of iteration `k`:
 
 1. The checkpoint's `RunIdentity` equals the identity computed from the current config and
    environment, field for field, or the load is refused with every differing field named.
-2. Every RNG state is restored rather than re-seeded: torch CPU, torch CUDA on every device, the
+2. Every RNG state is restored rather than re-seeded: torch CPU, torch CUDA on every device when the
+   run is on a CUDA device (a CPU run captures none, and restores none it finds), the
    minibatch generator's `bit_generator.state`, python `random`, and each shard's seed path, reset
    ordinal and respawn generation.
 3. Schedule positions are restored: current `gamma`, `ent_coef`, `ent_coef_noop`, both learning
@@ -3020,7 +3021,7 @@ file prints the exact path it wanted and continues with a default.
 class RngState(msgspec.Struct):
     master_seed: int
     torch_cpu: str                  # hex of torch.get_rng_state()
-    torch_cuda: list[str]           # one per device
+    torch_cuda: list[str]           # one per device; empty for a run not on CUDA
     python_random: list
     numpy_minibatch: dict           # Generator.bit_generator.state
     iteration: int                  # the counter that addresses act/... and match/... streams

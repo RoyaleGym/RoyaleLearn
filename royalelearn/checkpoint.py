@@ -122,12 +122,23 @@ class RngComponent:
         master_seed: int,
         generator: np.random.Generator | None = None,
         eval_seed_set_sha: str = "",
+        device: Any = None,
     ) -> None:
         self.master_seed = int(master_seed)
         self.generator = generator
         self.eval_seed_set_sha = eval_seed_set_sha
+        #: The run's device. CUDA's generators are captured and restored only for a run on one:
+        #: a CPU run draws nothing from them, and asking for them on a machine with a card ran
+        #: torch's CUDA initialisation inside the CPU run and put the card's state in its
+        #: checkpoint. None asks the machine, as it did before this was passed.
+        self.device = device
         self.iteration = 0
         self.shard_streams: list[dict[str, Any]] = []
+
+    def _uses_cuda(self, torch: Any) -> bool:
+        if self.device is not None and not str(self.device).startswith("cuda"):
+            return False
+        return bool(torch.cuda.is_available())
 
     def capture(self) -> RngState:
         """Everything that would have to be true again for the next draw to be the same one."""
@@ -136,7 +147,7 @@ class RngComponent:
         torch = _torch()
         if torch is not None:
             torch_cpu = torch.get_rng_state().numpy().tobytes().hex()
-            if torch.cuda.is_available():
+            if self._uses_cuda(torch):
                 torch_cuda = [
                     state.numpy().tobytes().hex() for state in torch.cuda.get_rng_state_all()
                 ]
@@ -164,7 +175,7 @@ class RngComponent:
         torch = _torch()
         if torch is not None and state.torch_cpu:
             torch.set_rng_state(_byte_tensor(torch, state.torch_cpu))
-            if state.torch_cuda and torch.cuda.is_available():
+            if state.torch_cuda and self._uses_cuda(torch):
                 torch.cuda.set_rng_state_all(
                     [_byte_tensor(torch, hexed) for hexed in state.torch_cuda]
                 )

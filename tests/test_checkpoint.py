@@ -357,3 +357,38 @@ def test_every_config_difference_is_printed_and_the_run_continues(tmp_path, caps
     printed = capsys.readouterr().out
     assert "checkpoint.keep" in printed
     assert "runs_dir" in printed
+
+
+def test_a_cpu_run_captures_and_restores_no_cuda_rng_state(monkeypatch, tmp_path) -> None:
+    """CUDA's generators belong in a checkpoint only when the run is on a CUDA device.
+
+    Asked of the machine, a CPU run on a machine with a card ran torch's CUDA initialisation to
+    read them and wrote the card's state into its rng.json. CUDA is pretended present here,
+    because with it hidden the old machine-wide question also answered no, and a test could not
+    tell them apart. An older CPU checkpoint that carries the card's state restores nothing of it.
+    """
+    torch = pytest.importorskip("torch")
+    from royalelearn.checkpoint import RngComponent
+    from royalelearn.testing import coordinator, tiny_config
+
+    calls: list[str] = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_rng_state_all",
+        lambda: calls.append("get") or [torch.zeros(4, dtype=torch.uint8)],
+    )
+    monkeypatch.setattr(torch.cuda, "set_rng_state_all", lambda _states: calls.append("set"))
+    cpu = RngComponent(master_seed=1, device="cpu")
+    assert cpu.capture().torch_cuda == [] and calls == []
+    gpu = RngComponent(master_seed=1, device="cuda:0")
+    with_card = gpu.capture()
+    assert with_card.torch_cuda and calls == ["get"]
+    cpu.restore(with_card)
+    assert calls == ["get"], "a CPU run restored the card's generators"
+    gpu.restore(with_card)
+    assert calls == ["get", "set"]
+    monkeypatch.undo()
+
+    with coordinator(tiny_config(tmp_path)) as run:
+        assert str(run.rng.device) == "cpu", "the run did not hand its RNG component its device"
