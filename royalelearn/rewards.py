@@ -24,11 +24,11 @@ WHY THESE THREE AND NOT ROYALEGYM'S SHIPPED DEFAULTS
   signature of a term standing in for a potential that is missing.
 
 ``CommittedElixirPotential`` replaces both. Playing a unit card moves elixir from the bar to the
-board and is net zero (a spell is charged at the tap, and a Mirror play is not priced right yet:
-see the class); losing a unit costs what the unit cost; killing one gains it; and sitting
-at ten elixir is penalised on its own, because the opponent's side of the potential keeps rising
-while yours cannot. It replaces the leak penalty's coefficient with a property of the state,
-and it needs no annealing schedule, which is what RoyaleGym's house rule -- weights should
+board and is net zero (a spell is charged at the tap, and a Mirror play and a Tri Wizards play are
+not priced right yet: see the class); losing a unit costs what the unit cost; killing one gains it;
+and sitting at ten elixir is penalised on its own, because the opponent's side of the potential
+keeps rising while yours cannot. It replaces the leak penalty's coefficient with a property of the
+state, and it needs no annealing schedule, which is what RoyaleGym's house rule -- weights should
 settle, not drift -- asks for. Its weight in the composition is configurable (see
 ``default_potential_reward``); that is a scale, set once for a run, not a schedule.
 
@@ -182,21 +182,29 @@ class CommittedElixirPotential(PotentialReward):
     zero-sum.
 
     WHICH UNITS ARE PRICED, and why this is not every unit on the board. An engine reports each
-    entity under SOME card that can produce it, which need not be the card its owner played: a
-    Goblin Gang's spear goblins are filed under the Goblin Hut, at five elixir each; a dying
-    Golem's golemites are filed under the Golem, at eight; a dying Battle Ram's barbarians under
-    the Battle Ram, at four. Priced by the card they are filed under, measured on RustEngine
-    2026-09-24 by the train session's review: one Goblin Gang play read +15 elixir of potential,
-    a Golem's death +8, a Battle Ram's +4 -- under every run to date, at every weight. So a unit
-    is priced only when it IS the unit its card's catalogue row describes: same hitpoints, same
-    collision radius, same air or ground. Anything else a card produced scores zero. That is an
+    entity under a card, and the entity need not be that card's own unit. On the RustEngine the
+    train session's review measured on 2026-09-24, a Goblin Gang's spear goblins were filed under
+    the Goblin Hut, at five elixir each; a dying Golem's golemites under the Golem, at eight; a
+    dying Battle Ram's barbarians under the Battle Ram, at four. Priced by the card they were filed
+    under, one Goblin Gang play read +15 elixir of potential, a Golem's death +8, a Battle Ram's +4
+    -- under every run up to then, at every weight. Today's engine files all six of a Gang's units
+    under the Goblin Gang; its spear goblins still do not match the Gang's row. So a unit is priced
+    only when it IS the unit its card's catalogue row describes: same hitpoints, same collision
+    radius, same air or ground. Anything else a card produced scores zero. That is an
     understatement and it is deliberate, the rule RoyaleGym's ``ElixirTradeReward`` adopted in
     2381149: a golemite is worth something, and this term says zero rather than eight. What it
     keeps true is the property the term needs. ONE PLAY OF A UNIT CARD PUTS EXACTLY THAT CARD'S
     ELIXIR ON THE BOARD: a card's summon count covers exactly the units its row describes, so a
     Goblin Gang still totals three. ``tests/test_elixir_pricing.py`` taps every card in each
-    engine's catalogue, on both seats, and names any card no tap landed for, because the rule
-    rests on that.
+    engine's catalogue, on both seats, and names any card no tap landed for, because the rule rests
+    on that.
+
+    Two cards break it, and each is a strict expected failure in that file: the Mirror (below)
+    and the Tri Wizards. From RoyaleSim round 9 a Tri Wizards play puts its Electro Wizard and
+    Ice Wizard down under their own card ids, and each is its own card's unit, so the play
+    prices at 7 + 4 + 3 = 14 for a card of 7: a Tri Wizards play reads as a gain of 7 while
+    those two live. The default catalogue and the one in ``examples/configs/train-hog26-10.json``
+    both hold it. It is an event-only card, and its fix waits with the other event-only cards.
 
     A MIRROR PLAY IS NOT PRICED RIGHT YET. It pays the copied card's elixir plus its own one, and
     puts down a copy one level above the copied card. The extra elixir buys that level, which
