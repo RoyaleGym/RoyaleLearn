@@ -24,13 +24,13 @@ WHY THESE THREE AND NOT ROYALEGYM'S SHIPPED DEFAULTS
   signature of a term standing in for a potential that is missing.
 
 ``CommittedElixirPotential`` replaces both. Playing a unit card moves elixir from the bar to the
-board and is net zero (a spell is charged at the tap, and a Mirror play and a Tri Wizards play are
-not priced right yet: see the class); losing a unit costs what the unit cost; killing one gains it;
-and sitting at ten elixir is penalised on its own, because the opponent's side of the potential
-keeps rising while yours cannot. It replaces the leak penalty's coefficient with a property of the
-state, and it needs no annealing schedule, which is what RoyaleGym's house rule -- weights should
-settle, not drift -- asks for. Its weight in the composition is configurable (see
-``default_potential_reward``); that is a scale, set once for a run, not a schedule.
+board and is net zero (a spell is charged at the tap, a Mirror play loses its own one elixir, and a
+Tri Wizards play is not priced right yet: see the class); losing a unit costs what the unit cost;
+killing one gains it; and sitting at ten elixir is penalised on its own, because the opponent's
+side of the potential keeps rising while yours cannot. It replaces the leak penalty's coefficient
+with a property of the state, and it needs no annealing schedule, which is what RoyaleGym's house
+rule -- weights should settle, not drift -- asks for. Its weight in the composition is configurable
+(see ``default_potential_reward``); that is a scale, set once for a run, not a schedule.
 
 EXACT ARITHMETIC
 
@@ -199,25 +199,26 @@ class CommittedElixirPotential(PotentialReward):
     engine's catalogue, on both seats, and names any card no tap landed for, because the rule rests
     on that.
 
-    Two cards break it, and each is a strict expected failure in that file: the Mirror (below)
-    and the Tri Wizards. From RoyaleSim round 9 a Tri Wizards play puts its Electro Wizard and
+    One card breaks it, and it is a strict expected failure in that file: the Tri Wizards.
+    From RoyaleSim round 9 a Tri Wizards play puts its Electro Wizard and
     Ice Wizard down under their own card ids, and each is its own card's unit, so the play
     prices at 7 + 4 + 3 = 14 for a card of 7: a Tri Wizards play reads as a gain of 7 while
     those two live. The default catalogue and the one in ``examples/configs/train-hog26-10.json``
     both hold it. It is an event-only card, and its fix waits with the other event-only cards.
 
-    A MIRROR PLAY IS NOT PRICED RIGHT YET. It pays the copied card's elixir plus its own one, and
-    puts down a copy one level above the copied card. The extra elixir buys that level, which
-    this term does not price, so a Mirror play should lose exactly one elixir of potential. It
-    loses all of it instead: the copy's hitpoints are the higher level's, so it fails its card's
-    row and scores zero. On RoyaleSim 6ad6793 a mirrored Knight has 1938 hitpoints against the
-    row's 1766. The engine does not report a unit's level yet, and scaling the row by a guessed
-    level curve would trade one wrong price for another, so the pricing waits for it. Until
-    then, while the copy lives, a Mirror play reads as its whole cost thrown away, for either
-    seat, and
-    ``test_a_mirror_play_puts_the_copied_cards_elixir_on_the_board`` is marked as an expected
-    failure. Since RoyaleSim 6ad6793 the default catalogue holds the Mirror, so every run that
-    draws random decks from it is affected; a run on named decks without the Mirror is not.
+    A MIRROR PLAY LOSES EXACTLY ITS OWN ONE ELIXIR. It pays the copied card's elixir plus its
+    own one, and puts down a copy one level above the copied card. The copy is priced as the
+    copied card's own unit, and the extra elixir buys the level, which this term does not price.
+    The copy's hitpoints are the higher level's (a mirrored Knight has 1938 against the Knight
+    row's 1766), so the row is read at the level the engine reports for the unit
+    (``EntityState.level``), from the engine's own rows (``RustEngine.unit_hitpoints``), never
+    from a guessed level curve. A unit at the catalogue's level is matched against the row
+    itself, which the engine's rows agree with at that level for every card; the tests check it.
+    An engine that reports no level (MockEngine, and RoyaleSim before round 9) or gives no rows
+    (RoyaleGym before ``RustEngine.unit_hitpoints``) is matched against the row alone, and there
+    a Mirror copy scores zero: while it lives, the play reads as its whole cost thrown away.
+    ``test_a_mirror_play_puts_the_copied_cards_elixir_on_the_board`` taps the Mirror on both
+    seats.
 
     SPELLS ARE CHARGED AT THE TAP, through the bar, by construction: the bar drops by the spell's
     cost and nothing it leaves on the board is priced, so the elixir comes back only through what
@@ -243,18 +244,59 @@ class CommittedElixirPotential(PotentialReward):
         self.own_unit: dict[int, tuple[int, int, bool]] = {
             card.card_id: (card.hitpoints, card.radius, bool(card.flying)) for card in cards
         }
+        #: The level the rows' hitpoints are at, and the engine's rows at any other level. Both
+        #: are optional: MockEngine has neither, and without them a unit is matched against the
+        #: row alone, whatever level it reports.
+        level = getattr(engine, "card_level", None)
+        self._card_level: int | None = None if level is None else int(level)
+        self._unit_rows = getattr(engine, "unit_hitpoints", None)
+        self._own_hitpoints_at: dict[tuple[int, int], frozenset[int]] = {}
 
     def unit_value(self, entity: EntityState) -> Fraction:
         """What one entity on the board is worth: its card's per-unit elixir, or zero.
 
         Zero for anything that is not the unit its card's row describes -- a spear goblin filed
         under the Goblin Hut, a golemite under the Golem -- because pricing it by the card it is
-        filed under is how a three-elixir play came to read as eighteen.
+        filed under is how a three-elixir play came to read as eighteen. The hitpoints compared
+        are the row's at the unit's own level, so a Mirror's copy, one level up, is its card's.
         """
         row = self.own_unit.get(entity.card_id)
-        if row is None or row != (entity.max_hp, entity.radius, bool(entity.flying)):
+        if row is None:
+            return Fraction(0)
+        hitpoints, radius, flying = row
+        if (radius, flying) != (entity.radius, bool(entity.flying)):
+            return Fraction(0)
+        if entity.level >= 0 and entity.level != self._card_level:
+            if entity.max_hp not in self._own_hitpoints(entity.card_id, entity.level):
+                return Fraction(0)
+        elif entity.max_hp != hitpoints:
             return Fraction(0)
         return self.value[entity.card_id]
+
+    def _own_hitpoints(self, card_id: int, level: int) -> frozenset[int]:
+        """The hitpoints of ``card_id``'s own unit at ``level``, from the engine's rows.
+
+        A set, because a card can have more than one own row (the Merge Maiden, mounted and
+        not, at the same hitpoints). Empty, so nothing matches, for a level the card has no row
+        at (the engine's ValueError) and for a card with no unit of its own (a spell: a Goblin
+        Barrel's rows are its goblins alone). The catalogue row's hitpoints when the engine
+        gives no rows, which is the match every engine had before levels. Asked once per card
+        and level.
+        """
+        key = (card_id, level)
+        if key not in self._own_hitpoints_at:
+            hitpoints = frozenset({self.own_unit[card_id][0]})
+            if self._unit_rows is not None:
+                try:
+                    rows = self._unit_rows(card_id, level)
+                except NotImplementedError:
+                    rows = None
+                except ValueError:
+                    rows = []
+                if rows is not None:
+                    hitpoints = frozenset(int(row[2]) for row in rows if row[0] == "own")
+            self._own_hitpoints_at[key] = hitpoints
+        return self._own_hitpoints_at[key]
 
     def potential(self, state: BattleState, team: int) -> Fraction:
         return (self._committed(state, team) - self._committed(state, 1 - team)) / self._scale

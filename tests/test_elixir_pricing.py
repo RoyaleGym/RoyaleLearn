@@ -203,30 +203,19 @@ def test_one_tap_of_every_card_puts_exactly_its_elixir_on_the_board(kind: str) -
     assert len(taps) >= 20, f"only {len(taps)} taps landed, so the check would be vacuous"
 
 
-class MirrorCopyMispriced(AssertionError):
-    """The one failure the Mirror test below is expected to raise, and no other."""
-
-
 @pytest.mark.engine
-@pytest.mark.xfail(
-    strict=True,
-    raises=MirrorCopyMispriced,
-    reason=(
-        "unit_value prices a Mirror's copy at 0: the copy is one level above its card, so its "
-        "hitpoints miss the card's row, and the engine does not report a unit's level yet"
-    ),
-)
 def test_a_mirror_play_puts_the_copied_cards_elixir_on_the_board() -> None:
     """A Mirror play puts down a copy of its side's last play, worth what that card is worth.
 
     The bar pays the copied card's elixir plus the Mirror's own one. That extra elixir buys the
     copy a level, which this term does not price, so a Mirror play loses exactly one elixir of
-    potential. On RoyaleSim 6ad6793 it loses all of it instead: a mirrored Knight has 1938
-    hitpoints against the Knight row's 1766, fails the row match, and is priced at 0.
+    potential. The copy's hitpoints are the higher level's (a mirrored Knight has 1938 against
+    the Knight row's 1766), so it is its card's own unit only when the row is read at the level
+    the engine reports for it. Before that read, it was priced at 0 and the play lost it all.
 
-    Expected to fail, and only with ``MirrorCopyMispriced``: a catalogue with no Mirror, a tap
-    that did not land or a copy of a spell fails as an ordinary error. When the pricing is
-    fixed this passes, and ``strict`` turns that into a failure until the mark comes off.
+    The copy must be at a level other than the catalogue's, or this test would pass without
+    reading a level at all. A catalogue with no Mirror, a tap that did not land or a copy of a
+    spell fails here too.
     """
     engine = _engine("rust")
     term = _term(engine)
@@ -236,14 +225,40 @@ def test_a_mirror_play_puts_the_copied_cards_elixir_on_the_board() -> None:
     assert all(t.copied is not None and not card_is_spell(t.copied) for t in taps), [
         (t.seat, t.copied) for t in taps
     ]
+    levels = [(t.seat, sorted({entity.level for entity in t.put_down})) for t in taps]
+    assert all(
+        any(entity.level not in (-1, engine.card_level) for entity in t.put_down) for t in taps
+    ), f"no copy is above the catalogue's level {engine.card_level}: {levels}"
     off = []
     for t in taps:
         on_board = sum((term.unit_value(entity) for entity in t.put_down), Fraction(0))
         expected = _price(t.copied)
         if on_board != expected:
             off.append((t.seat, t.copied.name, len(t.put_down), str(on_board), str(expected)))
-    if off:
-        raise MirrorCopyMispriced(f"Mirror copies priced at something other than their card: {off}")
+    assert off == [], f"Mirror copies priced at something other than their card: {off}"
+
+
+@pytest.mark.parametrize("kind", ENGINES[1:])
+def test_every_cards_own_row_at_the_catalogue_level_is_the_catalogue_row(kind: str) -> None:
+    """The row check reads a unit at the catalogue's level against the catalogue row itself,
+    and asks the engine's rows only at other levels. That is one rule only if the two agree:
+    at ``card_level`` every own row of a unit card has the catalogue's hitpoints (the Merge
+    Maiden has two, mounted and not), and a spell has none (its rows are only what it releases,
+    a Goblin Barrel's goblins)."""
+    engine = _engine(kind)
+    off, units = [], 0
+    for card in engine.cards():
+        rows = engine.unit_hitpoints(card.card_id, engine.card_level)
+        own = [row[2] for row in rows if row[0] == "own"]
+        if card_is_spell(card):
+            if own:
+                off.append((card.name, "spell", own))
+        else:
+            units += 1
+            if set(own) != {card.hitpoints}:
+                off.append((card.name, card.hitpoints, own))
+    assert off == [], f"own rows that disagree with the catalogue at its level: {off}"
+    assert units >= 20, f"only {units} unit cards, so the check would be vacuous"
 
 
 class TriWizardsMispriced(AssertionError):
@@ -312,6 +327,7 @@ def _entity(card: Any, **stats: Any) -> EntityState:
         radius=base["radius"],
         flying=base["flying"],
         deploy_ticks=0,
+        level=stats.get("level", -1),
     )
 
 
@@ -331,6 +347,69 @@ def test_a_unit_filed_under_a_card_it_is_not_is_priced_zero() -> None:
     assert term.unit_value(_entity(card, max_hp=card.hitpoints + 1)) == 0
     assert term.unit_value(_entity(card, radius=card.radius + 1)) == 0
     assert term.unit_value(_entity(card, flying=not card.flying)) == 0
+
+
+class _LevelledEngine:
+    """A MockEngine's cards with a catalogue level and the engine's unit rows, the two things
+    the row check reads a unit's level with. It records every level it is asked about."""
+
+    def __init__(self, rows: Any) -> None:
+        from royalegym.mock_engine import MockEngine
+
+        self._cards = MockEngine().cards()
+        self.card_level = 11
+        self.asked: list[tuple[int, int]] = []
+        self._rows = rows
+
+    def cards(self) -> Any:
+        return self._cards
+
+    def unit_hitpoints(self, card_id: int, level: int) -> list[tuple[str, str, int]]:
+        self.asked.append((card_id, level))
+        return self._rows(level)
+
+
+def test_a_unit_is_matched_against_its_cards_row_at_its_own_level() -> None:
+    """At the catalogue's level, or with no level reported, the row itself; at another level,
+    any of the engine's own rows there, asked once; nothing at a level the card has no row at,
+    or with no own row; and the row alone from an engine that gives no rows."""
+    from royalegym.mock_engine import MockEngine
+
+    card = next(c for c in MockEngine().cards() if c.count >= 1 and c.hitpoints > 0)
+    own, hp = Fraction(card.elixir, max(1, card.count)), card.hitpoints
+
+    def rows(level: int) -> list[tuple[str, str, int]]:
+        if level == 12:
+            return [("own", card.name, hp + 100), ("spawn", "Other", hp)]
+        if level == 13:
+            raise ValueError(f"level {level}: not on the card's ladder")
+        if level == 14:
+            return [("release", "Other", hp)]
+        if level == 16:
+            return [("own", "Mounted", hp + 1), ("own", "Normal", hp + 2)]
+        raise NotImplementedError("no rows")
+
+    engine = _LevelledEngine(rows)
+    term = _term(engine)
+    assert term.unit_value(_entity(card)) == own
+    assert term.unit_value(_entity(card, level=11)) == own
+    assert term.unit_value(_entity(card, level=11, max_hp=hp + 100)) == 0
+    assert engine.asked == []
+    assert term.unit_value(_entity(card, level=12, max_hp=hp + 100)) == own
+    assert term.unit_value(_entity(card, level=12)) == 0
+    assert engine.asked == [(card.card_id, 12)]
+    assert term.unit_value(_entity(card, level=13)) == 0
+    assert term.unit_value(_entity(card, level=13, max_hp=hp + 100)) == 0
+    # A build before the rows: the row alone, as every engine was matched before levels.
+    assert term.unit_value(_entity(card, level=15)) == own
+    assert term.unit_value(_entity(card, level=14)) == 0
+    assert term.unit_value(_entity(card, level=16, max_hp=hp + 1)) == own
+    assert term.unit_value(_entity(card, level=16, max_hp=hp + 2)) == own
+    assert term.unit_value(_entity(card, level=16)) == 0
+
+    plain = _term(MockEngine())
+    assert plain.unit_value(_entity(card, level=12)) == own
+    assert plain.unit_value(_entity(card, level=12, max_hp=hp + 100)) == 0
 
 
 @pytest.mark.engine
