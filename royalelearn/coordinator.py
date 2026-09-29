@@ -2089,7 +2089,7 @@ class LearningCoordinator:
                 1000.0 * inference_seconds / max(1, collection["rounds"])
             ),
             "throughput/discarded_rows_frac": _discarded_frac(buffer, trainable),
-            **_optional("throughput/gpu_util_frac", _gpu_util()),
+            **_optional("throughput/gpu_util_frac", _gpu_util(str(self.device))),
         }
 
         metrics.ppo = dict(update_fields(result))
@@ -2678,8 +2678,13 @@ def _optional(key: str, value: float | None) -> dict[str, MetricValue]:
     return {} if value is None else {key: value}
 
 
-def _gpu_util() -> float | None:  # pragma: no cover - there is no GPU in the suite
+def _gpu_util(device: str | None = None) -> float | None:
     """How busy the device was, or None when nobody could say.
+
+    ``device`` is the run's. A run not on a CUDA device gets None before torch is imported:
+    asked of the machine, a CPU run on a machine with a card and NVIDIA's bindings would publish
+    that card's utilisation as its own. On a CUDA run it is still the whole card's reading,
+    which is all ``torch.cuda.utilization`` can give.
 
     It returned 0.0 on every path, including the two that are not measurements: no CUDA device,
     and the reading itself failing. A run on a card at 92% published "0.0" for the whole of its
@@ -2688,12 +2693,14 @@ def _gpu_util() -> float | None:  # pragma: no cover - there is no GPU in the su
     printed once rather than swallowed, because "pynvml is not installed" is a thing somebody can
     fix in a minute and a silent zero is not.
     """
+    if device is not None and not str(device).startswith("cuda"):
+        return None
     try:
         import torch
 
         if not torch.cuda.is_available():
             return None
-        return float(torch.cuda.utilization()) / 100.0
+        return float(torch.cuda.utilization(device)) / 100.0
     except Exception as exc:
         global _GPU_UTIL_COMPLAINED
         if not _GPU_UTIL_COMPLAINED:

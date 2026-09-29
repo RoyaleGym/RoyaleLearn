@@ -737,12 +737,18 @@ def test_a_cpu_run_asks_the_machine_nothing_about_device_memory(
     assert calls == ["peak", "reset"], calls
 
     asked: list[Any] = []
-    real = module._vram_peak_mb
+    utilisation: list[Any] = []
+    real, real_util = module._vram_peak_mb, module._gpu_util
     monkeypatch.setattr(module, "_vram_peak_mb", lambda *a, **k: asked.append(a) or real(*a, **k))
+    monkeypatch.setattr(
+        module, "_gpu_util", lambda *a, **k: utilisation.append(a) or real_util(*a, **k)
+    )
     with coordinator(tiny_config(tmp_path)) as run:
         run.iterate()
         assert run.rows[-1]["health/vram_peak_mb"] == 0.0
+        assert "throughput/gpu_util_frac" not in run.rows[-1]
     assert asked == [("cpu",)], asked
+    assert utilisation == [("cpu",)], utilisation
 
 
 def _checkpoints(run_dir: Path) -> dict[int, dict[str, Any]]:

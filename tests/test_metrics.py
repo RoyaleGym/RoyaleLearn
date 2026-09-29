@@ -379,6 +379,19 @@ def test_a_number_nobody_could_read_is_left_out_of_the_row() -> None:
     assert _optional("throughput/gpu_util_frac", 0.92) == {"throughput/gpu_util_frac": 0.92}
 
 
+def test_a_cpu_run_publishes_no_card_s_utilisation(monkeypatch) -> None:
+    """Asked of the machine, a CPU run on a machine with a card and NVIDIA's bindings published
+    that card's utilisation as its own. CUDA and a 92% card are pretended here, because with CUDA
+    hidden the machine-wide question also answered None."""
+    torch = pytest.importorskip("torch")
+    from royalelearn.coordinator import _gpu_util
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "utilization", lambda *_a, **_k: 92)
+    assert _gpu_util("cpu") is None
+    assert _gpu_util("cuda:0") == pytest.approx(0.92)
+
+
 def test_the_update_publishes_what_its_two_long_phases_cost() -> None:
     """``time/critic_pass`` and ``time/gae`` were the literal 0.0, not a measurement.
 

@@ -939,7 +939,7 @@ CONDITIONAL: dict[str, str] = {
     # which holds a card that the suite's CPU runs never touch: every CPU run was publishing
     # that card's driver-free figure as its own, and test_resume's row-for-row comparison flaked
     # on it whenever a sibling session was using the GPU.
-    "throughput/gpu_util_frac": "a CUDA device is present and its utilisation can be read",
+    "throughput/gpu_util_frac": "the RUN is on a CUDA device and its utilisation can be read",
     "health/rss_peak_mb": "the platform reports a peak working set",
     "health/vram_reserved_mb": "the RUN is on a CUDA device",
     "health/vram_inactive_split_mb": "the RUN is on a CUDA device",
