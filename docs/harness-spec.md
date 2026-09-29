@@ -3194,7 +3194,11 @@ enemy-elixir field was an estimate on some episodes and the alarm below says so)
 `gate_passes`, `gate_observed_rate`, `gate_lower_bound`, `gate_failed_condition`, `gate_seconds_frac`,
 `transitivity_residual`, `paired_rho`, `draw_rate_eval`, `eval_games_total`, `evictions`,
 `pfsp_effective` and `pfsp_learner_step` (absent while no snapshot stands in for the learner,
-section 11.3) and `probe_seconds_frac`; and on a probe iteration ONLY, `score_vs/<rung>` with `score_vs_n/<rung>` and
+section 11.3), `probe_seconds_frac`, and `role_counts/{mirror,pool,scripted}` with
+`role_counts/pool_fallback`: the training battles that finished this iteration, one per battle
+episode, by what they played, and how many of the scripted ones the plan laid out as pool (a pool
+battle plays a scripted opponent until the first snapshot is admitted, which the config's split
+cannot show); and on a probe iteration ONLY, `score_vs/<rung>` with `score_vs_n/<rung>` and
 `score_vs_ci95_lo/hi/<rung>`, of which `score_vs_noop` and `score_vs_random_legal` are the two
 anchors under their older names.
 
