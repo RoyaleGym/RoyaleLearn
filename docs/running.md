@@ -223,7 +223,7 @@ A few points can legitimately be the engine's own seat asymmetry, which is why t
 | --- | --- | --- | --- |
 | `worker_failures` | `health/worker_restarts` | the counter rose this iteration | warn, 1 |
 | `worker_failures_persistent` | `health/worker_restarts` | it rose on three iterations in a row | halt, 3 |
-| `vram_spilling` | `time/update`, `health/vram_driver_free_mb` | update at least 2x this run's best while the driver reports under 128 MB free | warn, 3 |
+| `vram_spilling` | `time/update`, `health/vram_driver_free_mb`, `ppo/actor_frozen` if present | update at least 2x this run's best for the same actor state while the driver reports under 128 MB free | warn, 3 |
 | `capacity_ratio` | `throughput/rollout_capacity_ratio` | below `alarms.capacity_ratio` (1.5) | warn, 3 |
 
 **`worker_failures`.** One rollout worker was restarted. The counter is cumulative over the run,
@@ -239,6 +239,8 @@ kind and the shard, and says what share of the iteration's rows went with it.
 
 **`vram_spilling`.** Section 5 is about this one. In short: the update has gone at least twice as
 slow as this run's own best while the driver says the card is full, three iterations running.
+Iterations with the actor frozen are much cheaper, so they keep a best of their own. Otherwise
+every update after a warm start's unfreeze would read as a spill.
 
 **`capacity_ratio`.** Rollout capacity divided by update capacity. The design invariant is that
 the harness is never the bottleneck, at least 2 on every shipped profile. Below 1.5 says the data
@@ -495,7 +497,8 @@ configuration, since 4,243 is under 4,294, and it spilled anyway on the other pr
 **What the alarm catches that the gate cannot.** The gate guards one instant. Another process
 taking memory at hour three produces the same silent slowdown, later. `vram_spilling`
 (`metrics/alarms.py`, `SpillAlarm`) watches the harm and uses the memory reading as evidence
-that the harm is this one: the update at least 2.0 times this run's own best while the driver
+that the harm is this one: the update at least 2.0 times this run's own best (a frozen actor's
+iterations keep their own) while the driver
 reports under 128 MB free, for 3 consecutive iterations. The best is a running minimum, so a
 slow iteration cannot raise the bar it is judged against and the first iteration's warm-up
 cannot lower it.

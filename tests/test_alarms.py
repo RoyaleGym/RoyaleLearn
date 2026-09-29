@@ -270,6 +270,55 @@ def test_the_spill_alarms_bar_is_the_best_of_the_run_not_its_first_iteration() -
     assert _spill_rows(alarms, 95.0, 0.0, start=5) == ["vram_spilling"]
 
 
+def _frozen_rows(alarms, seconds, free_mb, *, frozen, count=1, start=1):
+    """``_spill_rows`` with ``ppo/actor_frozen`` on every row."""
+    fired = []
+    for offset in range(count):
+        fired = alarms.evaluate(
+            _row(
+                **{
+                    "run/iteration": start + offset,
+                    "time/update": seconds,
+                    "health/vram_driver_free_mb": free_mb,
+                    "ppo/actor_frozen": 1.0 if frozen else 0.0,
+                }
+            )
+        )
+    return [result.name for result in fired]
+
+
+def test_the_spill_alarm_does_not_judge_an_unfrozen_update_by_a_frozen_actors_best() -> None:
+    """The train session's warm start: frozen-actor iterations are much cheaper, and the
+    unfrozen ones after them held steady (29.6 s with 1468 MB free, then 29.3-30.0 s on a card
+    the caching allocator had filled to 0 MB). With one best for the run it fired on every
+    unfrozen row from the fourth. The frozen time here is any under half the unfrozen one."""
+    alarms = _set()
+    assert _frozen_rows(alarms, 10.0, 1468.0, frozen=True, count=80) == []
+    assert _frozen_rows(alarms, 29.6, 1468.0, frozen=False, start=81) == []
+    for iteration in range(82, 100):
+        assert _frozen_rows(alarms, 29.5, 0.0, frozen=False, start=iteration) == []
+
+
+def test_a_spill_after_the_unfreeze_still_fires_against_the_unfrozen_best() -> None:
+    """Keeping the frozen best apart must not make the unfrozen stretch unwatched: twice its own
+    best on a full card fires after the usual three rows."""
+    alarms = _set()
+    _frozen_rows(alarms, 10.0, 1468.0, frozen=True, count=20)
+    _frozen_rows(alarms, 29.5, 1468.0, frozen=False, count=5, start=21)
+    assert _frozen_rows(alarms, 60.0, 0.0, frozen=False, start=26) == []
+    assert _frozen_rows(alarms, 60.0, 0.0, frozen=False, start=27) == []
+    assert _frozen_rows(alarms, 60.0, 0.0, frozen=False, start=28) == ["vram_spilling"]
+
+
+def test_a_spill_during_the_frozen_stretch_fires_against_the_frozen_best() -> None:
+    """The frozen stretch keeps its own watch: twice the frozen best on a full card fires too."""
+    alarms = _set()
+    _frozen_rows(alarms, 10.0, 1468.0, frozen=True, count=5)
+    assert _frozen_rows(alarms, 25.0, 0.0, frozen=True, start=6) == []
+    assert _frozen_rows(alarms, 25.0, 0.0, frozen=True, start=7) == []
+    assert _frozen_rows(alarms, 25.0, 0.0, frozen=True, start=8) == ["vram_spilling"]
+
+
 def test_an_alarm_that_names_a_metric_key_names_one_that_exists() -> None:
     """An alarm's message is read by somebody in a hurry, and it should not send them hunting.
 

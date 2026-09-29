@@ -3212,8 +3212,8 @@ anchors under their older names.
 each iteration when the run's device is a CUDA device: `vram_reserved_mb`, `vram_inactive_split_mb`,
 `vram_driver_free_mb`, `vram_alloc_retries`, `vram_available_mb` (driver free plus what this process
 reserves) and `vram_needed_mb` (one minibatch's peak measured at startup plus
-`doctor.vram_headroom_mb`). The `vram_spilling` alarm reads `time/update` and `vram_driver_free_mb`;
-the other two are kept because they say which memory regime a slowing update is in.
+`doctor.vram_headroom_mb`). The `vram_spilling` alarm reads `time/update` and `vram_driver_free_mb`
+(and `ppo/actor_frozen` where a run schedules the actor's rate); the other two are kept because they say which memory regime a slowing update is in.
 
 `housekeeping_failures` is the total of the retries that did not take, across three actions that
 each swallow their own error so the run survives them: pruning a checkpoint directory, compacting
@@ -3274,7 +3274,7 @@ being hunted, and a false halt costs everything the run was for.
 | `elixir_count_inexact` | `env/elixir_count_exact_frac < 0.99` | 3 | warn | the observation's opponent-elixir field is an estimate on some episodes: a repeated card in a deck, or an engine whose elixir law is not the calibration's. The policy is reading a documented-exact slot that is not. A value near zero rather than slightly under one is the second cause and not a broken counter: it says the engine build and the card data disagree about elixir, so read the run's `identity.json` `engine_build` before anything else. The row itself carries no engine digest: `run/state_digest` is the learner's weights, not the engine |
 | `reward_clipped` | `ppo/reward_clip_frac > 0` | 1 | warn | a reward reached `advantage.reward_clip`. Potential shaping leaves the optimum unchanged only while every step's reward reaches the return intact; on a clipped step the terms stop cancelling, and a clipped terminal step makes a win worth less than a win. Zero at every iteration of the first eight runs on the development machine **[M]**, which was an observation that the rewards stayed small and is now a check. The schema's healthy band for the key was 0 to 0.01 until this row; it is exactly 0 |
 | `shaping_dominates` | `sum of absolute shaping terms > absolute terminal term` | 5 | warn | under a potential reward this says a shaping term has stopped telescoping, which is what a term that is not a difference of a potential does; it is not a check on the weights. Measured quiet in production 2026-09-22 at 2.9% of the objective (section 10). Until 5724eb5 and dc7f7a1 it compared two structural zeros |
-| `vram_spilling` | `time/update >= 2 x the best update this run has had` AND `health/vram_driver_free_mb < 128` | 3 | warn | the update is several times slower than this run has managed, on a card the driver says is full. That is what an allocation backed by host memory over PCIe looks like from inside the process, and the platform gives no other sign: it does not refuse an oversubscribed allocation, it serves it and reports success. The memory reading is there to tell a spill from a busy machine, which slows an update by 1.4 to 1.7 rather than by 4. The bar is a running minimum, so a slow iteration cannot raise the bar it is judged against and the first iteration's warm-up cannot lower it. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It stays silent on a run with no CUDA device, because `health/vram_driver_free_mb` is then absent |
+| `vram_spilling` | `time/update >= 2 x the best update this run has had in the same actor state` AND `health/vram_driver_free_mb < 128` | 3 | warn | the update is several times slower than this run has managed, on a card the driver says is full. That is what an allocation backed by host memory over PCIe looks like from inside the process, and the platform gives no other sign: it does not refuse an oversubscribed allocation, it serves it and reports success. The memory reading is there to tell a spill from a busy machine, which slows an update by 1.4 to 1.7 rather than by 4. The bar is a running minimum, so a slow iteration cannot raise the bar it is judged against and the first iteration's warm-up cannot lower it. Iterations with the actor frozen (`ppo/actor_frozen`, section 19.5) keep a best of their own: they are much cheaper, and with one best a warm start's unfrozen updates all read as twice it. A row without the key counts as unfrozen. It warns rather than halts, because stopping a long run over a neighbour's memory costs more than the slowdown does. It stays silent on a run with no CUDA device, because `health/vram_driver_free_mb` is then absent |
 | `transitivity` | `ladder/transitivity_residual > 0.10` | 3 | warn | the scalar rating is lying |
 | `gate_starved` | five consecutive gate failures | 1 | warn | the plateau signal, stated as an event |
 | `capacity_ratio` | `throughput/rollout_capacity_ratio < 1.5` | 3 | warn | the harness is becoming the bottleneck |
@@ -3342,7 +3342,11 @@ counters look ordinary, and only the clock changes. The alarm therefore watches 
 memory reading as the evidence that this is the cause. Its numbers are measured: the same update took
 47-49 s with room and 180-233 s without **[M]**, while machine contention alone moved it from 435-531 s
 to 758 s **[M]**. A factor of two sits between those two populations. It has still never been seen
-firing on a card; the check is the train session's experiment above, re-run against this version.
+firing on a real spill; the check is the train session's experiment above, re-run against this
+version. On 2026-09-29 the train session saw it fire falsely on a warm-started run: from iteration 84,
+15 iterations in a row, with the update steady at 29.3-30.0 s and the card at 0 MB driver-free because
+the caching allocator had filled it. The frozen-actor iterations before the unfreeze had set the best,
+so every unfrozen update was twice it. A frozen actor's iterations now keep their own best.
 
 The other alarms have been checked against two iterations of one profile, which by the rule above
 is not validation. A metric's row population belongs in its identity rather than in its

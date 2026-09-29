@@ -250,8 +250,9 @@ on the console at the end of every iteration.
   made and repeat that figure forever, which is a mistake this code made once and fixed.
 - `health/vram_available_mb` against `health/vram_needed_mb` is the spill test. `needed` is
   measured at start-up by running one real minibatch backward pass on your card. `available` is
-  driver-free memory plus what this process already holds. When available drops below needed, the
-  `vram_spilling` alarm fires after three iterations, and it means the update is being backed by
+  driver-free memory plus what this process already holds. The `vram_spilling` alarm does not
+  read these two. It fires after three iterations in which the update is at least twice this
+  run's best while the driver reports under 128 MB free. That means the update is being backed by
   system memory over PCIe and is several times slower than it should be.
 - `throughput/gpu_util_frac` is device utilisation over the iteration.
 

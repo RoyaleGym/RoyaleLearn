@@ -60,6 +60,11 @@ RENAMED_ALARMS: dict[str, str] = {
 }
 
 
+#: The key that says an iteration ran with the actor frozen (``learn/freeze.py``). The spill
+#: alarm keeps a separate best for those iterations.
+ACTOR_FROZEN = "ppo/actor_frozen"
+
+
 def _value(row: MetricRow, key: str) -> float | None:
     """One key as a float, or None where the row does not carry it.
 
@@ -139,6 +144,15 @@ class SpillAlarm(MetricAlarm):
 
     The best is a running minimum rather than a mean, so a slow iteration cannot raise the bar it
     is judged against, and the first iteration's cuDNN warm-up cannot lower it.
+
+    A FROZEN ACTOR'S UPDATE IS ANOTHER UPDATE. An iteration with the actor frozen (section 19.5)
+    runs no actor loss and takes no actor step, so it is much cheaper, and a best set there is no
+    bar for the unfrozen updates after it. With one best for the run, every unfrozen update of
+    a warm start read as twice the best, and a card the caching allocator had filled to 0 MB
+    free was all the rest of the condition. The train session saw it fire on 15 iterations in a
+    row from iteration 84 of a warm-started run, with the update steady at 29.3-30.0 s and 29.6
+    s just before. So each state keeps its own best, read from ``ppo/actor_frozen``. That key is
+    only on runs that schedule the actor's rate, and a row without it counts as unfrozen.
     """
 
     def __init__(
@@ -147,14 +161,21 @@ class SpillAlarm(MetricAlarm):
         super().__init__(name, self._spilling, **kwargs)  # type: ignore[arg-type]
         self.factor = float(factor)
         self.floor_mb = float(floor_mb)
-        self._best: float | None = None
+        #: The best update time seen so far, one for frozen-actor iterations and one for the rest.
+        self._best: dict[bool, float] = {}
 
-    def _spilling(self, seconds: float, driver_free_mb: float) -> bool:
+    def holds(self, row: MetricRow) -> bool:
+        values = [_value(row, key) for key in self.keys]
+        if any(value is None for value in values):
+            return False
+        return self._spilling(*values, frozen=_value(row, ACTOR_FROZEN) == 1.0)
+
+    def _spilling(self, seconds: float, driver_free_mb: float, frozen: bool = False) -> bool:
         if seconds <= 0.0:
             return False
-        best = self._best
+        best = self._best.get(frozen)
         if best is None or seconds < best:
-            self._best = seconds
+            self._best[frozen] = seconds
             return False
         return seconds >= self.factor * best and driver_free_mb < self.floor_mb
 

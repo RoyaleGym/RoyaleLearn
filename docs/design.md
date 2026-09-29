@@ -193,8 +193,9 @@ its implementation, so that a threshold cannot be set against the wrong populati
 
 Two alarms and the halt path have narrower gaps. `vram_spilling` (fb135f0) has been seen only
 staying silent: 42 rows from seven runs at minibatch 256 on the 4 GB card read 2995 to 3372 MB
-available against 2349 needed, and nobody has watched it fire on a card. The suite trips it on a
-synthetic row, and a test now fails for any alarm with no row to trip it (e4e2f06).
+available against 2349 needed, and nobody has watched it fire on a real spill. The one firing on
+a card reported so far was false: a warm start on 2026-09-29, whose frozen-actor iterations had set
+the best (a frozen actor's iterations now keep their own). The suite trips it on a synthetic row, and a test now fails for any alarm with no row to trip it (e4e2f06).
 `shaping_dominates` compared two structural zeros on every row recorded until 5724eb5 and dc7f7a1
 fixed its inputs (`harness-spec.md` section 10), so it has not been seen on a real run either. And a
 halting iteration's alarms never reach `alarms.jsonl`, because `AlarmSet.evaluate` raises before it
