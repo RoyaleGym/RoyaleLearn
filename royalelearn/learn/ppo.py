@@ -902,6 +902,7 @@ class PPOUpdate(Update):
             actor=getattr(self.model, "actor", self.model),
             actor_scale=actor_scale,
             weight=minibatch.weight,
+            cells=minibatch.cells,
         )
         measure = epoch == 0
         has_choice = bool(minibatch.n_choice)

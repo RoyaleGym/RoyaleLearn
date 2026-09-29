@@ -100,6 +100,12 @@ class ActorTermInputs(NamedTuple):
     actor, for a term that needs a forward of its own on other rows. ``actor_scale`` is the
     per-batch scale the policy term is multiplied by, and ``weight`` the minibatch's share of
     its batch.
+
+    ``cells`` names each row of the minibatch by its position in the iteration's whole batch, in
+    the minibatch's row order (``cells[rows]`` names the choice rows). Every epoch trains every
+    cell once, so a term whose input on a row does not change within an iteration -- a frozen
+    reference's forward -- can compute it in the first epoch and look it up by cell after. None
+    from a caller that does not have them.
     """
 
     obs: ObsBatch
@@ -109,6 +115,7 @@ class ActorTermInputs(NamedTuple):
     actor: Any
     actor_scale: float
     weight: float
+    cells: Tensor | None = None
 
 
 class ActorLossTerm(Protocol):
