@@ -751,6 +751,34 @@ def test_a_cpu_run_asks_the_machine_nothing_about_device_memory(
     assert utilisation == [("cpu",)], utilisation
 
 
+def test_a_drain_that_refuses_the_statistics_stops_the_iteration_before_the_update(
+    tmp_path: Path,
+) -> None:
+    """The drain's row check runs right after collection: a failure raises before the update
+    steps, so the learner on hand is still the one the last row describes. It used to run when
+    the row was built, after the update, and left a learner no row describes."""
+    with coordinator(tiny_config(tmp_path, alarms=cfg.AlarmConfig(enabled=False))) as run:
+        run.iterate()
+        before = run.state_digest()
+        stepped: list[int] = []
+        step = run.update.step
+
+        def recording(*args: Any, **kwargs: Any) -> Any:
+            stepped.append(1)
+            return step(*args, **kwargs)
+
+        def refusing() -> Any:
+            raise AssertionError("the codec and the host read the mask differently")
+
+        run.update.step = recording
+        run.inference.drain_stats = refusing
+        with pytest.raises(AssertionError, match="read the mask differently"):
+            run.iterate()
+        assert stepped == [], "the update ran before the drain refused the batch"
+        assert run.state_digest() == before
+        assert not run._learner_ahead_of_rows
+
+
 def _checkpoints(run_dir: Path) -> dict[int, dict[str, Any]]:
     """``{env step: manifest}`` for every checkpoint the run holds."""
     import json

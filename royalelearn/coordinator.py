@@ -1548,12 +1548,12 @@ class LearningCoordinator:
         The batch is judged before anything learns from it. Every invariant, the probe's
         legality check among them, reads only what collection wrote, so asking first costs
         nothing -- and asking after the update is how a real run trained a refused batch of
-        22,627 rows for 18 optimizer steps and then saved the result. One check still runs
-        after the update: the drain of the rollout's statistics, when the row is built, compares
-        the rows they were taken over with the decoded masks' choice rows. From the update's
-        first change until the row reporting it is written, the learner in memory is one no row
-        describes; ``_emergency`` is what that window is marked for, so a failure of that check
-        saves no checkpoint of the moved learner.
+        22,627 rows for 18 optimizer steps and then saved the result. The drain of the
+        rollout's statistics, which compares the rows they were taken over with the decoded
+        masks' choice rows, runs right after collection too; it used to run when the row was
+        built, after the update, where a failure left a learner no row describes. From the
+        update's first change until the row reporting it is written, the learner in memory is
+        one no row describes, and ``_emergency`` is what that window is marked for.
         """
         began = time.perf_counter()
         sched = self.schedules.state(
@@ -1584,6 +1584,11 @@ class LearningCoordinator:
         self.inference.begin_iteration(plan)
 
         collection = self._collect(plan, sched)
+        # Drained here, before anything learns from the batch: the drain checks, row by row,
+        # that the rollout's statistics were taken over the decoded masks' choice rows, and a
+        # failure raised after the update left a learner no row describes, which the emergency
+        # save must refuse. Before the update, the learner on hand is still the last row's.
+        rollout_stats = self.inference.drain_stats()
         episodes = collection["episodes"]
         self.recent_episodes = (self.recent_episodes + episodes)[-200:]
 
@@ -1614,6 +1619,7 @@ class LearningCoordinator:
             result=result,
             episodes=episodes,
             collection=collection,
+            stats=rollout_stats,
             trainable=trainable,
             probe=probe,
             iteration_seconds=time.perf_counter() - began,
@@ -2003,6 +2009,7 @@ class LearningCoordinator:
         result: Any,
         episodes: Sequence[EpisodeRecord],
         collection: Mapping[str, Any],
+        stats: Any,
         trainable: np.ndarray,
         probe: Mapping[str, MetricValue],
         iteration_seconds: float,
@@ -2017,7 +2024,6 @@ class LearningCoordinator:
         """
         buffer = self.buffer
         geo = self.geometry
-        stats = self.inference.drain_stats()
         timesteps = int(trainable.sum())
         env_steps = geo.cycles * geo.n_battles
         collection_seconds = max(1e-9, float(collection["seconds"]))

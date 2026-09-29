@@ -3421,13 +3421,13 @@ if not saved(cumulative_env_steps):                   # the limit: section 12.2
 
 Every invariant reads only what collection wrote, so the batch is judged before anything learns from
 it, and a refused batch is never trained on. Until 8db7e0d the update ran first, and a refused batch
-was trained and then refused. One check still runs later: when the row is built, the rollout's
-statistics are drained, and the drain compares the rows they were taken over with the rows the
-decoded masks offer a choice on. That is after the update, and after a gate's candidate is stored.
-A failure there raises and ends the run, and it is not a halt: its emergency save refuses, because
-no row describes the moved learner yet, and names the last checkpoint to resume from. The row is written
-before the alarms read it because a halt checkpoints the learner that row describes, and the row has
-to be in `metrics.jsonl` by then (section 12.2).
+was trained and then refused. The rollout's statistics are drained right after collection as well,
+and the drain compares the rows they were taken over with the rows the decoded masks offer a choice
+on. It ran when the row was built until the drain moved, after the update and after a gate's
+candidate was stored, where a failure could only end the run with its emergency save refused. Now a
+failure is raised before the learner moves, so the emergency save keeps the learner the last row
+describes. The row is written before the alarms read it because a halt checkpoints the learner that
+row describes, and the row has to be in `metrics.jsonl` by then (section 12.2).
 
 **`rollout.overlap` is REFUSED as of 2026-09-22, and what follows describes what it would do
 rather than what it does.** Half of it exists: `BatchedInference.begin_iteration` takes a
