@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from ..config import Geometry, RunConfig
     from ..rollout.envspec import ComponentSpec
 
-#: The RoyaleGym class each battle's deal is.
+#: The RoyaleGym class each battle's deal is unless ``seat_decks.cls`` names a subclass.
 CURRICULUM = "royalegym.state_mutator.DeckCurriculumStateMutator"
 _SEAT_NAMES = ("blue", "red")
 
@@ -61,10 +61,6 @@ def battle_state_mutators(config: RunConfig, geometry: Geometry) -> tuple[Compon
         else:
             seat = _SEAT_NAMES[learner_seat_of(battle)]
             kwargs = {"p": 1.0, "mirror_p": 0.0, "seat": seat, "pool": field}
-        deals.append(
-            ComponentSpec(
-                cls=CURRICULUM,
-                kwargs={"deck": list(seats.deck), **kwargs, "shuffle": int(seats.shuffle)},
-            )
-        )
+        deal = {"deck": list(seats.deck), **kwargs, "shuffle": int(seats.shuffle)}
+        deals.append(ComponentSpec(cls=seats.cls, kwargs={**dict(seats.kwargs), **deal}))
     return tuple(deals)

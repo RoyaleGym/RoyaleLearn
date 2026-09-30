@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from royalegym.state_mutator import DeckCurriculumStateMutator
 from royalelearn import config as cfg
 from royalelearn.extensions import with_sections
 from royalelearn.learn.freeze import FREEZE_ALARM_KEYS, freeze_alarms
@@ -50,3 +51,12 @@ def full_config(
     use_extensions(monkeypatch, {"freezer": StubExtension("freezer")})
     core = cfg.RunConfig(alarms=alarm_config if alarm_config is not None else cfg.AlarmConfig())
     return with_sections(core, freezer={**SCHEDULE, **section})
+
+
+class TaggedCurriculum(DeckCurriculumStateMutator):
+    """RoyaleGym's deck curriculum with one keyword of its own, as a subclass that deals forms
+    would have: ``tests/test_seat_decks.py`` names it in ``ladder.seat_decks.cls``."""
+
+    def __init__(self, deck: Any, *, tag: str = "", **kwargs: Any) -> None:
+        self.tag = tag
+        super().__init__(deck, **kwargs)

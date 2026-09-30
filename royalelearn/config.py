@@ -380,12 +380,21 @@ class SeatDecks(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     it), or None for a random deck of eight different cards. Decks are card NAMES, looked up in
     the engine's catalogue at the first reset; ``shuffle`` is RoyaleGym's ``ShuffleMode`` for a
     non-mirror deal. See ``royalelearn/ladder/seat_decks.py``.
+
+    ``cls`` is the curriculum class each battle's deal is: RoyaleGym's by default, or a subclass
+    that takes its keywords unchanged (one that also deals forms to the seats holding ``deck``,
+    say), resolved like any component, so its module must be in
+    ``config.extra_component_modules``. ``kwargs`` are that class's own keywords, merged into the
+    ones the deal decides; they may not name those (``deck``, ``p``, ``mirror_p``, ``seat``,
+    ``pool``, ``shuffle``).
     """
 
     deck: tuple[str, ...]
     field: tuple[tuple[str, ...], ...] | None = None
     #: ``ShuffleMode.INDEPENDENT``.
     shuffle: int = 1
+    cls: str = "royalegym.state_mutator.DeckCurriculumStateMutator"
+    kwargs: dict[str, JsonValue] = msgspec.field(default_factory=dict)
 
 
 class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -879,6 +888,10 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
     return problems
 
 
+#: The keywords of a seat-decks deal that the deal itself decides, per battle.
+DEAL_KEYWORDS = frozenset({"deck", "p", "mirror_p", "seat", "pool", "shuffle"})
+
+
 def _seat_deck_problems(ladder: LadderConfig) -> list[str]:
     seats = ladder.seat_decks
     if seats is None:
@@ -893,6 +906,12 @@ def _seat_deck_problems(ladder: LadderConfig) -> list[str]:
             problems.append(f"{where} lists a card twice: {list(deck)}")
     if seats.field is not None and not seats.field:
         problems.append("ladder.seat_decks.field is empty; leave it out for random decks")
+    taken = sorted(set(seats.kwargs) & DEAL_KEYWORDS)
+    if taken:
+        problems.append(
+            f"ladder.seat_decks.kwargs names {', '.join(taken)}, which each battle's deal "
+            "decides; name only the curriculum class's own keywords"
+        )
     return problems
 
 

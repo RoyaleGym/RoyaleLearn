@@ -162,3 +162,53 @@ def test_a_deck_that_is_not_eight_distinct_cards_is_refused(seats: Any, message:
     config = RunConfig(ladder=LadderConfig(seat_decks=seats))
     with pytest.raises(PreflightError, match=message):
         cfg.validate(config)
+
+
+TAGGED = "contributed.TaggedCurriculum"
+
+
+def test_a_named_curriculum_class_is_dealt_with_its_own_keywords_merged_in() -> None:
+    """A subclass of RoyaleGym's curriculum (one that deals forms, say) replaces it, and its own
+    keywords join the ones the deal decides; the deal's own are not the config's to override."""
+    from royalelearn.ladder.seat_decks import battle_state_mutators
+
+    seats = cfg.SeatDecks(deck=DECK, field=FIELD, cls=TAGGED, kwargs={"tag": "forms"})
+    config = RunConfig(
+        rollout=RolloutConfig(workers=2, games_per_worker=8, shards_per_worker=1),
+        ladder=LadderConfig(mix=(0.25, 0.5, 0.25), seat_decks=seats),
+        extra_component_modules=("contributed.",),
+    )
+    specs = battle_state_mutators(config, geometry(config))
+    assert {spec.cls for spec in specs} == {TAGGED}
+    for battle, spec in enumerate(specs):
+        built = spec.build(("contributed.",))
+        assert type(built).__name__ == "TaggedCurriculum" and built.tag == "forms"
+        assert spec.kwargs["deck"] == list(DECK)
+        if spec.kwargs["mirror_p"] != 1.0:
+            assert spec.kwargs["seat"] == ("blue", "red")[battle % 2]
+
+
+@pytest.mark.parametrize("key", ["deck", "p", "mirror_p", "seat", "pool", "shuffle"])
+def test_the_deals_own_keywords_cannot_be_overridden(key: str) -> None:
+    from royalelearn.errors import PreflightError
+
+    seats = cfg.SeatDecks(deck=DECK, cls=TAGGED, kwargs={key: 0})
+    with pytest.raises(PreflightError, match=key):
+        cfg.validate(RunConfig(ladder=LadderConfig(seat_decks=seats)))
+
+
+def test_a_run_installs_the_named_class(tmp_path: Path) -> None:
+    seats = cfg.SeatDecks(deck=DECK, field=FIELD, cls=TAGGED, kwargs={"tag": "forms"})
+    ladder = msgspec.structs.replace(
+        tiny_config(tmp_path).ladder, mix=(0.5, 0.0, 0.5), seat_decks=seats
+    )
+    config = tiny_config(tmp_path, ladder=ladder, extra_component_modules=("contributed.",))
+    with coordinator(config) as run:
+        run.iterate()
+        kinds = {
+            (type(m).__name__, m.tag)
+            for runner in run.source._runners.values()
+            for env in runner.vec.envs
+            for m in [getattr(env, "parallel", env).state_mutator]
+        }
+    assert kinds == {("TaggedCurriculum", "forms")}
