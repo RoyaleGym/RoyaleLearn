@@ -88,6 +88,11 @@ class ObsKeySpec(msgspec.Struct, frozen=True):
     high: tuple[float, ...]
 
 
+#: The observation key that carries the ability buttons' readiness (RoyaleGym, with
+#: ``TileActionParser(ability_buttons=True)``): the last ``n_buttons`` bits of ``action_mask``.
+ABILITY_READY = "ability_ready"
+
+
 class EnvSpec(msgspec.Struct, frozen=True):
     """Everything the learner must know about the environment before it builds anything.
 
@@ -147,6 +152,21 @@ class EnvSpec(msgspec.Struct, frozen=True):
     def n_planes(self) -> int:
         """Spatial planes the environment emits, static ones included."""
         return self.spatial_shape[0]
+
+    @property
+    def n_grid_actions(self) -> int:
+        """The no-op plus one action per (hand slot, tile): the part of the action space the
+        pointer head lays out as a grid, and all of it for an environment without buttons."""
+        return 1 + self.hand_size * self.tiles[0] * self.tiles[1]
+
+    @property
+    def n_buttons(self) -> int:
+        """Ability buttons (a hero's, a champion's): the actions after the grid, action
+        ``n_grid_actions + k`` pressing button ``k``. Their readiness is the observation's
+        ``ability_ready``, which is the same bits as the mask's last ``n_buttons``; 0 for an
+        observation without it."""
+        ready = self.obs_space.get(ABILITY_READY)
+        return int(ready.shape[0]) if ready is not None else 0
 
     @property
     def static_planes(self) -> tuple[str, ...]:

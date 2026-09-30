@@ -17,6 +17,9 @@ The rule, per key:
 ``mask_planes``
     Never stored. RoyaleGym builds it as ``action_mask[1:]`` reshaped, so the learner reshapes
     the stored mask at unpack; storing the planes would spend a sixth of the row on a reshape.
+``ability_ready``
+    Never stored either. RoyaleGym writes it as the mask's last ``n_buttons`` bits, and the
+    network reads it from the mask.
 ``vector``
     ``float16``. The builder bounds the whole vector in [0, 1], so the granularity is far below
     anything the policy can act on.
@@ -90,8 +93,10 @@ STORAGE: tuple[str, ...] = (STORAGE_UINT8, STORAGE_FLOAT16, STORAGE_STATIC, STOR
 _UINT8_MAX = 255
 #: The key card identity arrives under, and every key this codec stores or derives.
 CARD_IDS = "card_ids"
+#: Derived like ``mask_planes``: the last ``n_buttons`` bits of the mask, never stored.
+ABILITY_READY = "ability_ready"
 KNOWN_KEYS: frozenset[str] = frozenset(
-    {"spatial", "vector", "action_mask", "mask_planes", CARD_IDS}
+    {"spatial", "vector", "action_mask", "mask_planes", CARD_IDS, ABILITY_READY}
 )
 _BITS_PER_BYTE = 8
 
@@ -580,7 +585,9 @@ class SpatialObsCodec(ObsCodec):
         out.mask_planes.view(
             batch, frames, layout.hand_size, tiles_y, tiles_x
         ).copy_(
-            bits[:, :, 1:].reshape(batch, frames, layout.hand_size, tiles_y, tiles_x)
+            bits[:, :, 1 : 1 + layout.hand_size * tiles_y * tiles_x].reshape(
+                batch, frames, layout.hand_size, tiles_y, tiles_x
+            )
         )
 
         out.vector.copy_(_half(raw[:, 0, layout.vector_start : layout.vector_stop]))

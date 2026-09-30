@@ -167,12 +167,12 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
     if arch.blocks < 0:
         raise PreflightError(f"net.blocks is {arch.blocks}")
     tiles_y, tiles_x = spec.tiles
-    expected = 1 + spec.hand_size * tiles_y * tiles_x
+    expected = spec.n_grid_actions + spec.n_buttons
     if expected != spec.n_actions:
         raise PreflightError(
             f"the action space is {spec.n_actions} wide, and a no-op plus {spec.hand_size} hand "
-            f"slots over {tiles_y}x{tiles_x} tiles is {expected}. The pointer head is written "
-            "against a grid action space"
+            f"slots over {tiles_y}x{tiles_x} tiles plus {spec.n_buttons} ability buttons is "
+            f"{expected}. The pointer head writes the grid and then one logit per button"
         )
     _logit_scale(arch)
 
@@ -182,6 +182,18 @@ def _flat(value: Any) -> list[Any]:
     if isinstance(value, list | tuple):
         return [leaf for item in value for leaf in _flat(item)]
     return [value]
+
+
+def _with_buttons(obs: ObsBatch, grid: int, n_buttons: int) -> Tensor:
+    """The scalar vector, followed by the ability buttons' readiness when there are buttons.
+
+    Read off the mask's tail rather than carried as a key of its own: the observation's
+    ``ability_ready`` is those same bits, and the codec stores the mask once.
+    """
+    if not n_buttons:
+        return obs.vector
+    ready = obs.mask[:, grid : grid + n_buttons].to(obs.vector.dtype)
+    return torch.cat([obs.vector, ready], dim=-1)
 
 
 class ResBlock(nn.Module):
@@ -223,7 +235,12 @@ class ClashTrunk(nn.Module):
         self.coord_conv = arch.coord_conv
         stacked = spec.frame_stack * (spec.n_planes + spec.obs_space["mask_planes"].shape[0])
         self.in_channels = stacked + (2 if arch.coord_conv else 0) + arch.vector_embed
-        self.vector_embed = nn.Linear(spec.vector_size, arch.vector_embed)
+        # The ability buttons' readiness rides with the scalar vector: whether a hero or a
+        # champion can act now is a fact about the whole state, like elixir. It is read off the
+        # mask's tail, which is the same bits as the observation's ability_ready.
+        self.grid = spec.n_grid_actions
+        self.n_buttons = spec.n_buttons
+        self.vector_embed = nn.Linear(spec.vector_size + spec.n_buttons, arch.vector_embed)
         # D2: the card on each tile, embedded before the stem, as the hand slots are. Sized from
         # the space's own bound so the table follows the catalogue, and index 0 -- an empty tile
         # -- is fixed at zero: no card there, and nothing to learn about it.
@@ -249,8 +266,8 @@ class ClashTrunk(nn.Module):
         parts = [spatial, obs.mask_planes.to(spatial.dtype)]
         if self.coord_conv:
             parts.append(self.coords.expand(batch, -1, -1, -1).to(spatial.dtype))
-        embedded = self.vector_embed(obs.vector).to(spatial.dtype)
-        parts.append(embedded[:, :, None, None].expand(-1, -1, *self.tiles))
+        embedded = self.vector_embed(_with_buttons(obs, self.grid, self.n_buttons))
+        parts.append(embedded.to(spatial.dtype)[:, :, None, None].expand(-1, -1, *self.tiles))
         if self.card_ids_embed is not None:
             if obs.card_ids is None:
                 raise ValueError(
@@ -312,6 +329,11 @@ class PointerPolicyHead(nn.Module):
         self.query = nn.Linear(arch.card_embed + 2, arch.channels)
         self.query_bias = nn.Linear(arch.card_embed + 2, 1)
         self.noop = nn.Linear(2 * arch.channels, 1)
+        # One logit per ability button, from the same pooled summary as the no-op's: a press,
+        # like a wait, is a decision about the whole board rather than about a tile. None when
+        # the environment has no buttons, so such a network holds exactly what it always held.
+        self.n_buttons = spec.n_buttons
+        self.buttons = nn.Linear(2 * arch.channels, spec.n_buttons) if spec.n_buttons else None
 
     def _mapped(self, features: Tensor) -> Tensor:
         return torch.relu(self.feature_norm(self.feature(features)))
@@ -348,13 +370,16 @@ class PointerPolicyHead(nn.Module):
         return self._tiles(self._mapped(features), obs)
 
     def forward(self, features: Tensor, obs: ObsBatch) -> Tensor:
-        """``(B, n_actions)`` float32, raw: no softmax, no clamp, no mask."""
+        """``(B, n_actions)`` float32, raw: no softmax, no clamp, no mask. The no-op, then the
+        tiles in the parser's ``(slot, y, x)`` order, then one logit per ability button."""
         mapped = self._mapped(features)
         tiles = self._tiles(mapped, obs)
-        noop = self.noop(_pool(mapped)) + self.noop_bias
-        return torch.cat(
-            [noop.to(tiles.dtype), tiles.reshape(tiles.shape[0], -1)], dim=-1
-        ).float()
+        pooled = _pool(mapped)
+        noop = self.noop(pooled) + self.noop_bias
+        parts = [noop.to(tiles.dtype), tiles.reshape(tiles.shape[0], -1)]
+        if self.buttons is not None:
+            parts.append(self.buttons(pooled).to(tiles.dtype))
+        return torch.cat(parts, dim=-1).float()
 
     def initialise(self, generator: torch.Generator) -> None:
         _orthogonal(self.feature.weight, HIDDEN_GAIN, generator)
@@ -364,6 +389,10 @@ class PointerPolicyHead(nn.Module):
         for linear in (self.query, self.query_bias, self.noop):
             _orthogonal(linear.weight, HEAD_GAIN, generator)
             _zero_bias(linear)
+        if self.buttons is not None:
+            # Drawn last, so a network without buttons draws exactly what it always drew.
+            _orthogonal(self.buttons.weight, HEAD_GAIN, generator)
+            _zero_bias(self.buttons)
 
 
 class ValueHead(nn.Module):
@@ -379,7 +408,9 @@ class ValueHead(nn.Module):
         super().__init__()
         _check_arch(spec, arch)
         self.hand_size = spec.hand_size
-        self.vector_embed = nn.Linear(spec.vector_size, arch.vector_embed)
+        self.grid = spec.n_grid_actions
+        self.n_buttons = spec.n_buttons
+        self.vector_embed = nn.Linear(spec.vector_size + spec.n_buttons, arch.vector_embed)
         width = 2 * arch.channels + arch.vector_embed + spec.hand_size
         self.hidden = nn.Linear(width, arch.value_hidden)
         self.out = nn.Linear(arch.value_hidden, 1)
@@ -387,8 +418,9 @@ class ValueHead(nn.Module):
     def forward(self, features: Tensor, obs: ObsBatch) -> Tensor:
         """``(B,)`` float32."""
         pooled = _pool(features)
-        embedded = self.vector_embed(obs.vector).to(pooled.dtype)
-        legal = obs.mask[:, NOOP + 1 :].view(obs.mask.shape[0], self.hand_size, -1)
+        embedded = self.vector_embed(_with_buttons(obs, self.grid, self.n_buttons))
+        embedded = embedded.to(pooled.dtype)
+        legal = obs.mask[:, NOOP + 1 : self.grid].view(obs.mask.shape[0], self.hand_size, -1)
         legal_frac = legal.to(pooled.dtype).mean(dim=-1)
         x = torch.cat([pooled, embedded, legal_frac], dim=-1)
         return self.out(torch.relu(self.hidden(x))).squeeze(-1).float()

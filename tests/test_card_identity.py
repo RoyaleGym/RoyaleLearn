@@ -31,8 +31,11 @@ from royalelearn.rollout.codec import SpatialObsCodec
 from royalelearn.rollout.envspec import ComponentSpec, canonical_json, read_env_spec
 
 #: Taken on a93ace4, before any of this existed: the flag-off architecture must not move.
-GOLDEN_ARCH_DIGEST = "f244fcb743483eac65b728eae118ffae7ebea5198da351890d13e4734169772f"
-GOLDEN_PARAMETERS = 767301
+#: Re-taken on RoyaleGym 5565645, whose observation vector grew (235 wide on MockEngine): the
+#: digest covers the observation space, so an environment change moves it where a learner change
+#: must not. The ability-button change left both numbers exactly as this RoyaleLearn had them.
+GOLDEN_ARCH_DIGEST = "b26a06f2397d258bd607aa9a9ffde1c60c3e5f8feb5d5c6733ddd71eb79fb414"
+GOLDEN_PARAMETERS = 767877
 
 
 def _switched_on(factory_spec: Any) -> Any:

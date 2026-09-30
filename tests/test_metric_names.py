@@ -96,6 +96,7 @@ PUBLISHED_KEYS = (
     "policy/legal_actions_p50",
     "policy/legal_actions_p95",
     "policy/noop_rate",
+    "policy/button_press_rate",
     "policy/rollout_choice_frac",
     "policy/rollout_hold_gap",
     "policy/rollout_hold_gap_residual_std",

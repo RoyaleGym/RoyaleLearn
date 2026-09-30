@@ -348,6 +348,12 @@ METRICS: dict[str, MetricSpec] = {
     "policy/noop_rate": _m(
         "fraction", "Share of decisions that were the no-op.", low=0.85, high=0.97
     ),
+    "policy/button_press_rate": _m(
+        "fraction",
+        "Share of decisions that pressed an ability button (a hero's or a champion's). A press "
+        "is not a card play: noop_rate, the tile and card counters and play_rate_by_elixir "
+        "count only the grid's actions.",
+    ),
     "policy/legal_actions_mean": _m("count", "Legal actions per decision, mean."),
     "policy/legal_actions_p05": _m("count", "Legal actions per decision, 5th percentile."),
     "policy/legal_actions_p50": _m("count", "Legal actions per decision, median."),
@@ -919,6 +925,7 @@ CONDITIONAL: dict[str, str] = {
         "zero, which it always is on a run that does not schedule one",
     ),
     "ppo/actor_lr_scale": "the run schedules the actor's learning-rate scale",
+    "policy/button_press_rate": "the environment has ability buttons",
     "ppo/actor_frozen": "the run schedules the actor's learning-rate scale",
     "ppo/ev_at_unfreeze": "this iteration is the first after a frozen stretch",
     "ppo/iterations_since_unfreeze": "the actor has been unfrozen after a frozen stretch",

@@ -79,6 +79,8 @@ class RowBehaviour:
         self.hand = hand_fields(spec)
         self.elixir = field_slice(spec, "own_elixir")
         self.onehot = field_slice(spec, HAND_CARD_ONEHOT)
+        self.grid = spec.n_grid_actions
+        self.n_buttons = spec.n_buttons
         self.tiles = spec.tiles[0] * spec.tiles[1]
         self.max_mana = max_mana()
         self.card_plays: dict[int, int] = {}
@@ -103,7 +105,8 @@ class RowBehaviour:
         # Per hand slot rather than per action: a slot is playable when ANY of its tiles is.
         # This is what separates "the policy does not choose this card" from "this card is
         # rarely affordable", and nothing measured it before.
-        slot_legal = mask[:, 1:].reshape(mask.shape[0], self.hand.hand_size, self.tiles).any(-1)
+        grid = mask[:, 1 : self.grid]
+        slot_legal = grid.reshape(mask.shape[0], self.hand.hand_size, self.tiles).any(-1)
         fields["policy/legal_actions_mean"] = float(legal.mean())
         for percentile, name in ((5, "p05"), (50, "p50"), (95, "p95")):
             fields[f"policy/legal_actions_{name}"] = float(np.percentile(legal, percentile))
@@ -112,13 +115,23 @@ class RowBehaviour:
         bar = vector[:, self.elixir].reshape(-1).astype(np.float64)
         fields["env/mean_elixir_at_decision"] = float(bar.mean() * self.max_mana)
         fields["env/frac_elixir_above_99"] = float(np.mean(bar >= 0.99))
-        fields.update(play_rate_by_elixir(bar * self.max_mana, legal, actions))
+        # A press of an ability button plays no card. The card statistics see it as a wait,
+        # and it is counted on its own.
+        pressed = actions >= self.grid
+        cards = np.where(pressed, 0, actions)
+        if self.n_buttons:
+            fields["policy/button_press_rate"] = float(np.mean(pressed))
+        fields.update(play_rate_by_elixir(bar * self.max_mana, legal, cards))
 
-        fields.update(self._plays(actions, vector[:, self.onehot], slot_legal))
+        fields.update(self._plays(cards, vector[:, self.onehot], slot_legal, pressed))
         return fields
 
     def _plays(
-        self, actions: np.ndarray, onehot: np.ndarray, slot_legal: np.ndarray
+        self,
+        actions: np.ndarray,
+        onehot: np.ndarray,
+        slot_legal: np.ndarray,
+        pressed: np.ndarray | None = None,
     ) -> dict[str, MetricValue]:
         """Where the cards went, and which cards they were.
 
@@ -129,7 +142,8 @@ class RowBehaviour:
         fields: dict[str, MetricValue] = {}
         fields.update(self._availability(onehot, slot_legal))
         played = actions > 0
-        fields["policy/noop_rate"] = float(np.mean(~played))
+        waited = ~played if pressed is None else ~played & ~pressed
+        fields["policy/noop_rate"] = float(np.mean(waited))
         if not played.any():
             fields["policy/tile_entropy"] = 0.0
             fields["policy/tile_top1_share"] = 0.0

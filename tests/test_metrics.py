@@ -64,6 +64,8 @@ PRODUCED_ELSEWHERE: dict[str, str] = {
     **{key: "coordinator" for key in schema.METRICS if key.startswith("health/")},
     # per-step counters, reduced in the worker where they are produced
     "policy/noop_rate": "rollout worker",
+    # only from an environment with ability buttons (tests/test_ability_buttons.py)
+    "policy/button_press_rate": "rollout worker",
     "policy/legal_actions_mean": "rollout worker",
     "policy/legal_actions_p05": "rollout worker",
     "policy/legal_actions_p50": "rollout worker",

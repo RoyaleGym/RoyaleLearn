@@ -432,6 +432,16 @@ def read_env_spec(
         offset += int(field.size)
 
     hand_size, tiles_y, tiles_x = obs_space["mask_planes"].shape
+    n_actions = int(vec_env.single_action_space.n)
+    grid = 1 + hand_size * tiles_y * tiles_x
+    ready = obs_space.get("ability_ready")
+    buttons = int(ready.shape[0]) if ready is not None else 0
+    if n_actions != grid + buttons:
+        raise PreflightError(
+            f"the action space is {n_actions}, and the grid is {grid} with {buttons} ability "
+            "buttons in the observation's ability_ready: an action after the grid must be a "
+            "button the observation says the readiness of"
+        )
     state = env.engine.state()
     spatial_shape = obs_space["spatial"].shape
     spec = EnvSpec(

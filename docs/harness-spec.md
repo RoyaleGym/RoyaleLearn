@@ -1409,6 +1409,7 @@ The rule, applied per key:
 | `spatial`, per plane | declared `high <= 255` and integer-valued on 1000 sampled states | `uint8`, scale 1, **exact** |
 | `spatial`, per plane | anything else | `float16` |
 | `mask_planes` | equal to `action_mask[1:]` reshaped, by construction | **never stored**; the learner reshapes the stored mask at unpack |
+| `ability_ready` | only with `TileActionParser(ability_buttons=True)`; equal to the mask's last `n_buttons` bits | **never stored**; the network reads it off the stored mask |
 | `vector` | bounded in [0, 1] by the builder | `float16`, 2 B per element |
 | `action_mask` | | bit-packed `uint8`, LSB first, `ceil(n_actions / 8)` B, **exact** |
 | `card_ids` | only with `SpatialObsBuilder(card_identity=True)`; vocabulary `high + 1` must fit a byte | `uint8`, **exact**, its own region after the mask, `ids_planes * H * W` B |
@@ -1768,7 +1769,10 @@ ObsBatch (device tensors, from ObsCodec.unpack_to_device):
 
 trunk input assembly:
     coords   (2, H, W)        constant buffer, y/(H-1) and x/(W-1) in [0,1]
-    vemb     Linear(V, E)(vector) -> (B, E, 1, 1) -> expand -> (B, E, H, W)
+    vemb     Linear(V + NB, E)(cat[vector, ready]) -> (B, E, 1, 1) -> expand -> (B, E, H, W)
+             ready = mask[:, G : G + NB], the ability buttons' readiness; G = 1 + P*H*W is
+             the grid's width and NB the buttons (0 without ability_buttons, and then
+             vemb is Linear(V, E) on the vector alone, as it always was)
     x        cat[spatial, mask_planes, coords, vemb]   -> (B, k*(S+P) + 2 + E, H, W)
 
 stem     Conv2d(k*(S+P) + 2 + E, C, 3, padding=1) -> GroupNorm(norm_groups, C) -> ReLU
@@ -1787,7 +1791,10 @@ qb       Linear(C+2, 1)(q_in)                                     (B, P, 1)
 tiles    einsum('bcyx,bkc->bkyx', Fp, q) * C**-0.5 + qb[..., None] (B, P, H, W)
 pooled   cat([Fp.mean((2,3)), Fp.amax((2,3))])                    (B, 2C)
 noop     Linear(2C, 1)(pooled) + arch.noop_bias                   (B, 1)
-logits   cat([noop, tiles.reshape(B, P*H*W)], dim=-1).float()      (B, A) float32
+buttons  Linear(2C, NB)(pooled), only when NB > 0                (B, NB)
+logits   cat([noop, tiles.reshape(B, P*H*W), buttons], dim=-1)    (B, A) float32
+         A = G + NB: action G + k presses ability button k (a hero's or a champion's),
+         masked by the env like every other action
 
 --- critic (its own trunk, identical shape, separate weights) -----------------
 pooled_c cat([body_c.mean((2,3)), body_c.amax((2,3))])            (B, 2C)

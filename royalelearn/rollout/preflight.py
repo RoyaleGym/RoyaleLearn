@@ -611,20 +611,37 @@ def _action_layout_gate(
             f"the action layout disagrees with the parser on {wrong.size} of {flat.size} "
             f"actions: a one-hot at index {flat[first]} encodes to {encoded[first]}"
         )
-    if int(parser.space.n) != flat.size + 1:
+    buttons = spec.n_buttons
+    if int(parser.space.n) != flat.size + 1 + buttons:
         raise PreflightError(
             f"the action space is {int(parser.space.n)} and the grid is {flat.size} + the "
-            "no-op"
+            f"no-op + {buttons} ability buttons"
         )
+    if buttons:
+        # Exhaustive over the buttons too: action n_grid + k must press button k, and nothing
+        # on the grid may read as a press.
+        pressed = [parser.button_of(spec.n_grid_actions + k) for k in range(buttons)]
+        if pressed != list(range(buttons)) or parser.button_of(int(flat[-1])) is not None:
+            raise PreflightError(
+                f"the parser's buttons are not the actions after the grid: actions "
+                f"{spec.n_grid_actions}.. press {pressed}"
+            )
     planes = 0
     for row in sample:
         if "mask_planes" not in row:
             break
-        expected = row["action_mask"][1:].reshape(hand, tiles_y, tiles_x)
+        expected = row["action_mask"][1 : spec.n_grid_actions].reshape(hand, tiles_y, tiles_x)
         if not np.array_equal(row["mask_planes"], expected):
             raise PreflightError(
                 "mask_planes is not action_mask[1:] reshaped; the codec stores the mask once "
                 "and the learner reshapes it at unpack, so the two must be the same bits"
+            )
+        if buttons and not np.array_equal(
+            row["ability_ready"], row["action_mask"][spec.n_grid_actions :]
+        ):
+            raise PreflightError(
+                "ability_ready is not the mask's last bits; the network reads the buttons' "
+                "readiness off the stored mask, so the two must be the same bits"
             )
         planes += 1
     say(

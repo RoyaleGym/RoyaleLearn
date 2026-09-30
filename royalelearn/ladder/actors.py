@@ -146,7 +146,11 @@ class EvalActors:
 
         spatial = np.asarray(obs["spatial"], dtype=np.float32)
         mask = np.asarray(obs["action_mask"]).astype(bool)
-        planes = mask[1:].reshape(self.spec.hand_size, *self.spec.tiles).astype(np.float32)
+        planes = (
+            mask[1 : 1 + self.spec.hand_size * self.spec.tiles[0] * self.spec.tiles[1]]
+            .reshape(self.spec.hand_size, *self.spec.tiles)
+            .astype(np.float32)
+        )
         frame = {"spatial": spatial, "planes": planes}
         if "card_ids" in obs:
             frame["ids"] = np.asarray(obs["card_ids"]).astype(np.int64)
