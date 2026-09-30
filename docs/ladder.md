@@ -114,6 +114,32 @@ To train against one fixed opponent and nothing else: one seed, `mix` set to `[0
 never adds anything. `tests/test_seed_snapshots.py` checks that every pool battle of such a run
 meets the seed.
 
+### Training one deck against a field of others
+
+`ladder.seat_decks` trains one deck, and only that deck, against the decks it will meet:
+
+```json
+"seat_decks": {
+  "deck": ["Giant", "Musketeer", "MiniPekka", "Archer", "Fireball", "Zap", "Goblins", "Minions"],
+  "field": [["Knight", "Valkyrie", "HogRider", "Cannon", "Log", "Skeletons", "Arrows", "Musketeer"]]
+}
+```
+
+It sets the decks each battle deals, from the battle's role:
+
+- A mirror battle deals `deck` to both seats. The learner plays both, so both seats train `deck`.
+- A pool or scripted battle deals `deck` to the learner's seat and a deck from `field` to the
+  other. A frozen snapshot, a seed or a scripted opponent plays that seat, and its rows are not
+  trained on. So the learner meets a fixed player of the field deck, never a copy of itself that
+  is learning it.
+
+`field` is drawn uniformly; list a deck twice to weight it, or leave `field` out for random
+decks. In a pool or scripted battle the learner's seat is fixed per battle, blue in even battles
+and red in odd ones, so the seats stay balanced. `mix` still decides how many battles are mirror
+battles. With `seed_snapshots` and a pool share, the field seat can be one policy you already
+have. Without `seat_decks`, battles deal whatever the environment's own state mutator deals.
+`tests/test_seat_decks.py` checks the deal and the seats.
+
 ## Who the bot plays in a given battle
 
 Every battle draws its opponent from a three-way mixture. `LadderConfig.mix` in

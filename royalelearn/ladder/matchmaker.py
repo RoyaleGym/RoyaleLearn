@@ -51,6 +51,7 @@ from ..api.rollout import (
 from ..config import role_counts
 from ..seeding import MATCH_BATTLE, derive_generator, stream_path
 from .pool import SCRIPTED_IDS
+from .seat_decks import learner_seat_of
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..config import Geometry, LadderConfig
@@ -385,6 +386,10 @@ class MixMatchmaker(Matchmaker):
             )
 
         learner_seat = int(rng.integers(2))
+        if self.config.seat_decks is not None:
+            # The deal puts the named deck on this battle's fixed seat (ladder/seat_decks.py).
+            # Drawn and then replaced, so every later draw of the stream is what it was.
+            learner_seat = learner_seat_of(battle)
         if role == ROLE_SCRIPTED:
             opponent = self.scripted_ids[int(rng.integers(len(self.scripted_ids)))]
             other = GROUP_SCRIPTED

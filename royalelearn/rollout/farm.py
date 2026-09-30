@@ -34,6 +34,7 @@ import numpy as np
 
 from ..api.rollout import EpisodeRecord, WorkerFailure
 from ..errors import PreflightError, WorkerTimeout
+from ..ladder.seat_decks import battle_state_mutators
 from .envspec import NOT_RECORDED, NOT_STATED
 from .inline import (
     COMMAND_CLOSE,
@@ -233,6 +234,7 @@ class ProcessRolloutSource(RolloutSourceBase):
             stagger_first_reset=rollout.stagger_first_reset,
             viser=self.viser and worker.index == 0,
             recorder=rollout.recorder if worker.index == 0 else None,
+            state_mutators=battle_state_mutators(self.config, self.geometry),
             ordinals=self.ordinals,
         )
 

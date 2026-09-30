@@ -370,6 +370,24 @@ class SeedSnapshot(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     sha256: str
 
 
+class SeatDecks(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """One deck the learner trains, dealt where the learner sits, against a field of others.
+
+    A mirror battle deals ``deck`` to both seats. A pool or scripted battle deals ``deck`` to
+    the learner's seat, which is fixed per battle (even battles blue, odd red), and a deck from
+    ``field`` to the other seat, where a frozen or seeded snapshot or a scripted opponent plays
+    and whose rows are not trained on. ``field`` is drawn uniformly (list a deck twice to weight
+    it), or None for a random deck of eight different cards. Decks are card NAMES, looked up in
+    the engine's catalogue at the first reset; ``shuffle`` is RoyaleGym's ``ShuffleMode`` for a
+    non-mirror deal. See ``royalelearn/ladder/seat_decks.py``.
+    """
+
+    deck: tuple[str, ...]
+    field: tuple[tuple[str, ...], ...] | None = None
+    #: ``ShuffleMode.INDEPENDENT``.
+    shuffle: int = 1
+
+
 class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Who the learner plays, and when a snapshot joins the pool."""
 
@@ -430,6 +448,9 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: snapshot. To train against one fixed opponent: one seed, ``mix`` (0, 1, 0), and the gate's
     #: and the floor's cadences past the run's end, so nothing else is ever admitted.
     seed_snapshots: tuple[SeedSnapshot, ...] = ()
+    #: One deck trained where the learner sits, against a field on the other seat; None deals
+    #: what the env's own state mutator deals, as every run before this field did.
+    seat_decks: SeatDecks | None = None
     #: The three probe fields are in the run identity, and they are meant to be, although the
     #: integrator measured that two runs differing only in them produce the same weights at every
     #: iteration. That measurement is about the WEIGHTS and the identity's question is wider: a
@@ -858,6 +879,23 @@ def _probe_problems(ladder: LadderConfig) -> list[str]:
     return problems
 
 
+def _seat_deck_problems(ladder: LadderConfig) -> list[str]:
+    seats = ladder.seat_decks
+    if seats is None:
+        return []
+    decks = [("ladder.seat_decks.deck", seats.deck)]
+    decks += [(f"ladder.seat_decks.field[{i}]", d) for i, d in enumerate(seats.field or ())]
+    problems = []
+    for where, deck in decks:
+        if len(deck) != 8:
+            problems.append(f"{where} must have 8 cards, got {len(deck)}")
+        elif len(set(deck)) != 8:
+            problems.append(f"{where} lists a card twice: {list(deck)}")
+    if seats.field is not None and not seats.field:
+        problems.append("ladder.seat_decks.field is empty; leave it out for random decks")
+    return problems
+
+
 def _seed_snapshot_problems(ladder: LadderConfig) -> list[str]:
     """Everything wrong with the seed snapshots that can be seen without reading their folders.
 
@@ -1058,6 +1096,7 @@ def check_consistency(config: RunConfig) -> list[str]:
     problems.extend(_probe_problems(config.ladder))
     problems.extend(_scripted_opponent_problems(config.ladder))
     problems.extend(_seed_snapshot_problems(config.ladder))
+    problems.extend(_seat_deck_problems(config.ladder))
     problems.extend(_extension_problems(config))
     problems.extend(_alarm_override_problems(config))
     if config.checkpoint.keep < 1:

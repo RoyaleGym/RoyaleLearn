@@ -70,6 +70,7 @@ from ..api.rollout import (
 )
 from ..config import Geometry
 from ..errors import PreflightError
+from ..ladder.seat_decks import battle_state_mutators
 from ..seeding import ENV_EPISODE, ENV_STAGGER, derive_generator, derive_int, stream_path
 from .envspec import ComponentSpec, EnvFactorySpec, resolve_component
 from .layout import (
@@ -235,6 +236,9 @@ class WorkerConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: by ``build_vec`` to ONE env of that shard: a recorder that wants per-tick frames takes its
     #: env off the multi-tick step path, so one per run is a bounded cost and one per game is not.
     recorder: ComponentSpec | None = None
+    #: One deal per battle of the rectangle, installed as that battle's state mutator
+    #: (``ladder.seat_decks``, ``royalelearn/ladder/seat_decks.py``); empty keeps the env's own.
+    state_mutators: tuple[ComponentSpec, ...] = ()
     #: Where each battle's episode counter stood when a checkpoint was written, empty on a
     #: fresh run. The counter names the next episode, which is what makes a resumed run play
     #: the battles the original was about to play rather than the ones it began with.
@@ -364,6 +368,12 @@ class ShardRunner:
             recorder=recorder,
             autoreset_seed_fn=self._episode_seed,
         )
+        if config.state_mutators:
+            # Before the first reset, which is the first deal.
+            extra = tuple(config.extra_component_modules)
+            for game, env in enumerate(self.vec.envs):
+                deal = config.state_mutators[int(self.battles[game])].build(extra)
+                getattr(env, "parallel", env).state_mutator = deal
         self.scripted = ScriptedSeats(planner, config.worker, self.slots, config.generation)
         self.noop = int(self.vec.envs[0].action_parser.noop())
 
@@ -1486,6 +1496,7 @@ class InlineRolloutSource(RolloutSourceBase):
             stagger_first_reset=rollout.stagger_first_reset,
             viser=self.viser and worker == 0,
             recorder=rollout.recorder if worker == 0 else None,
+            state_mutators=battle_state_mutators(self.config, self.geometry),
             ordinals=self.ordinals,
         )
 
