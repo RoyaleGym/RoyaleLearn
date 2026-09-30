@@ -7,20 +7,21 @@ its severe twin read a mean over the learner AND its opponent. From a run log "n
 "cannot fire" are the same picture, and a guard nobody has seen trip is not a guard.
 
 So this is the standing version of the check that found them. It began as a one-off script run
-by hand against a run directory; here it runs in the suite, against a REAL metric row rather than
-a synthetic one, so an alarm gated on a key that no row carries fails here rather than in six
-weeks.
+by hand against a run directory; here it runs in the suite, against a row the harness itself
+wrote rather than one written by hand, so an alarm gated on a key that no row carries fails here
+rather than in six weeks.
 
-Three properties, and the third is the one a synthetic row cannot give:
+Three properties, and the third is the one a hand-written row cannot give:
 
 * every alarm in the table has a plant, and every plant names an alarm that exists;
 * a plant only touches keys the alarm itself DECLARES, so an alarm tripped through a key missing
   from its own ``keys`` tuple is a failure rather than a pass;
 * the plant fires it, from a baseline the alarm was quiet on.
 
-The baseline is an early row of a real run, saved as `tests/data/metrics-row.json`. It is not a
-healthy row and is not pretending to be: two alarms hold on it, and both are true statements
-about that run.
+The baseline is iteration 4 of the suite's tiny MockEngine run, saved as
+`tests/data/metrics-row.json` by `tests/data/make_metrics_row.py`. It is not a healthy row and is
+not pretending to be: a few iterations of tiny battles trip seven alarms, and each is a true
+statement about that run.
 """
 
 from __future__ import annotations
@@ -36,24 +37,48 @@ from royalelearn.config import AlarmConfig
 from royalelearn.errors import AlarmHalt
 from royalelearn.metrics.alarms import AlarmSet
 
-#: One iteration of a real run. Real, because the interesting failure is an alarm that reads a
-#: key no row carries, and a row written by a test carries whatever the test decided to write.
+#: One iteration of a run the harness executed. Written by the harness, because the interesting
+#: failure is an alarm that reads a key no row carries, and a row written by hand carries whatever
+#: its author decided to write.
 BASELINE = json.loads(
     (Path(__file__).parent / "data" / "metrics-row.json").read_text(encoding="utf-8")
 )
 
-#: What that row really trips, and why each is a true statement rather than a defect here.
-#: `ppo/kl` is 9.4e-07, which is a policy that is barely moving, and `explained_variance` is
-#: -0.022 at iteration 4, which is a critic that has not started. Both were confirmed findings on
-#: that run. If this set has to grow, the question is what changed about the row, not about the
-#: alarms.
-BASELINE_FIRES = frozenset({"kl_dead", "ev_negative"})
+#: What that row really trips, and why each is a true statement rather than a defect here: four
+#: iterations of a tiny untrained learner on battles that all run to the cap. `ppo/kl` is tiny
+#: (a policy barely moving), it plays two cards a match with a near-zero no-op entropy and one
+#: tile, every battle is a draw at the cap, and a drawn battle has no terminal reward for the
+#: shaping to be measured against. If this set has to change, the question is what changed about
+#: the row, not about the alarms.
+BASELINE_FIRES = frozenset(
+    {
+        "kl_dead",
+        "noop_collapse",
+        "noop_collapse_severe",
+        "noop_entropy_floor",
+        "artefact_exploit",
+        "draw_equilibrium",
+        "shaping_dominates",
+    }
+)
 
-#: Those two values put back inside their documented bands, and nothing else touched. The plants
-#: are fed from THIS row so that every alarm's evidence is the same shape: silent first, then
-#: fired. Without it, `kl_dead` and `ev_negative` would "pass" their plant by having been firing
+#: Those values put back inside their documented bands, and nothing else touched. The plants are
+#: fed from THIS row so that every alarm's evidence is the same shape: silent first, then fired.
+#: Without it, the alarms the baseline trips would "pass" their plants by having been firing
 #: already, which is the weaker claim of the two and indistinguishable from the stronger one.
-QUIET = dict(BASELINE, **{"ppo/kl": 0.008, "ppo/explained_variance": 0.7})
+QUIET = dict(
+    BASELINE,
+    **{
+        "ppo/kl": 0.008,
+        "ppo/explained_variance": 0.7,
+        "policy/cards_per_match": 12.0,
+        "ppo/noop_entropy": 0.5,
+        "policy/card_tile_top10_share": 0.2,
+        "env/draw_rate": 0.1,
+        "env/episode_steps_at_cap_frac": 0.1,
+        "env/reward_terminal_abs": 0.9,
+    },
+)
 
 #: How to trip each alarm, in keys that alarm itself reads. A value is a statement about the
 #: alarm's own threshold. A LIST is fed in order and then held at the last: some alarms are
