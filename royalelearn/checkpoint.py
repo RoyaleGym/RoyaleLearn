@@ -327,8 +327,7 @@ class DirCheckpointStore(CheckpointStore):
         rather than losing track of it, and it is not reported as removed. The returned list is
         what actually went.
 
-        Reported by the train session's platform-portability hunt, which measured it here rather
-        than arguing it.
+        Found by a platform-portability review, which measured it here rather than arguing it.
         """
         root = self.folder(run_dir)
         limit = self.keep if keep is None else int(keep)

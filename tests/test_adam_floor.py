@@ -6,8 +6,8 @@ rate work across layers whose gradients differ by orders of magnitude. That hold
 ``sqrt(v) >> eps``. Below the eps floor the denominator stops tracking the gradient and the step
 becomes ``lr * m / eps`` -- proportional to the gradient again, and for a small gradient, small.
 
-On 2026-09-22 the train session measured ``grad_norm_actor`` at 0.0068 against a critic at 26.6,
-a KL of 1e-5 per update and a clip fraction of zero, and called the asymmetry unexplained. It is
+An actor gradient orders of magnitude below the critic's, a KL near zero per update and a
+clip fraction of zero look like an actor that cannot move. It is
 the floor: with ``adam_eps`` at its default 1e-5, most of the actor's second moments sit under it
 and the actor's effective step is a fraction of the one its learning rate names, while the critic
 -- four orders of magnitude up in gradient norm -- gets the adaptive step the schedule assumes.
@@ -49,7 +49,7 @@ def test_a_gradient_far_above_eps_is_entirely_off_it() -> None:
 def test_the_floor_moves_with_eps_and_not_with_the_gradient() -> None:
     """The same gradient, adaptive under one epsilon and floored under another.
 
-    This is the arm the train session measured 11x more actor movement on. If the fraction did
+    This is the arm that should move the actor more. If the fraction did
     not move here, the key would be reporting the gradient under another name.
     """
     gradient = 1e-6

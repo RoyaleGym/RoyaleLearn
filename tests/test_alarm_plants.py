@@ -18,8 +18,8 @@ Three properties, and the third is the one a synthetic row cannot give:
   from its own ``keys`` tuple is a failure rather than a pass;
 * the plant fires it, from a baseline the alarm was quiet on.
 
-The baseline is iteration 4 of `train-hog26-3`, saved as `tests/data/metrics-row.json`. It is not
-a healthy row and is not pretending to be: two alarms hold on it, and both are true statements
+The baseline is an early row of a real run, saved as `tests/data/metrics-row.json`. It is not a
+healthy row and is not pretending to be: two alarms hold on it, and both are true statements
 about that run.
 """
 

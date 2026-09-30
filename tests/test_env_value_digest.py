@@ -4,7 +4,7 @@ The run identity and the ladder's result context both hashed the env spec as wri
 ``"kwargs": {}`` and the same reward with its default weights written out were two identities,
 ``{"crown": 1}`` and ``{"crown": 1.0}`` were two, and -- the dangerous direction -- changing a
 default in the code changed the objective of every config that relied on it without moving a
-single digest. Found by the train session's review of the 2026-09-24 placeholder commits.
+single digest. Found in review of the 2026-09-24 placeholder commits.
 
 Now each component's kwargs are bound to its real signature, defaults applied and numbers
 normalised, before hashing. These tests pin all three properties and the wiring into both places

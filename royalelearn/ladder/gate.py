@@ -282,7 +282,7 @@ class WilsonGate(PromotionGate):
         One that did not -- the first snapshot of a run, admitted free -- has no record, and this
         used to fall back to the rater's prediction. For a champion nobody had rated that is the
         prior, 0.5, so the bound was 0.48 and any policy cleared it against a scripted anchor:
-        hog26-10's first real gate had a regression check that could not fail. Now the champion
+        a first real gate had a regression check that could not fail. Now the champion
         plays the anchor, on the same frozen seeds and the same count as a candidate, and the
         games go into the log, so the next gate reads the record instead of playing it again.
         """

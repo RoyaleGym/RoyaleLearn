@@ -1,11 +1,10 @@
 """What a policy's hold rate is a hold rate OF, and why entropy could not answer it.
 
-On 2026-09-22 the train session read ``ppo/entropy_normalised`` in [0.980, 1.000] across 134
-iterations of hog26-2 and concluded the actor had not moved at all. The conclusion was wrong and
-the reading was right: at iteration 124 that policy was putting **15.3 times uniform mass** on
-the no-op, and that excursion costs 2% of normalised entropy. Over 250 legal actions, moving one
-of them from 0.4% to 6.1% leaves the other 249 sharing almost everything, and entropy is a sum
-over all 250.
+A run can read ``ppo/entropy_normalised`` in [0.980, 1.000] for its whole length and look as if the
+actor had not moved at all. That conclusion is wrong and the reading right: a policy putting **15.3
+times uniform mass** on the no-op reads 0.980, and that excursion costs 2% of normalised entropy.
+Over 250 legal actions, moving one of them from 0.4% to 6.1% leaves the other 249 sharing almost
+everything, and entropy is a sum over all 250.
 
 So the harness had no key for the quantity the run turns on. It measured the entropy of the whole
 distribution, which is nearly blind to the only action with a distinct meaning, and it threw away
@@ -28,13 +27,13 @@ from royalelearn.learn.distribution import MaskedCategorical
 from royalelearn.learn.inference import _StatAccumulator
 from royalelearn.metrics.records import rollout_policy_fields
 
-#: The legal-set size the train session measured on hog26-2: about 250 all run, never collapsing.
+#: A legal-set size typical of the shipped action space: about 250.
 N_LEGAL = 250
 
-#: What the no-op's mass was a multiple of uniform at iteration 124.
+#: A no-op mass that is a large multiple of uniform.
 OBSERVED_LIFT = 15.3
 
-#: And what ``ppo/entropy_normalised`` read on that same iteration.
+#: And what ``ppo/entropy_normalised`` reads for it.
 OBSERVED_ENTROPY = 0.980
 
 
@@ -75,7 +74,7 @@ def test_the_excursion_entropy_could_not_see(tmp_path) -> None:
     dist = distribution(OBSERVED_LIFT)
 
     assert normalised_entropy(dist) == pytest.approx(OBSERVED_ENTROPY, abs=0.002), (
-        "the train session's entropy reading is not reproduced by the lift it went with, so "
+        "the entropy reading is not reproduced by the lift it went with, so "
         "one of the two numbers in this file's premise is wrong"
     )
 

@@ -227,7 +227,7 @@ def test_the_paired_correlation_is_reported(tmp_path) -> None:
     comparison = _runner(both, tmp_path, seeds=40).compare("a", "b", games=40)
     # Every seed goes the same way on blue, so there is nothing to correlate. This used to be
     # reported as 0.0, which does not say "undefined": it says "uncorrelated", and it is the
-    # number hog26-10 published in every row. None is the answer that cannot be misread.
+    # number a run published in every row. None is the answer that cannot be misread.
     assert comparison.rho is None
 
 
@@ -655,11 +655,13 @@ def test_the_cost_it_reports_is_the_cost_it_pays(tmp_path) -> None:
 def test_the_preflight_says_which_side_of_the_boundary_a_run_falls_on() -> None:
     """The cadence is a boundary between two economics, and nothing printed it.
 
-    Train's run was capped at 2,700,000 steps rather than 4,000,000 for exactly this reason:
-    493 iterations is one candidate and the free admission, 730 is two and the second is a full
-    gate. Nothing in the config says so, so preflight says it.
+    Where a run's step limit falls against the candidate cadence decides whether its last
+    candidate is the free admission or a full gate. Nothing in the config says so, so preflight
+    says it.
     """
     import pathlib
+
+    import msgspec
 
     import royalelearn.config as cfg
     from royalelearn.config import geometry
@@ -667,8 +669,10 @@ def test_the_preflight_says_which_side_of_the_boundary_a_run_falls_on() -> None:
     from royalelearn.ladder.pool import SCRIPTED_IDS
     from royalelearn.rollout.preflight import _ladder_cost_line
 
-    config = cfg.load_config(
-        pathlib.Path("examples/configs/train-hog26-8.json").read_bytes()
+    config = cfg.load_config(pathlib.Path("examples/configs/laptop.json").read_bytes())
+    # Probes on, so the line has a cadence to report; the shipped profile leaves them off.
+    config = msgspec.structs.replace(
+        config, ladder=msgspec.structs.replace(config.ladder, probe_every_iterations=25)
     )
     line = _ladder_cost_line(config, geometry(config))
 
@@ -733,7 +737,7 @@ def _pair_rates(candidate_vs_anchor: float, champion_vs_anchor: float) -> dict:
 
 
 def test_an_unmeasured_champion_is_measured_against_the_anchor_not_assumed(tmp_path) -> None:
-    """hog26-10's first real gate: a champion admitted free, never rated, never played an anchor.
+    """A first real gate: a champion admitted free, never rated, never played an anchor.
 
     Its reference fell back to the rater's prior, 0.5, so the bound was 0.48 and any policy
     cleared it. Here the champion really scores 0.95 against the anchors and the candidate 0.70:
@@ -797,7 +801,7 @@ def test_an_admitted_candidate_is_filed_at_the_step_it_was_taken(tmp_path) -> No
     """``apply`` used to look the candidate's step up in the registry it was about to be added to.
 
     A new candidate is never there yet, so every admission was filed at step 0 and
-    ``ladder/champion_step`` read 0 in every row of hog26-10. The caller knows the step -- it took
+    ``ladder/champion_step`` read 0 in every row of a run. The caller knows the step -- it took
     the snapshot -- so it now has to say it, and there is no fallback that could guess.
     """
     pool = LadderPool(ResultLog(tmp_path / "games.jsonl"), context="ctx")

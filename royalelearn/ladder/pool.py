@@ -316,7 +316,7 @@ class LadderPool:
         ``step`` is the env step the candidate was snapshotted at, and it is required. This used
         to look the step up in the registry the candidate was about to be added to, where a new
         candidate never is, so every admission was filed at 0 and ``ladder/champion_step`` read 0
-        in every row of hog26-10. The caller took the snapshot; the caller says when.
+        in every row of a run. The caller took the snapshot; the caller says when.
         """
         self.state.gate_attempts += 1
         if decision.admit:

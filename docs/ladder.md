@@ -453,12 +453,11 @@ python -c "import json,sys; print(sum(1 for l in open(sys.argv[1],encoding='utf-
 This matters more than any of the above.
 
 **The shipped gate has only just been run.** Measured 2026-09-22: of the 50 run folders under
-`runs/` with a metrics file, 24 ran at least one gate, and every one used `champion_games: 2`,
-which is the smoke setting. After that, `train-hog26-10` ran the same 1,000-battle gate that
-`laptop.json` and `workstation.json` ship. Reading its first real gate showed that conditions 2
-and 3 could not fail there: the champion had no record against the anchors, and the pool held
-nothing to sample. Both were fixed on 2026-09-24. No numbers from a real gate are written up on
-this page yet.
+`runs/` with a metrics file, 24 ran at least one gate, and every one used `champion_games: 2`, which
+is the smoke setting. After that, a run used the same 1,000-battle gate that `laptop.json` and
+`workstation.json` ship. Reading its first real gate showed that conditions 2 and 3 could not fail
+there: the champion had no record against the anchors, and the pool held nothing to sample. Both
+were fixed on 2026-09-24. No numbers from a real gate are written up on this page yet.
 
 **The ladder has never had more than a handful of members.** On 2026-09-22 the largest pool in
 any run on disk was 3, which is 2 anchors plus 1 snapshot. Eviction, the stratified sample in

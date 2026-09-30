@@ -12,8 +12,8 @@ documented interactive control did nothing at all for a PowerShell user, with no
 retry. And `Out-File -Encoding unicode` writes UTF-16, which raises UnicodeDecodeError -- not an
 OSError, so it escaped the guard and took the run down.
 
-Reported by the train session on 2026-09-23 from a platform-portability hunt, measured on this
-machine rather than argued. The suite could not have found it: `tests/test_coordinator.py` writes
+Found on 2026-09-23 by a platform-portability review, measured on this machine rather than
+argued. The suite could not have found it: `tests/test_coordinator.py` writes
 the file with `write_text("c", encoding="utf-8")` from Python, which emits no BOM, so the
 two-OS matrix was green on both.
 """

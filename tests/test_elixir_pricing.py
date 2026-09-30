@@ -4,8 +4,8 @@
 files a produced unit under SOME card that can produce it, not necessarily the one its owner
 played, so on RustEngine a Goblin Gang's spear goblins came in under the Goblin Hut at five elixir
 each, a dying Golem's golemites under the Golem at eight, a dying Battle Ram's barbarians at four.
-Measured by the train session's review on 2026-09-24: +15 elixir of potential per Goblin Gang
-play, +8 at a Golem's death, +4 at a Battle Ram's. Under every run to date.
+Measured on 2026-09-24: +15 elixir of potential per Goblin Gang play, +8 at a Golem's death,
++4 at a Battle Ram's.
 
 ``test_rewards.test_playing_a_card_is_worth_exactly_nothing`` could not see it. It builds a board
 by hand on which every unit carries its own card's id, and its fixture leaves spells out. So this
@@ -37,11 +37,11 @@ TOWERS = (EntityKind.KING_TOWER, EntityKind.PRINCESS_TOWER)
 ENGINES = [
     "mock",
     pytest.param("rust", marks=pytest.mark.engine),
-    # The catalogue runs actually train on. Which card an engine files a produced unit under
-    # depends on which cards are loaded, so the default catalogue is not the population that
-    # matters: on build 1ba01d7d the old rule read a Goblin Gang as 6 and Rascals as 15 on this
-    # catalogue, where the review had measured a Goblin Gang at 18 on the build before.
-    pytest.param("rust-training", marks=pytest.mark.engine),
+    # A smaller catalogue than the default. Which card an engine files a produced unit under
+    # depends on which cards are loaded, so the default catalogue is not the only population
+    # that matters: on build 1ba01d7d the old rule read a Goblin Gang as 6 and Rascals as 15 on
+    # a 100-card catalogue, where it had read a Goblin Gang at 18 on the default one.
+    pytest.param("rust-subset", marks=pytest.mark.engine),
 ]
 
 #: Cards the catalogue test does not price, each graded by a strict xfail of its own. The Tri
@@ -55,17 +55,23 @@ PRICED_ELSEWHERE = frozenset({"TriWizards"})
 TRI_WIZARDS_SETTLE_TICKS = 20
 
 
+#: Cards the smaller catalogue keeps whatever the rule below drops: the ones this file names.
+SUBSET_KEEPS = frozenset({"GoblinGang", "GoblinHut", "TriWizards", "Mirror", "Knight"})
+
+
+def _subset_names(default: Any) -> list[str]:
+    """Every other card of the default catalogue, plus the ones this file names: a catalogue
+    whose ids and whose loaded cards both differ from the default's."""
+    names = [card.name for card in default.cards()]
+    return [n for i, n in enumerate(names) if i % 2 == 0 or n in SUBSET_KEEPS]
+
+
 def _engine(kind: str) -> Any:
     if kind.startswith("rust"):
         from royalegym.rust_engine import RustEngine
 
-        if kind == "rust-training":
-            import json
-            from pathlib import Path
-
-            config = Path(__file__).parents[1] / "examples" / "configs" / "train-hog26-10.json"
-            names = json.loads(config.read_text(encoding="utf-8"))["env"]["engine"]["kwargs"]
-            return RustEngine(card_names=names["card_names"])
+        if kind == "rust-subset":
+            return RustEngine(card_names=_subset_names(RustEngine()))
         return RustEngine()
     from royalegym.mock_engine import MockEngine
 

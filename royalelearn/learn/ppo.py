@@ -1607,9 +1607,8 @@ def adam_eps_floor_frac(optimizer: Optimizer) -> float | None:
     of the step the schedule names.
 
     Measured 2026-09-22 on a three-iteration toy run: 57.6% of the actor's parameters under the
-    floor against 33.7% of the critic's, and the train session measured 99.2% of the actor's on
-    a real one, beside ``grad_norm_actor`` 0.0068, ``grad_norm_critic`` 26.6 and a KL of 1e-5.
-    That asymmetry was called unexplained for as long as nothing published this.
+    floor against 33.7% of the critic's. An asymmetry like that, beside an actor gradient far
+    below the critic's and a tiny KL, stays unexplained for as long as nothing publishes this.
 
     ``None`` before the optimizer has stepped, because no second moments is not the same reading
     as no parameters on the floor, and a 0.0 there says the optimizer is fully adaptive.

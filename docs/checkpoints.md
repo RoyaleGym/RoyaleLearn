@@ -58,8 +58,8 @@ this code path also runs from the crash handler.
 
 ### How big is one
 
-Measured on 2026-09-22, from `runs/train-diag1-selfplay-f4a99b1ce0c23888/checkpoints/000000041280`,
-at the default network (64 channels, 4 blocks):
+Measured on 2026-09-22, from one checkpoint of a real run, at the default network (64 channels, 4
+blocks):
 
 | Part | Size |
 | --- | --- |
@@ -78,10 +78,9 @@ The default keeps the newest 10 and deletes the rest after each write
 (`CheckpointConfig.keep = 10` in `royalelearn/config.py`). So the disk cost of a long run at the
 default network is about 105 MB, not 10.5 MB times however many hours you ran.
 
-One measured write cost 0.35 seconds, in run `train-deckA-live` at iteration 26 on 2026-09-22, read
-off the `time/checkpoint` column of `metrics.jsonl`. That is a single sample and not an average.
-The column is reported on the row after the save, because the save happens after the row it belongs
-to is written.
+One measured write cost 0.35 seconds, in a real run on 2026-09-22, read off the `time/checkpoint`
+column of `metrics.jsonl`. That is a single sample and not an average. The column is reported on the
+row after the save, because the save happens after the row it belongs to is written.
 
 ## What is inside
 

@@ -168,7 +168,7 @@ def env_value_digest(spec: EnvFactorySpec, extra_modules: tuple[str, ...] = ()) 
     ``EnvFactorySpec.digest`` hashes the spelling, so ``{}`` and the same defaults written out
     were two identities, ``1`` and ``1.0`` were two, and a default changed in the code moved the
     objective of every config relying on it without moving any digest. The run identity and the
-    ladder's result context read this instead. Found by the train session's review, 2026-09-24.
+    ladder's result context read this instead. Found in review, 2026-09-24.
     """
 
     def component(item: ComponentSpec) -> dict[str, Any]:

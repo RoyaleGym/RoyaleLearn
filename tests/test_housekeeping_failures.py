@@ -6,8 +6,8 @@ at ``metrics.keep_episode_log_iterations``, and the checkpoint store prunes ever
 
 ON WINDOWS THEY CAN BOTH FAIL. ``unlink`` and ``rmtree`` raise ``PermissionError`` WinError 32
 while any other process holds a handle on the file -- verified on this machine, and POSIX does
-both regardless. The train session reads ``episodes.jsonl`` while a run is going, which is what
-its job requires and what ``coordinator.py`` names in so many words.
+both regardless. Anyone watching a run reads ``episodes.jsonl`` while it is going, which
+``coordinator.py`` names in so many words.
 
 WHAT THAT COST BEFORE 2026-09-23. The compaction fires at iteration 200 and raised from inside
 ``sinks.write``, which the coordinator calls between setting ``_learner_ahead_of_rows`` and
@@ -17,7 +17,7 @@ iteration counter is restored from the pre-200 checkpoint, so a resumed run reac
 died at the same line. Pruning is worse by frequency: it runs at every checkpoint, which is about
 1,990 times in a long run.
 
-Found by the train session's platform-portability hunt, reported with the measurement.
+Found by a platform-portability review, reported with the measurement.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def _episode(index: int) -> dict[str, object]:
 
 @windows_only
 def test_a_held_episode_log_does_not_end_the_run(tmp_path: Path) -> None:
-    """The case the train session creates by doing its job: a reader holding the file open."""
+    """The case anyone watching a run creates: a reader holding the file open."""
     sink = _sink(tmp_path)
     sink.write_episodes([_episode(0)])  # type: ignore[arg-type]
     sink.write({"run/iteration": 1})

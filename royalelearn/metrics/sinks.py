@@ -149,13 +149,12 @@ class JsonlSink(MetricsSink):
         looks wrong, which is exactly the shape of a file that should be compressed in place.
 
         ARCHIVING MUST NOT BE ABLE TO END A RUN, and before 2026-09-23 it could. On Windows
-        ``unlink`` raises ``PermissionError`` while any other process holds a handle on the
-        file -- and reading ``episodes.jsonl`` during a run is what the train session's job
-        requires. That exception came out of ``write``, which the coordinator calls between
-        setting ``_learner_ahead_of_rows`` and clearing it, so the run fell over AND its
-        emergency checkpoint was suppressed. It was not one-shot either: the iteration counter
-        is restored from the pre-threshold checkpoint, so a resumed run reached the same line
-        and died again.
+        ``unlink`` raises ``PermissionError`` while any other process holds a handle on the file --
+        and reading ``episodes.jsonl`` during a run is what anyone watching a run does. That
+        exception came out of ``write``, which the coordinator calls between setting
+        ``_learner_ahead_of_rows`` and clearing it, so the run fell over AND its emergency
+        checkpoint was suppressed. It was not one-shot either: the iteration counter is restored
+        from the pre-threshold checkpoint, so a resumed run reached the same line and died again.
 
         THE RENAME IS THE PROBE. Moving the file aside costs nothing and fails in exactly the
         same way the delete would, so a held file is discovered before the expensive copy rather

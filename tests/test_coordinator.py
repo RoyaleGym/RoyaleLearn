@@ -42,8 +42,8 @@ def test_a_named_run_directory_is_the_one_opened(tmp_path: Path) -> None:
     A run directory is ``<run_name>-<run_id>`` and the run id hashes the identity, which carries
     the commit of every repository. So a command pointed at a run that started before the code
     moved computed a different id, created an empty directory beside the real one and worked in
-    it: ``royalelearn eval --run <a live run>`` reached nothing, which is why the train session
-    reads episodes.jsonl with a tool of its own instead. When a caller names a directory, that
+    it: ``royalelearn eval --run <a live run>`` reached nothing, so episodes.jsonl had to be
+    read with other tools instead. When a caller names a directory, that
     directory is the answer, and the identity is still checked separately and by name.
     """
     named = tmp_path / "somebody-elses-name"
@@ -667,7 +667,7 @@ def test_the_row_says_the_step_the_champion_was_taken_at(tmp_path: Path) -> None
 
 def test_paired_rho_is_the_champion_comparisons_and_absent_without_one(run: Any) -> None:
     """Read off the decision's champion condition, never off the runner's last comparison, and
-    never a 0.0 standing in for "nothing measured" -- hog26-10 published 0.0 in every row."""
+    never a 0.0 standing in for "nothing measured", which a run published in every row."""
     from royalelearn.api.ladder import ConditionResult, GateDecision
     from royalelearn.ladder.gate import CONDITION_CHAMPION
 
@@ -690,7 +690,7 @@ def test_paired_rho_is_the_champion_comparisons_and_absent_without_one(run: Any)
 
 
 def test_the_gate_state_survives_a_resume(tmp_path: Path) -> None:
-    """hog26-10 after its resume: gate_seconds_frac read 0.0 and the gate columns vanished,
+    """A run after its resume: gate_seconds_frac read 0.0 and the gate columns vanished,
     because the gate total and the last decision lived only in the process that ran the gate."""
     base = tiny_config(tmp_path)
     config = msgspec.structs.replace(

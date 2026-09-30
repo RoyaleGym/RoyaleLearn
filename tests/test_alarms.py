@@ -288,10 +288,10 @@ def _frozen_rows(alarms, seconds, free_mb, *, frozen, count=1, start=1):
 
 
 def test_the_spill_alarm_does_not_judge_an_unfrozen_update_by_a_frozen_actors_best() -> None:
-    """The train session's warm start: frozen-actor iterations are much cheaper, and the
-    unfrozen ones after them held steady (29.6 s with 1468 MB free, then 29.3-30.0 s on a card
-    the caching allocator had filled to 0 MB). With one best for the run it fired on every
-    unfrozen row from the fourth. The frozen time here is any under half the unfrozen one."""
+    """A warm start: frozen-actor iterations are much cheaper, and the unfrozen ones after them
+    hold steady, first with room and then on a card the caching allocator has filled to 0 MB.
+    With one best for the run it fired on every unfrozen row from the fourth. The frozen time
+    here is any under half the unfrozen one."""
     alarms = _set()
     assert _frozen_rows(alarms, 10.0, 1468.0, frozen=True, count=80) == []
     assert _frozen_rows(alarms, 29.6, 1468.0, frozen=False, start=81) == []

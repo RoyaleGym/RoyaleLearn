@@ -2,9 +2,9 @@
 
 A run's directory is ``<runs_dir>/<run_name>-<run_id>``, and the run id follows the config. So
 launching the same config fresh a second time lands in the SAME directory, and it used to start
-at iteration 1 and write over the checkpoints already there. train-hog26-10's directory shows it:
-metric rows for iterations 1-610, then 1-45, then 1-21, then 611-621, and a checkpoint index that
-mixes launches. Found by the train session's evaluation of that run, 2026-09-24.
+at iteration 1 and write over the checkpoints already there: a relaunched run's directory held
+metric rows that restarted at 1 more than once, and a checkpoint index that mixed launches.
+Found 2026-09-24.
 
 There is no flag to allow it. Starting fresh into an occupied directory cannot be made safe, only
 destructive, and the two things a person could want are both still one command away: resume the

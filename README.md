@@ -459,8 +459,7 @@ What is open:
 
 - A known gap in the environment, found 2026-09-27: an enemy Royal Ghost still shows in the
   observation while it is invisible, which a player cannot see. It is not fixed yet.
-- A bot. Runs are no longer only short tests: `train-hog26-10` reached iteration 621. That is
-  still not evidence about whether a policy trained here is any good.
+- A bot. Nothing here yet shows whether a policy trained with this harness is any good.
 - Rollout workers are Python today, and move to Rust when Python becomes the slow part. Here is why
   that order. A tick is 50 ms of game time, and the engine does roughly 25,000 of them a second. A
   Python observation builder measured in 2026-09 capped out at about 520 env steps a second, so

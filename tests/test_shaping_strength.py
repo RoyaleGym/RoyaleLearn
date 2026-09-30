@@ -11,12 +11,10 @@ wandered, scaled by ``1 - gamma``. That is the right thing for what ``shaping_do
 which is whether a term still telescopes. It says nothing about how strong the shaping is, and it
 falls as the discount schedule rises even when nothing else changes.
 
-Both halves were measured before this file was written. On train-hog26-10's own rows, the metric
-fell from 0.0346 to 0.0192 between iterations 51 and 201 while ``metric / (1 - gamma)`` held at 14.1
-to 14.5. And on identical random-legal battles, moving gamma from 0.997 to 0.999 cut the metric from
-0.0462 to 0.0185 while the per-step magnitude, ``sum |F_t|``, went from 1.136 to 1.106. A config
-read the first number as "shaping is 1% of the objective" and raised the weights 1.5x to 6x. The
-per-step magnitude at the SHIPPED weights was already 1.4x the objective's.
+Both halves were measured before this file was written. On identical random-legal battles,
+moving gamma from 0.997 to 0.999 cut the metric from 0.0462 to 0.0185 while the per-step magnitude,
+``sum |F_t|``, went from 1.136 to 1.106. Read as "shaping is 1% of the objective", the first number
+invites raising weights whose per-step magnitude is already louder than the objective's.
 
 So the second number is now published beside the first: ``env/reward_terms_step_abs/<term>`` and
 ``env/reward_shaping_step_abs``. These tests pin what each one measures.
@@ -145,7 +143,7 @@ def test_the_recorded_sum_is_the_discount_s_leftover_and_not_the_signal(
 
 
 def test_the_signal_barely_moves_with_the_discount_and_the_recorded_sum_follows_it() -> None:
-    """The controlled version of what train-hog26-10's rows showed.
+    """The controlled version of what a run's rows show under a rising gamma.
 
     Same states, two discounts. With ``Phi(s_0) = 0`` the recorded sum is exactly proportional
     to ``1 - gamma``, so tripling ``1 - gamma`` triples it. The per-step magnitude is what a

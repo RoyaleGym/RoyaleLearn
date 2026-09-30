@@ -776,8 +776,8 @@ def _refuse_an_occupied_run_dir(run_dir: Path) -> None:
 
     The directory follows the config's identity, so launching the same config fresh again lands
     in the same place, and it used to start at iteration 1 and write over the checkpoints there:
-    train-hog26-10's directory holds metric rows for 1-610, then 1-45, then 1-21, then 611-621,
-    under a checkpoint index that mixes launches. There is no flag to allow it, because it cannot
+    a relaunched run's directory held metric rows that restarted at 1 more than once, under a
+    checkpoint index that mixed launches. There is no flag to allow it, because it cannot
     be made safe, only destructive; the two things a person could want are both named below.
     """
     rows = run_dir / METRICS_NAME
@@ -829,13 +829,12 @@ class LearningCoordinator:
         self.resume_from = Path(resume) if resume is not None else None
         #: A directory to open INSTEAD of the one this configuration's identity names. A run
         #: directory is ``<run_name>-<run_id>`` and the run id is a hash of the identity, which
-        #: includes the commit of every repository. So a tool pointed at a run that started
-        #: before the code moved computed a DIFFERENT id, made an empty directory beside the real
-        #: one and evaluated nothing: `royalelearn eval --run <a live run>` could not reach the
-        #: run it was given, which is why the train session reads episodes.jsonl with its own
-        #: tool instead. When a caller names a directory, that directory is the answer. The
-        #: identity is still checked, separately and by name: the directory says WHERE and the
-        #: identity says WHETHER.
+        #: includes the commit of every repository. So a tool pointed at a run that started before
+        #: the code moved computed a DIFFERENT id, made an empty directory beside the real one and
+        #: evaluated nothing: `royalelearn eval --run <a live run>` could not reach the run it was
+        #: given, so episodes.jsonl had to be read with other tools instead. When a caller names a
+        #: directory, that directory is the answer. The identity is still checked, separately and
+        #: by name: the directory says WHERE and the identity says WHETHER.
         self.given_run_dir = Path(run_dir) if run_dir is not None else None
         self.allow_identity_drift = bool(allow_identity_drift)
         self.requested_device = device
@@ -1510,9 +1509,9 @@ class LearningCoordinator:
         the one crash a long run actually experiences.
 
         A run that reaches its limit saves itself on the way out. It used to close without a
-        checkpoint, so everything since the last periodic one existed nowhere: the train
-        session's IL3 stopped at iteration 199 with its newest checkpoint at 119, and a launcher
-        that took the newest checkpoint for the run's end resumed it from 119 twelve times.
+        checkpoint, so everything since the last periodic one existed nowhere, and a launcher
+        that took the newest checkpoint for the run's end resumed a finished run from that
+        checkpoint again and again.
         """
         if not self._entered:
             raise RuntimeError("a LearningCoordinator runs inside its own with-block")
@@ -2200,9 +2199,9 @@ class LearningCoordinator:
         """How much of a battle's outcome the start state decided, in the last gate's CHAMPION
         comparison -- the one whose effective sample size decides the gate.
 
-        It used to be read off whichever comparison the evaluation runner made last, which after
-        a full gate is the eighth stratified member, and to be 0.0 when there was none; hog26-10
-        published 0.0 in every row. Now it is the champion condition's own, and None -- so the
+        It used to be read off whichever comparison the evaluation runner made last, which after a
+        full gate is the eighth stratified member, and to be 0.0 when there was none, so a run
+        could publish 0.0 in every row. Now it is the champion condition's own, and None -- so the
         row leaves the key out -- when no gate has played a champion or the correlation is
         undefined.
         """
@@ -2325,7 +2324,7 @@ class LearningCoordinator:
         self.cumulative_timesteps = manifest.cumulative_timesteps
         self.wall_seconds = manifest.wall_seconds
         # The gate's total and its last decision are run state like the wall clock. They lived
-        # only in the process that ran the gate, so after a resume hog26-10 published
+        # only in the process that ran the gate, so after a resume a run published
         # gate_seconds_frac 0.0 and its gate columns vanished. A checkpoint from before they were
         # recorded has neither; the total is then unknown for the rest of the run, and the row
         # leaves it out rather than restart it at zero.

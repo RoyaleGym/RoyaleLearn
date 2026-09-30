@@ -296,8 +296,7 @@ def _probe() -> dict[str, Comparison]:
 def _rollout_stats() -> RoundStats:
     """One iteration of rollout forwards: 100 learner rows, 10 of which had a choice.
 
-    The numbers are a policy holding at 15.3x uniform over 250 legal actions, which is what
-    hog26-2 was doing at iteration 124.
+    The numbers are a policy holding at 15.3x uniform over 250 legal actions.
     """
     return RoundStats(
         rows=100,

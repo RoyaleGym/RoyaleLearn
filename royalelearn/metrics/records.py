@@ -190,7 +190,7 @@ def episode_fields(
     # learner in both seats and both count.
     #
     # It is NOT that random_legal plays a card whenever it can; this comment said so until
-    # 2026-09-22 and the train session built an argument on it. `RANDOM_LEGAL_NOOP_PROB` is 0.9
+    # 2026-09-22 and an argument was built on it. `RANDOM_LEGAL_NOOP_PROB` is 0.9
     # and it takes the no-op with that probability regardless of affordability
     # (`rollout/scripted.py:52`). The uniform-over-the-action-space opponent that really does
     # play the instant it can afford to was deliberately replaced by this one, and the constant's
@@ -270,11 +270,11 @@ def episode_fields(
 
     # HOW LOUD EACH TERM WAS, which the pair above cannot say. Those are episode SUMS, and a
     # potential term's sum telescopes to ``1 - gamma`` times its wander, so they measure the
-    # discount as much as the term: on train-hog26-10 the shaping share fell 45% over iterations
-    # 51-201 while that share divided by ``1 - gamma`` held within 3%. This is ``sum |F_t|`` per
-    # seat, the magnitude a policy gradient is actually handed. Absent when no record carries it,
-    # which is every record written before 2026-09-24: an old episode was never measured, and 0
-    # would say its shaping was silent.
+    # discount as much as the term: as a gamma schedule rises the shaping share falls while that
+    # share divided by ``1 - gamma`` holds (``tests/test_shaping_strength.py``). This is ``sum
+    # |F_t|`` per seat, the magnitude a policy gradient is actually handed. Absent when no record
+    # carries it, which is every record written before 2026-09-24: an old episode was never
+    # measured, and 0 would say its shaping was silent.
     loud: dict[str, list[float]] = {}
     for record in records:
         for name, value in record.reward_terms_step_abs.items():
@@ -353,8 +353,8 @@ def rollout_policy_fields(stats: RoundStats) -> dict[str, MetricValue]:
     uninterpretable -- it is high because the elixir bar is usually empty -- and the entropy is
     nearly blind to it: over 250 legal actions, a policy putting **15.3x uniform mass** on the
     no-op still reads 0.980 of maximum normalised entropy, because the other 249 actions carry
-    almost all of the sum. That pair was measured on hog26-2 at iteration 124 and reproduced from
-    first principles in ``tests/test_hold_lift.py``. The lift divides each row's hold mass by the
+    almost all of the sum. That pair is reproduced from first principles in
+    ``tests/test_hold_lift.py``. The lift divides each row's hold mass by the
     uniform baseline of its own width, so 1.0 is a policy that has learnt nothing about when to
     wait and the distance from 1.0 is the only part of it that is about the policy.
     """
@@ -444,8 +444,7 @@ def role_count_fields(
     battle's bucket, which is what it played. ``pool_fallback`` is the scripted ones whose planned
     role (``planned_role``, the matchmaker's layout) is pool: until the first snapshot is
     admitted a pool battle plays a scripted opponent. The config's split, ``role_counts``,
-    cannot show that; the train session's S3b arm planned 17 pool battles and every one of them
-    played scripted until its first gate.
+    cannot show that: a run can plan pool battles that all play scripted until its first gate.
     """
     from ..api.rollout import BUCKETS, ROLE_POOL
 

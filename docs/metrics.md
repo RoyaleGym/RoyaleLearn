@@ -78,8 +78,8 @@ is one, and its docs list its keys. On an iteration where a run holds its bot st
 `ppo/kl` and `ppo/entropy`, are left out of the row, because nothing was measured.
 
 The console prints exactly the row it was handed, grouped by the part before the slash. Here is a
-real block, from `runs/train-diag0-hog26k-1ad6a480b7666090` on 2026-09-22, trimmed to twelve keys
-so it fits on a page (the real one has 145):
+real block, from a run on 2026-09-22, trimmed to twelve keys so it fits on a page (the real one has
+145):
 
 ```
 -- iteration 7 ----------------------------------------
@@ -112,7 +112,7 @@ import json, sys
 for line in open(sys.argv[1], encoding='utf-8'):
     r = json.loads(line)
     print(r['run/iteration'], r.get('ppo/kl'), r.get('ppo/explained_variance'), r.get('policy/cards_per_match'))
-" runs/train-diag0-hog26k-1ad6a480b7666090/metrics.jsonl
+" runs/<your run>/metrics.jsonl
 ```
 
 which on that run prints:
@@ -317,11 +317,11 @@ UDP socket, and it sends nothing until a viewer sends a hello, so an unattached 
 The mapping from metric key to panel row is one dict, `FIELD_SOURCES` in
 `royalelearn/metrics/viser_sink.py`, so you can see exactly which number each panel row is.
 
-The train session measured the cost of attaching a viewer to a running job on 2026-09-22: 18
-iterations alternating 3 attached and 3 detached, three times over, giving 28.13 plus or minus
-1.25 seconds attached against 28.33 plus or minus 1.65 seconds detached. That is no detectable
-cost. This figure was reported by the train session and has not been independently checked, so
-treat it as a strong hint rather than a settled result.
+The cost of attaching a viewer to a running job was measured on 2026-09-22: 18 iterations
+alternating 3 attached and 3 detached, three times over, giving 28.13 plus or minus 1.25 seconds
+attached against 28.33 plus or minus 1.65 seconds detached. That is no detectable cost. This figure
+was reported from one machine and has not been independently checked, so treat it as a strong hint
+rather than a settled result.
 
 ---
 

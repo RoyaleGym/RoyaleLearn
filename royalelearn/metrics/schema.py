@@ -192,13 +192,12 @@ METRICS: dict[str, MetricSpec] = {
         "Spread of the logits over each row's legal set, over the rows that had a choice. The "
         "un-saturated reading of how far the policy is from uniform, and the one to plot: "
         "entropy_normalised is a saturating function of this and spans 0.999991 to 0.994957 "
-        "across a run whose policy became 560 times less uniform (hog26-3, 147 iterations), so "
+        "across a run whose policy became hundreds of times less uniform, so "
         "the whole of a run's learning lives in its fifth decimal place. This grows linearly "
         "with the pointer head's query norm instead. Starts near 0.015 on the shipped "
         "architecture and rises about 5% an iteration; a decisive policy is of order 1. "
         "The checkpoint quantity it corresponds to is the norm of "
-        "actor.head.query.weight, which grew 0.22 -> 1.82 monotonically over 147 "
-        "iterations of hog26-3 and 0.22 -> 1.18 over 102 of hog26-6. Runs from before "
+        "actor.head.query.weight, which grows as the policy sharpens. Runs from before "
         "2026-09-23 do not carry this key, and that norm is how to join them to one "
         "that does.",
     ),
@@ -317,11 +316,9 @@ METRICS: dict[str, MetricSpec] = {
         "Share of the actor's parameters whose Adam second moment sits under adam_eps, where "
         "the step stops being normalised by the gradient and becomes proportional to it again. "
         "No band, and no absolute reading: what means something is this share against the "
-        "CRITIC's in the same row. Measured on hog26-6 (adam_eps 1e-08) at its last "
-        "checkpoint: 10.1% of actor parameters under the floor against 16.9% of the critic's, "
-        "so the actor was LESS floored than the critic while grad_norm_actor was 0.0068 against "
-        "a critic at 26.6. The floor is therefore NOT the account of that asymmetry, which is "
-        "what this key was added to find out and what it answered.",
+        "CRITIC's in the same row. A run can end with its actor LESS floored than its critic "
+        "while grad_norm_actor is far below grad_norm_critic, and then the floor is not what "
+        "held the actor still. This key was added to find that out.",
     ),
     "ppo/adam_eps_floor_frac_critic": _m(
         "fraction",
@@ -395,10 +392,11 @@ METRICS: dict[str, MetricSpec] = {
     "policy/rollout_hold_lift": _m(
         "ratio",
         "The same hold mass against the uniform baseline of each row's OWN width, averaged over "
-        "choice rows. 1.0 is a policy that has learnt nothing about when to wait; hog26-2 reached "
-        "15.3 at iteration 124 while entropy_normalised read 0.980, which is why this key exists: "
-        "entropy over 250 actions is nearly blind to the one action with a distinct meaning. No "
-        "healthy band, because nobody has yet trained a policy far enough to know what one is.",
+        "choice rows. 1.0 is a policy that has learnt nothing about when to wait; a lift of 15 "
+        "can sit beside entropy_normalised 0.980 (tests/test_hold_lift.py), which is why this "
+        "key exists: entropy over 250 actions is nearly blind to the one action with a distinct "
+        "meaning. No healthy band, because nobody has yet trained a policy far enough to know "
+        "what one is.",
     ),
     "policy/rollout_legal_actions": _m(
         "count",

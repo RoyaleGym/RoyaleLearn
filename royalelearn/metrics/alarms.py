@@ -126,12 +126,11 @@ class SpillAlarm(MetricAlarm):
 
     Written this way because the obvious way does not work. The first version compared the memory
     this process could still take -- free memory plus what its allocator already held -- against
-    the peak one minibatch measured at startup. The train session tested it on the card: a second
-    process took 2 GB and left 35 MB free for five iterations, and the alarm stayed silent by
-    645 MB. The reason is arithmetic rather than tuning. An outsider can only consume the FREE
-    part, so that sum bottoms out at what this process holds, and the startup gate guarantees that
-    what it holds is more than one minibatch needs. It was least sensitive in the case its own
-    text named.
+    the peak one minibatch measured at startup. Tested on a card: a second process took 2 GB and
+    left 35 MB free for five iterations, and the alarm stayed silent by 645 MB. The reason is
+    arithmetic rather than tuning. An outsider can only consume the FREE part, so that sum bottoms
+    out at what this process holds, and the startup gate guarantees that what it holds is more than
+    one minibatch needs. It was least sensitive in the case its own text named.
 
     Nothing this process can read about memory says the thing that matters either, because the
     platform does not refuse an oversubscribed allocation: it backs it with host memory over PCIe
@@ -149,9 +148,9 @@ class SpillAlarm(MetricAlarm):
     runs no actor loss and takes no actor step, so it is much cheaper, and a best set there is no
     bar for the unfrozen updates after it. With one best for the run, every unfrozen update of
     a warm start read as twice the best, and a card the caching allocator had filled to 0 MB
-    free was all the rest of the condition. The train session saw it fire on 15 iterations in a
-    row from iteration 84 of a warm-started run, with the update steady at 29.3-30.0 s and 29.6
-    s just before. So each state keeps its own best, read from ``ppo/actor_frozen``. That key is
+    free was all the rest of the condition: a warm-started run with a steady update read as a
+    spill on every unfrozen iteration (``tests/test_alarms.py`` replays that shape). So each
+    state keeps its own best, read from ``ppo/actor_frozen``. That key is
     only on runs that schedule the actor's rate, and a row without it counts as unfrozen.
     """
 
@@ -341,10 +340,9 @@ def default_alarms(
             # The fourth cause is worth naming because it is invisible from the KL alone: under
             # the Adam eps floor the step is lr*m/eps rather than normalised, so a small gradient
             # stays a small step. It is a hypothesis to CHECK and not the answer -- measured on
-            # this project's own runs it is not what happened. hog26-6 ran at adam_eps 1e-08 and
-            # its last checkpoint has 10.1% of actor parameters under that floor against 16.9%
-            # of the critic's, so the actor was LESS floored than the critic while its gradient
-            # norm was 0.0068 against the critic's 26.6. The comparison that means something is
+            # real runs it need not be what happened: a run can end with its actor LESS
+            # floored than its critic while the actor's gradient norm is orders of magnitude
+            # below the critic's. The comparison that means something is
             # the two shares against each other in one row, not either against a threshold.
             meaning=(
                 "nothing is moving: dead entropy, a rate too low, a frozen head, or an actor "

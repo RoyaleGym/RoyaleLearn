@@ -8,7 +8,7 @@ A 2 GB parent on Linux reports 2,097,152 KiB, which is above the threshold, so i
 bytes and published as **2 MB**: one thousandth of the truth, in the only measured RSS the harness
 has, on the platform its CI runs. It read 0.0 on Windows until 2026-09-22 and this on Linux after.
 
-Found by the train session on 2026-09-23, in a hunt for exactly this class. The rule is the
+Found on 2026-09-23, in a review hunting for exactly this class. The rule is the
 platform, which is knowable, rather than the size, which is a guess that fails at the size that
 matters.
 """

@@ -238,11 +238,10 @@ Both are RoyaleGym's formats. The harness produces and consumes them and defines
 - `royalegym.viser.ViserPublisher` sends one UDP frame per env step, and only while a viewer's
   heartbeat is fresh. An env nobody is watching pays one `if` per step.
 
-On the cost of watching: the train session reported on 2026-09-22 that attaching the viewer to a
-running job cost nothing they could detect, 28.13 plus or minus 1.25 seconds an iteration attached
-against 28.33 plus or minus 1.65 seconds detached, over 18 iterations alternating three attached
-and three detached. That is their measurement, reported here, and nobody has checked it
-independently.
+On the cost of watching: a measurement on 2026-09-22 found that attaching the viewer to a running
+job cost nothing detectable, 28.13 plus or minus 1.25 seconds an iteration attached against 28.33
+plus or minus 1.65 seconds detached, over 18 iterations alternating three attached and three
+detached. That is their measurement, reported here, and nobody has checked it independently.
 
 ### 9. The opponent pool and the rating arithmetic
 

@@ -199,9 +199,9 @@ class MaskedCategorical(ActionDistribution):
 
         How far apart the policy is willing to put its options, which is the quantity entropy
         is a saturating function of. Over 250 legal actions the entropy deficit goes as the
-        square of this and starts invisibly small: measured on hog26-3, ``entropy_normalised``
-        spanned 0.999991 to 0.994957 across a run whose policy became 560 times less uniform,
-        so the climb lives in the fifth decimal place of that key and is legible in this one.
+        square of this and starts invisibly small: ``entropy_normalised`` can move only in its
+        fifth decimal place while the policy becomes hundreds of times less uniform, so the
+        climb is illegible in that key and legible in this one.
 
         Computed from the normalised log-probabilities rather than from the raw logits, which
         is the same number: ``log_softmax`` subtracts a constant per row and a constant does

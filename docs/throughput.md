@@ -52,7 +52,7 @@ folder `train` will start in; delete bench folders when you are done with them.
 If you want a quick answer rather than a real one, point it at a smaller config:
 
 ```
-python -m royalelearn bench --config examples/configs/train-diag1-selfplay.json
+python -m royalelearn bench --config examples/configs/laptop.json
 ```
 
 That file is 2 workers by 24 battles with 8,192 timesteps an iteration, which is the shape the
@@ -103,8 +103,8 @@ believe any timing.
 
 ### What was wrong with bench, and what is left
 
-The train session reported four defects on 2026-09-22. Two are fixed, and two were true statements
-about a command that had promised more than it did, so the promise went instead.
+Four defects were reported on 2026-09-22. Two are fixed, and two were true statements about a
+command that had promised more than it did, so the promise went instead.
 
 1. **It writes no page, and now it does not claim to.** The spec said `bench` writes the "measured
    on" block here. It never did, and it should not: this page is kept by hand, and a command that
@@ -297,7 +297,7 @@ What has actually been measured, all on 2026-09-22, on one 4-core laptop with an
 7.8 GB of system memory, with up to six other jobs sharing it:
 
 - **The diagnostic shape** (2 workers by 24 battles, 8,192 timesteps an iteration, minibatch 256,
-  which is `examples/configs/train-diag1-selfplay.json`): 30 to 35 seconds an iteration, of which
+  one of the harness's diagnostic configs): 30 to 35 seconds an iteration, of which
   the update was 25 seconds and collection 5 to 8 seconds. Over seven iterations the update was 71
   to 83 percent of every iteration. Those 8,256 transitions an iteration are 48 battles advancing
   43 seconds of game time each, so collection ran roughly 260 to 410 times faster than watching

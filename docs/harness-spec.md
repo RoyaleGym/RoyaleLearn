@@ -1051,13 +1051,13 @@ refuses to start (section 7.7).
 
 **The environment is identified by value, not by spelling.** `env_spec_digest`, and the ladder's
 result context, hash `envspec.env_value_digest`: each component's kwargs bound to its real signature
-with the defaults applied and numbers taken as floats. Hashing the spec as written made `"kwargs": {}`
-and the same defaults written out two identities, made `1` and `1.0` two, and -- the silent direction
--- let a default changed in the code move the objective of every config relying on it without moving
-any digest. A bool stays a bool; a default that is an object goes through `msgspec.to_builtins`, or is
-recorded by its type's name if it will not, which is deterministic but hashes two such defaults of one
-type alike. `EnvFactorySpec.digest()` still hashes the spelling and is used for display only. Found
-by the train session's review of the 2026-09-24 placeholder commits.
+with the defaults applied and numbers taken as floats. Hashing the spec as written made `"kwargs":
+{}` and the same defaults written out two identities, made `1` and `1.0` two, and -- the silent
+direction -- let a default changed in the code move the objective of every config relying on it
+without moving any digest. A bool stays a bool; a default that is an object goes through
+`msgspec.to_builtins`, or is recorded by its type's name if it will not, which is deterministic but
+hashes two such defaults of one type alike. `EnvFactorySpec.digest()` still hashes the spelling and
+is used for display only. Found in review of the 2026-09-24 placeholder commits.
 
 **The binary is the third field, and the two digests cannot stand in for it.** `build_digest` hashes
 the DATA compiled into the extension, not the Rust it was compiled from. Across a rebuild from an
@@ -2388,22 +2388,17 @@ the recorder adds up, and for those the telescoping leaves one more piece:
 At a level start `Phi(s_0)` is zero, so a share is `1 - gamma` times how far the potential wandered.
 `test_shaping_strength.py` holds both forms exactly. That makes the shares the right instrument for
 what this alarm checks, and the wrong one for how loud the shaping is. They fall as the discount
-schedule rises, whatever the weights are. On train-hog26-10's own rows the shaping share fell 45%
-between iterations 51 and 201 while the share divided by `1 - gamma` held at 14.1 to 14.5 **[M]**.
-On identical random-legal battles, moving gamma from 0.997 to 0.999 cut it from 0.0462 to 0.0185
-**[M]**.
+schedule rises, whatever the weights are, while the share divided by `1 - gamma` holds. On identical
+random-legal battles, moving gamma from 0.997 to 0.999 cut it from 0.0462 to 0.0185 **[M]**.
 
-Measured in production on 2026-09-22 by the train session, over the last twenty iterations of a real
-run on this composition: terminal 0.9762, `PotentialTowerHPReward` 0.0151, `PotentialCrownReward`
-0.0075, `CommittedElixirPotential` 0.0055 **[M]**. Those figures say every term still telescoped.
-They do NOT say the shaping was 2.9% of the objective, and a config that read them that way raised
-the weights 1.5x to 6x to make it louder. How loud a term is lives in
-`env/reward_terms_step_abs/<term>`, each seat's `sum |F_t|` over an episode. At the shipped weights,
-on train-hog26-10's environment, over ten random-legal battles at gamma 0.999, per seat per episode
-**[M]**: `CommittedElixirPotential` 0.80, `PotentialTowerHPReward` 0.15, `PotentialCrownReward`
-0.15, terminal 0.80. The shaping together is about 1.4 times as loud as the objective, and the elixir
-term alone is about as loud. No threshold is claimed for that ratio. It is published so a weight is
-changed against the number that describes it.
+Shares like these say every term still telescoped. They do NOT say how large the shaping is against
+the objective, and read that way they invite raising weights that are already loud. How loud a term
+is lives in `env/reward_terms_step_abs/<term>`, each seat's `sum |F_t|` over an episode. At the
+shipped weights, on a 100-card RustEngine environment, over ten random-legal battles at gamma 0.999,
+per seat per episode **[M]**: `CommittedElixirPotential` 0.80, `PotentialTowerHPReward` 0.15,
+`PotentialCrownReward` 0.15, terminal 0.80. The shaping together is about 1.4 times as loud as the
+objective, and the elixir term alone is about as loud. No threshold is claimed for that ratio. It is
+published so a weight is changed against the number that describes it.
 
 The three shaping weights are keyword arguments of `default_potential_reward` (`crown`, `tower_hp`,
 `elixir`), finite and not negative, with the shipped values as defaults. Each term's
@@ -2657,8 +2652,8 @@ rating, and conflating the two is what makes a pool unbounded.
    gate has one. One that did not -- the first snapshot of a run, admitted free -- plays the anchor
    once, at the same count on the same frozen seeds, and every later gate reads that record. Until
    2026-09-24 such a champion fell back to the rater's prediction, which for a snapshot nobody had
-   rated is the prior 0.5: the bound was 0.48, any policy cleared it, and hog26-10's first real gate
-   ran a regression check that could not fail.
+   rated is the prior 0.5: the bound was 0.48, any policy cleared it, and a first real gate ran a
+   regression check that could not fail.
 3. **No pool-wide collapse.** The candidate's **observed** mean score against a `variance`-weighted
    stratified sample of 8 pool snapshots, 100 battles each, is at least the champion's **fitted**
    mean predicted score against the same eight, less one standard error of the candidate's observed
@@ -3151,9 +3146,9 @@ reference's residual silently absorbs the four places it is actually slow.
 | metric | healthy | what it diagnoses |
 |---|---|---|
 | `explained_variance` | rising to 0.5-0.9 | the critic's health. No reference logs it, and value loss is uninterpretable while returns are normalised by a moving standard deviation. Still negative after fifty iterations is the most likely cause of a plateau |
-| `entropy_normalised` | see note | raw entropy falling is ambiguous -- a confident policy or a tighter mask -- and the normalised form separates those. It does NOT separate a policy that has concentrated on one action, and on this action space that is most of what matters: over 250 legal actions a policy putting **15.3x uniform mass on the no-op** still reads 0.980. Measured on hog26-2 at iteration 124, and reproduced from first principles in `tests/test_hold_lift.py`. Read `policy/rollout_hold_lift` for that question. The documented band of 0.3-0.8 was written for an unconditioned mean and could not be reached once the key was conditioned on choice rows; no replacement band has been earned yet |
+| `entropy_normalised` | see note | raw entropy falling is ambiguous -- a confident policy or a tighter mask -- and the normalised form separates those. It does NOT separate a policy that has concentrated on one action, and on this action space that is most of what matters: over 250 legal actions a policy putting **15.3x uniform mass on the no-op** still reads 0.980, reproduced from first principles in `tests/test_hold_lift.py`. Read `policy/rollout_hold_lift` for that question. The documented band of 0.3-0.8 was written for an unconditioned mean and could not be reached once the key was conditioned on choice rows; no replacement band has been earned yet |
 | `noop_entropy` | above 0.05 nats | the leading indicator of no-op collapse, before `cards_per_match` bottoms out. Taken over the rows whose mask offered more than the no-op, because a decision the elixir bar cannot afford has a binary entropy of zero by construction and most decisions on this environment are that one (section 18, item 8). An unconditioned mean measures the elixir curve: it reads near zero on a healthy run, so a floor on it fires permanently, and a gate that had really collapsed would move it by a fraction of what it moves on the rows that had a choice |
-| `adam_eps_floor_frac_actor` | no band | the share of the actor's parameters whose Adam second moment sits under `adam_eps`, where the step stops being normalised by the gradient and becomes `lr*m/eps` -- proportional to it again. Read it against the CRITIC's share in the same row; neither number means anything alone. It was added to test whether the floor accounts for `grad_norm_actor` 0.0068 against a critic at 26.6 with `kl` 1e-5 and a clip fraction of zero, and the answer is no: hog26-6 ran at `adam_eps` 1e-08 and its last checkpoint reads **10.1% actor against 16.9% critic**, so the actor was LESS floored than the critic. Every config in this project runs 1e-08, not the 1e-5 default, and the same checkpoint measured against 1e-5 reads 94.8% against 29.1% -- a true number about a run that was never executed. That asymmetry is unexplained again |
+| `adam_eps_floor_frac_actor` | no band | the share of the actor's parameters whose Adam second moment sits under `adam_eps`, where the step stops being normalised by the gradient and becomes `lr*m/eps` -- proportional to it again. Read it against the CRITIC's share in the same row; neither number means anything alone. It was added to test whether the floor accounts for an actor gradient orders of magnitude below the critic's with a near-zero `kl` and a clip fraction of zero, and it need not: a run can end with its actor LESS floored than its critic. Every config in this project runs 1e-08, not the 1e-5 default, and the same checkpoint measured against 1e-5 reads 94.8% against 29.1% -- a true number about a run that was never executed. That asymmetry is unexplained again |
 | `clip_fraction` | 0.05-0.20 | pinned near 1.0 is the signature of a rollout/update mask disagreement, or a learning rate far too high |
 | `kl` | 0.003-0.02 | below the band, lower `batch_size`; above it, raise `batch_size` or let the backoff act |
 | `grad_norm_*` | below `max_grad_norm` most steps | pinned at 0.5 every step means the clip is the binding constraint and the effective learning rate is unknown |
@@ -3315,10 +3310,9 @@ including the opponents'. Before the first snapshot is admitted, about one seat 
 `scripted:random_legal`, which plays a card whenever it can afford one and scores about 31 an
 episode **[M]**, so the blended mean could not fall below about 3.9 however completely the learner
 stopped playing. The halt at 3.0 was therefore arithmetically unable to fire for the first gate's
-worth of iterations, about 3.7 hours at laptop geometry, which is most of the period the collapse
-it guards against actually happens in. The repair was to the metric's population and not to its
-threshold: since 92786d4 these are the learner's own seats. Measured and worked out by the train
-session, 2026-09-22.
+worth of iterations, about 3.7 hours at laptop geometry, which is most of the period the collapse it
+guards against actually happens in. The repair was to the metric's population and not to its
+threshold: since 92786d4 these are the learner's own seats. Measured and worked out on 2026-09-22.
 
 That is the second alarm in this table to have been unreachable by construction, after
 `shaping_dominates` compared two structural zeros, and the third if the spill alarm above is
@@ -3327,26 +3321,27 @@ counted. The shape they share is a threshold on a quantity whose population nobo
 is still not built.
 
 `vram_spilling` is the cautionary one, and it is worth reading before anyone writes another alarm
-about memory. The first version compared the memory this process could still take -- driver free plus
-what its allocator already holds -- against the peak one minibatch measured at startup. The train
-session tested it on the card on 2026-09-22: a second process took 2,048 MB and left 35 MB free for
-five iterations, against a patience of three. `health/vram_driver_free_mb` went 377.2 to 0.0 while
-`health/vram_available_mb` moved only 3371.9 to 2994.7, against 2349.0 needed, so it stayed silent by
-645.7 MB **[M]**. The reason is arithmetic, not tuning: an outsider can only consume the free part, so
-that sum bottoms out at what this process holds, and the startup gate guarantees that what it holds
-exceeds what one minibatch needs. The alarm was least sensitive in the case its own text named.
+about memory. The first version compared the memory this process could still take -- driver free
+plus what its allocator already holds -- against the peak one minibatch measured at startup. It was
+tested on a card on 2026-09-22: a second process took 2,048 MB and left 35 MB free for five
+iterations, against a patience of three. `health/vram_driver_free_mb` went 377.2 to 0.0 while
+`health/vram_available_mb` moved only 3371.9 to 2994.7, against 2349.0 needed, so it stayed silent
+by 645.7 MB **[M]**. The reason is arithmetic, not tuning: an outsider can only consume the free
+part, so that sum bottoms out at what this process holds, and the startup gate guarantees that what
+it holds exceeds what one minibatch needs. The alarm was least sensitive in the case its own text
+named.
 
 No in-process memory reading fixes that, because the platform does not refuse an oversubscribed
 allocation: it backs it with host memory and reports success, so the allocation is served, the
-counters look ordinary, and only the clock changes. The alarm therefore watches the harm and uses the
-memory reading as the evidence that this is the cause. Its numbers are measured: the same update took
-47-49 s with room and 180-233 s without **[M]**, while machine contention alone moved it from 435-531 s
-to 758 s **[M]**. A factor of two sits between those two populations. It has still never been seen
-firing on a real spill; the check is the train session's experiment above, re-run against this
-version. On 2026-09-29 the train session saw it fire falsely on a warm-started run: from iteration 84,
-15 iterations in a row, with the update steady at 29.3-30.0 s and the card at 0 MB driver-free because
-the caching allocator had filled it. The frozen-actor iterations before the unfreeze had set the best,
-so every unfrozen update was twice it. A frozen actor's iterations now keep their own best.
+counters look ordinary, and only the clock changes. The alarm therefore watches the harm and uses
+the memory reading as the evidence that this is the cause. Its numbers are measured: the same update
+took 47-49 s with room and 180-233 s without **[M]**, while machine contention alone moved it from
+435-531 s to 758 s **[M]**. A factor of two sits between those two populations. It has still never
+been seen firing on a real spill; the check is the experiment above, re-run against this version. It
+did fire falsely on a warm-started run, with the update steady and the card at 0 MB driver-free
+because the caching allocator had filled it: the frozen-actor iterations before the unfreeze had set
+the best, so every unfrozen update was twice it (`tests/test_alarms.py` replays that shape). A
+frozen actor's iterations now keep their own best.
 
 The other alarms have been checked against two iterations of one profile, which by the rule above
 is not validation. A metric's row population belongs in its identity rather than in its

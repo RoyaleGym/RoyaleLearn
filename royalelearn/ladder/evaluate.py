@@ -380,7 +380,7 @@ def paired_rho(scores: Sequence[SeedScore]) -> float | None:
     Undefined with fewer than two seeds, or with zero variance on either side -- every seed
     decided the same way -- where nothing about the pairing was learned. That used to be
     reported as 0.0, which does not read as "undefined": it reads as "uncorrelated", and it is
-    what ``ladder/paired_rho`` published in every row of hog26-10.
+    what ``ladder/paired_rho`` could publish in every row of a run.
     """
     if len(scores) < 2:
         return None

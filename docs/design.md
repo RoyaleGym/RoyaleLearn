@@ -193,13 +193,14 @@ its implementation, so that a threshold cannot be set against the wrong populati
 
 Two alarms and the halt path have narrower gaps. `vram_spilling` (fb135f0) has been seen only
 staying silent: 42 rows from seven runs at minibatch 256 on the 4 GB card read 2995 to 3372 MB
-available against 2349 needed, and nobody has watched it fire on a real spill. The one firing on
-a card reported so far was false: a warm start on 2026-09-29, whose frozen-actor iterations had set
-the best (a frozen actor's iterations now keep their own). The suite trips it on a synthetic row, and a test now fails for any alarm with no row to trip it (e4e2f06).
-`shaping_dominates` compared two structural zeros on every row recorded until 5724eb5 and dc7f7a1
-fixed its inputs (`harness-spec.md` section 10), so it has not been seen on a real run either. And a
-halting iteration's alarms never reach `alarms.jsonl`, because `AlarmSet.evaluate` raises before it
-returns them. The halting alarm is in the bundle, and the warnings beside it are only printed.
+available against 2349 needed, and nobody has watched it fire on a real spill. It has fired falsely
+on a warm start, whose frozen-actor iterations had set the best (a frozen actor's iterations now
+keep their own). The suite trips it on a synthetic row, and a test now fails for any alarm with no
+row to trip it (e4e2f06). `shaping_dominates` compared two structural zeros on every row recorded
+until 5724eb5 and dc7f7a1 fixed its inputs (`harness-spec.md` section 10), so it has not been seen
+on a real run either. And a halting iteration's alarms never reach `alarms.jsonl`, because
+`AlarmSet.evaluate` raises before it returns them. The halting alarm is in the bundle, and the
+warnings beside it are only printed.
 
 **Three workers spun through the update, because their clock ticked every 15.6 ms.** In a sample
 taken during an iteration's update phase, each of three rollout workers burned 92% of a core
@@ -244,13 +245,12 @@ ordinal, the environment gap, and the crash in `verify-resume`.
 **Two checkpoints written before 8db7e0d describe no metric row, and resume refuses both.** Until
 then the update ran before the batch was judged. So a refused batch was trained first and refused
 after, and the emergency save wrote those weights under the previous row's counters. Running
-`checkpoint.check_described` over every checkpoint under `runs/` (34 on 2026-09-22) lets 32
-through and refuses two: `integrator-rerun-fa93b56e506d5d0d/checkpoints/000000043776` holds 72
-updates against its row's 54, and `train-diag0-hog26k-1ad6a480b7666090/checkpoints/000000038304`
-holds 69 against 60. Neither can check a real resume, which now needs a fresh run. The
-fix has a price: a crash inside the update now loses the progress since the last periodic
-checkpoint, where it used to save weights no row describes. An in-memory copy of the pre-update
-learner would win that back, and it is not built.
+`checkpoint.check_described` over every checkpoint under `runs/` (34 on 2026-09-22) lets 32 through
+and refuses two: `integrator-rerun-fa93b56e506d5d0d/checkpoints/000000043776` holds 72 updates
+against its row's 54, and another run's checkpoint holds 69 against 60. Neither can check a real
+resume, which now needs a fresh run. The fix has a price: a crash inside the update now loses the
+progress since the last periodic checkpoint, where it used to save weights no row describes. An
+in-memory copy of the pre-update learner would win that back, and it is not built.
 
 **Runs before a89570d trained a different objective.** Until then every shipped config named
 RoyaleGym's `default_reward`, whose elixir-trade term pays a player who never commits a card. They

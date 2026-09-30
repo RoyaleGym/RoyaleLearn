@@ -182,8 +182,8 @@ class CommittedElixirPotential(PotentialReward):
     zero-sum.
 
     WHICH UNITS ARE PRICED, and why this is not every unit on the board. An engine reports each
-    entity under a card, and the entity need not be that card's own unit. On the RustEngine the
-    train session's review measured on 2026-09-24, a Goblin Gang's spear goblins were filed under
+    entity under a card, and the entity need not be that card's own unit. On the RustEngine measured
+    on 2026-09-24, a Goblin Gang's spear goblins were filed under
     the Goblin Hut, at five elixir each; a dying Golem's golemites under the Golem, at eight; a
     dying Battle Ram's barbarians under the Battle Ram, at four. Priced by the card they were filed
     under, one Goblin Gang play read +15 elixir of potential, a Golem's death +8, a Battle Ram's +4
@@ -199,12 +199,11 @@ class CommittedElixirPotential(PotentialReward):
     engine's catalogue, on both seats, and names any card no tap landed for, because the rule rests
     on that.
 
-    One card breaks it, and it is a strict expected failure in that file: the Tri Wizards.
-    From RoyaleSim round 9 a Tri Wizards play puts its Electro Wizard and
-    Ice Wizard down under their own card ids, and each is its own card's unit, so the play
-    prices at 7 + 4 + 3 = 14 for a card of 7: a Tri Wizards play reads as a gain of 7 while
-    those two live. The default catalogue and the one in ``examples/configs/train-hog26-10.json``
-    both hold it. It is an event-only card, and its fix waits with the other event-only cards.
+    One card breaks it, and it is a strict expected failure in that file: the Tri Wizards. From
+    RoyaleSim round 9 a Tri Wizards play puts its Electro Wizard and Ice Wizard down under their
+    own card ids, and each is its own card's unit, so the play prices at 7 + 4 + 3 = 14 for a card
+    of 7: a Tri Wizards play reads as a gain of 7 while those two live. The default catalogue holds
+    it. It is an event-only card, and its fix waits with the other event-only cards.
 
     A MIRROR PLAY LOSES EXACTLY ITS OWN ONE ELIXIR. It pays the copied card's elixir plus its
     own one, and puts down a copy one level above the copied card. The copy is priced as the
@@ -443,7 +442,7 @@ def default_potential_reward(
     to ``1 - gamma`` times how far the potential wandered, so it falls as the discount schedule
     rises whatever the weights are.
 
-    How loud the shipped weights are, measured 2026-09-24 on train-hog26-10's environment, ten
+    How loud the shipped weights are, measured 2026-09-24 on a 100-card RustEngine environment, ten
     random-legal battles at gamma 0.999, per seat per episode **[M]**: elixir 0.80, tower 0.15,
     crown 0.15, against a terminal of 0.80. The elixir term alone is already about as loud as the
     objective. Each magnitude is linear in its weight.

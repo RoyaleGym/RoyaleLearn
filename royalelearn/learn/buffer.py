@@ -245,11 +245,10 @@ def batch_count(n_samples: int, batch_size: int) -> int:
     and the optimizer takes a step per batch, so a few dozen leftover rows would move the weights
     as far as a full batch did, on a gradient estimated from a fraction of the sample. On the
     shipped laptop profile that was 3 of every 27 steps an iteration, and the count itself moved
-    between iterations -- the train session measured 6 to 9 on ITS geometry -- as the number of
+    between iterations -- by several steps on a larger geometry -- as the number of
     trainable rows crossed a multiple of the batch size, so the number of Adam steps an iteration
     took was not a property of the config at all. That contaminates any comparison between two
-    runs, which is what the profiles exist for. The 3-in-27 and 6-to-9 figures come from
-    different geometries and neither is the other's arithmetic.
+    runs, which is what the profiles exist for.
 
     So the epoch is cut into as many WHOLE batches as it can fill, and the rows over are spread
     one each across those batches rather than made into a short one. Every batch is then at least
