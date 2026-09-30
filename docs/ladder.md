@@ -133,11 +133,13 @@ It sets the decks each battle deals, from the battle's role:
   trained on. So the learner meets a fixed player of the field deck, never a copy of itself that
   is learning it.
 
-`field` is drawn uniformly; list a deck twice to weight it, or leave `field` out for random
-decks. In a pool or scripted battle the learner's seat is fixed per battle, blue in even battles
-and red in odd ones, so the seats stay balanced. `mix` still decides how many battles are mirror
-battles. With `seed_snapshots` and a pool share, the field seat can be one policy you already
-have. Without `seat_decks`, battles deal whatever the environment's own state mutator deals.
+`field` is drawn uniformly; list a deck twice to weight it, or leave `field` out for random decks.
+In a pool or scripted battle the learner's seat is fixed per battle, blue in even battles and red in
+odd ones, so the seats stay balanced. `mix` still decides how many battles are mirror battles. With
+`seed_snapshots` and a pool share, the field seat can be one policy you already have, and
+`opponent_mode` sets how that player picks its moves: it samples by default, and `"gtau:<x>"` plays
+only when its chance of playing is above `x`, then its most likely card at that card's most likely
+tile. Without `seat_decks`, battles deal whatever the environment's own state mutator deals.
 `tests/test_seat_decks.py` checks the deal and the seats.
 
 ## Who the bot plays in a given battle

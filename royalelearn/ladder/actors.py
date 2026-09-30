@@ -104,6 +104,7 @@ class EvalActors:
         """
         import torch
 
+        from ..learn.decode import decode_actions
         from ..learn.distribution import MaskedCategorical
 
         # This policy's own frames, not the resolver's. See the module docstring.
@@ -113,10 +114,15 @@ class EvalActors:
             batch = self.obs_batch(obs, history)
             with torch.inference_mode():
                 distribution = MaskedCategorical(actor.logits(batch).float(), batch.mask)
-                if self.release_mode == "argmax":
-                    return int(distribution.mode()[0].item())
                 draw = torch.tensor([uniform], dtype=torch.float32, device=batch.mask.device)
-                return int(distribution.sample(draw)[0].item())
+                chosen = decode_actions(
+                    distribution,
+                    self.release_mode,
+                    draw,
+                    hand_size=self.spec.hand_size,
+                    tiles=self.spec.tiles[0] * self.spec.tiles[1],
+                )
+                return int(chosen[0].item())
 
         return act
 

@@ -32,6 +32,7 @@ import msgspec
 import numpy as np
 
 from ..errors import PreflightError
+from ..learn.decode import parse_mode
 from ..seeding import EVAL_BOOTSTRAP, EVAL_MATCH, EVAL_SEED_SET, derive_generator, stream_path
 from .rating import Z95
 from .results import KIND_EVAL, KIND_PROBE, GameResult, ResultLog
@@ -244,8 +245,7 @@ class EvalRunner:
         obs_digest: Callable[[str], str] | None = None,
         kind: str = KIND_EVAL,
     ) -> None:
-        if release_mode not in ("stochastic", "argmax"):
-            raise ValueError(f"unknown release mode {release_mode!r}")
+        parse_mode(release_mode)
         # The kind belongs to the runner and not to the call, so that one runner cannot write
         # two kinds into the log. A caller that wants both builds two runners, and then which
         # cut a battle lands in is decided once, where the runner is built, rather than at every

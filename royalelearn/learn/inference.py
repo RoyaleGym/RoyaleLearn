@@ -44,6 +44,7 @@ from ..api.policy import ObsBatch
 from ..api.rollout import GROUP_DEAD, GROUP_LEARNER, GROUP_SCRIPTED
 from ..seeding import ACT_CYCLE, derive_generator, stream_path
 from .buffer import _StagingRing
+from .decode import STOCHASTIC, decode_actions, parse_mode
 from .distribution import MaskedCategorical, noop_checked_upstream, noop_violation_message
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -203,9 +204,14 @@ class BatchedInference:
         snapshots: SnapshotStore | None = None,
         device: torch.device | str | None = None,
         staging_slots: int = 4,
+        opponent_mode: str = "stochastic",
     ) -> None:
         self.buffer = buffer
         self.model = model
+        #: How a frozen opponent's seats pick their action (``learn/decode.py``); the learner's
+        #: seats always sample, since that is the policy the update trains.
+        parse_mode(opponent_mode)
+        self.opponent_mode = opponent_mode
         self.snapshots = snapshots
         self.master_seed = int(master_seed)
         self.device = torch.device(device) if device is not None else buffer.device
@@ -343,10 +349,21 @@ class BatchedInference:
         return host[:n].copy(), host[n : 2 * n].astype(np.int32).view(np.float32).copy()
 
     def _act_frozen(self, actor: Actor, obs: ObsBatch, uniforms: Tensor) -> np.ndarray:
-        """Sample a pool opponent's seats. Nothing here is ever differentiated."""
+        """A pool opponent's seats, decoded by ``opponent_mode``. Never differentiated."""
+        mode = getattr(self, "opponent_mode", STOCHASTIC)
         with torch.inference_mode(), noop_checked_upstream():
             distribution = MaskedCategorical(actor.logits(obs).float(), obs.mask)
-            actions = distribution.sample(uniforms)
+            if mode == STOCHASTIC:
+                actions = distribution.sample(uniforms)
+            else:
+                spec = self.buffer.spec
+                actions = decode_actions(
+                    distribution,
+                    mode,
+                    uniforms,
+                    hand_size=spec.hand_size,
+                    tiles=spec.tiles[0] * spec.tiles[1],
+                )
             host = _numpy(torch.cat([actions, _noop_flag(obs.mask)]), np.int64)
         _refuse_without_noop(host, obs.mask)
         return host[:-1].copy()

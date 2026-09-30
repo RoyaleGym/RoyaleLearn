@@ -26,6 +26,7 @@ import msgspec
 
 from .determinism import TIERS
 from .errors import PreflightError
+from .learn.decode import mode_problems
 from .rollout.envspec import ComponentSpec, EnvFactorySpec, JsonValue, canonical_json, digest_of
 
 __all__ = [
@@ -419,6 +420,12 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Rating both the sampled and the argmax variant doubles the pool and the cost for no
     #: decision.
     release_mode: str = "stochastic"
+    #: How a frozen pool or seed opponent picks its action in TRAINING battles: "stochastic"
+    #: (it samples, as every run before this field), "argmax", or "gtau:<x>" (play when
+    #: 1 - p(no-op) > x, then the most probable slot's best tile or the most probable button;
+    #: ``learn/decode.py``). The learner's own seats always sample. ``release_mode`` is the same
+    #: choice for evaluation and the gate.
+    opponent_mode: str = "stochastic"
     refit_every_iterations: int = 10
     #: Iterations between probes of the LIVE policy against the fixed rungs below. Zero is off,
     #: and off is the default: a probe plays real battles in the parent, so turning it on costs
@@ -1116,6 +1123,8 @@ def check_consistency(config: RunConfig) -> list[str]:
     problems.extend(_scripted_opponent_problems(config.ladder))
     problems.extend(_seed_snapshot_problems(config.ladder))
     problems.extend(_seat_deck_problems(config.ladder))
+    problems.extend(mode_problems(config.ladder.release_mode, "ladder.release_mode"))
+    problems.extend(mode_problems(config.ladder.opponent_mode, "ladder.opponent_mode"))
     problems.extend(_extension_problems(config))
     problems.extend(_alarm_override_problems(config))
     if config.checkpoint.keep < 1:

@@ -1025,6 +1025,7 @@ class LearningCoordinator:
             master_seed=config.master_seed,
             snapshots=self.snapshot_store,
             device=self.device,
+            opponent_mode=config.ladder.opponent_mode,
         )
         self.probe = PolicyProbe(self.spec)
         self.sinks: MetricsSink = build_sinks(

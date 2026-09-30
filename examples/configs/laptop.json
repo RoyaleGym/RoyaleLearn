@@ -149,6 +149,7 @@
     "pool_working_size": 48,
     "eval_seed_count": 500,
     "release_mode": "stochastic",
+    "opponent_mode": "stochastic",
     "refit_every_iterations": 10,
     "probe_every_iterations": 0,
     "probe_games": 40,
