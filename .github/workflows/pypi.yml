@@ -1,0 +1,86 @@
+name: pypi
+
+# Publish royalelearn to PyPI with trusted publishing: no API token anywhere. A `v*` tag starts it,
+# or a run by hand for a tag that already exists (the first upload is one of those).
+#
+# Two gates, both outside this file's control on purpose:
+#   1. The `pypi` environment must already exist WITH required reviewers. The `guard` step below
+#      refuses to build otherwise, because a job that names an environment GitHub does not know
+#      makes GitHub create it with no protection, and then nothing would stop the upload.
+#   2. The upload job waits in that environment until the owner approves it.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'An existing version tag to publish, e.g. v0.4.3'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: guard - the pypi environment exists and needs a reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rules=$(gh api "repos/${GITHUB_REPOSITORY}/environments/pypi" \
+            --jq '[.protection_rules[] | select(.type == "required_reviewers")] | length') || {
+            echo "::error::the pypi environment does not exist yet; create it with required reviewers first"
+            exit 1
+          }
+          if [ "$rules" -lt 1 ]; then
+            echo "::error::the pypi environment has no required reviewers; add them before publishing"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: the tag names the version in this tree
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match the version in pyproject.toml ($version)"
+            exit 1
+          fi
+
+      - name: build the wheel and the source archive
+        run: |
+          python -m pip install build
+          python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/royalelearn/
+    permissions:
+      id-token: write  # trusted publishing, this job only
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
