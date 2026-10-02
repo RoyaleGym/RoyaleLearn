@@ -119,17 +119,51 @@ def _ladder(opponent: str) -> cfg.LadderConfig:
     )
 
 
+#: The most threads ``default_threads`` gives the network. Past this a battle-sized update gains
+#: little, and the battles in the same process want cores too.
+MAX_DEFAULT_THREADS = 8
+
+
+#: Printed when ``device="auto"`` finds no GPU.
+NO_GPU_LINE = (
+    "No GPU that torch can use was found, so this trains on the CPU, which is much slower. "
+    "With an NVIDIA card, install torch with CUDA (see Install)."
+)
+
+
+def resolve_device(device: str) -> str:
+    """``device`` as torch names it: "auto" is "cuda" when torch can see a GPU, else "cpu",
+    saying so in one printed line; anything else is passed through."""
+    if device != "auto":
+        return device
+    import torch
+
+    if torch.cuda.is_available():
+        return "cuda"
+    print(NO_GPU_LINE)
+    return "cpu"
+
+
+def default_threads() -> int:
+    """Threads for the network's arithmetic on a CPU: half the machine's logical cores (its
+    physical ones, on most machines), at least one and at most ``MAX_DEFAULT_THREADS``."""
+    return max(1, min(MAX_DEFAULT_THREADS, (os.cpu_count() or 2) // 2))
+
+
 class Learner:
     """One training run, set up from ``build_env`` and a few settings.
 
     ``n_envs`` battles are played at once, in this process. ``steps_per_update`` decisions are
     collected between two updates of the network. ``opponent`` is "random" (a bot that plays a
     random legal move now and then), "noop" (one that never plays) or "self" (copies of the
-    learner, past and present, and the scripted bots). ``device`` is "cpu" or "cuda". ``seed``
+    learner, past and present, and the scripted bots). ``device`` is "auto" (a GPU when torch
+    can see one, else the CPU, with a line saying so), "cuda" or "cpu". ``seed``
     makes a run repeatable. ``viser=True`` streams one battle to the viewer (run
     ``royaleviser`` in another terminal). ``resume=False`` refuses to carry on a run already in
     ``save_dir`` rather than continuing it. ``verbose=True`` prints the whole start-up report.
-    ``extensions`` sets an add-on's config sections by name, for example RoyaleImitate's
+    ``threads`` is how many CPU threads the network's arithmetic uses (``default_threads``:
+    half the machine's logical cores, at most eight). ``extensions`` sets an add-on's config
+    sections by name, for example RoyaleImitate's
     ``warm_start``.
     """
 
@@ -138,7 +172,7 @@ class Learner:
         build_env: Any,
         *,
         n_envs: int = 8,
-        device: str = "cpu",
+        device: str = "auto",
         save_dir: str | os.PathLike[str] = "runs/royalelearn",
         opponent: str = "random",
         steps_per_update: int = 1024,
@@ -147,12 +181,14 @@ class Learner:
         viser: bool = False,
         resume: bool = True,
         verbose: bool = False,
+        threads: int | None = None,
         extensions: Mapping[str, Any] | None = None,
         _coordinator_kwargs: dict[str, Any] | None = None,
     ) -> None:
         path = _dotted(build_env)
         self.build_env = build_env
         self.save_dir = Path(save_dir)
+        device = resolve_device(device)
         self.device = device
         self.viser = bool(viser)
         self.resume = bool(resume)
@@ -167,6 +203,9 @@ class Learner:
         self.run: Any = None
         self._model: Any = None
         self._spec: Any = None
+        threads = default_threads() if threads is None else int(threads)
+        if threads < 1:
+            raise PreflightError(f"threads is {threads}; the network needs at least one")
         if steps_per_update < 2 * n_envs:
             raise PreflightError(
                 f"steps_per_update {steps_per_update} is smaller than two decisions per battle "
@@ -194,7 +233,7 @@ class Learner:
                 device=device,
             ),
             # Repeatable from a seed on one machine, without run_exact's bit-for-bit costs.
-            "determinism": cfg.DeterminismConfig(tier="throughput"),
+            "determinism": cfg.DeterminismConfig(tier="throughput", torch_threads=threads),
             "ppo": cfg.PPOConfig(
                 timesteps_per_iteration=int(steps_per_update),
                 batch_size=max(2, int(steps_per_update) // 2),

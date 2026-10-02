@@ -106,8 +106,8 @@ def build_env():
 
 
 if __name__ == "__main__":
-    learner = Learner(build_env, n_envs=2, save_dir="runs/script", steps_per_update=16,
-                      _coordinator_kwargs={"preflight_kwargs": PREFLIGHT})
+    learner = Learner(build_env, n_envs=2, device="cpu", save_dir="runs/script",
+                      steps_per_update=16, _coordinator_kwargs={"preflight_kwargs": PREFLIGHT})
     learner.learn(total_steps=32)
     learner.save("runs/script/bot")
     print("DONE", learner.steps)
@@ -196,3 +196,35 @@ def test_the_finished_run_is_kept_for_add_ons(tmp_path: Path) -> None:
     codec = run.row_codec()
     assert codec.spec.n_actions == run.spec.n_actions
     assert run.snapshot_template.arch_digest == run.arch_digest
+
+
+def test_a_cpu_run_uses_several_cores_for_the_network(tmp_path: Path) -> None:
+    import os
+
+    from royalelearn.learner import default_threads
+
+    cores = os.cpu_count() or 1
+    assert 1 <= default_threads() <= max(1, cores // 2)
+    config = Learner(build_env, save_dir=tmp_path / "a").config
+    assert config.determinism.torch_threads == default_threads()
+    three = Learner(build_env, save_dir=tmp_path / "b", threads=3)
+    assert three.config.determinism.torch_threads == 3
+    with pytest.raises(PreflightError, match="threads"):
+        Learner(build_env, save_dir=tmp_path / "c", threads=0)
+
+
+def test_auto_is_the_gpu_when_torch_sees_one_and_else_the_cpu_saying_so(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import torch
+
+    from royalelearn.learner import NO_GPU_LINE, resolve_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_device("auto") == "cuda"
+    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_device("auto") == "cpu"
+    assert capsys.readouterr().out.strip() == NO_GPU_LINE
+    assert resolve_device("cpu") == "cpu" and resolve_device("cuda") == "cuda"
+    assert Learner.__init__.__kwdefaults__["device"] == "auto"
