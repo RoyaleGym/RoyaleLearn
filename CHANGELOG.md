@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- `Learner` names its settings the way rlgym-ppo does, each with a default: the network
+  (`trunk_channels`, `trunk_blocks`, `critic_hidden`), the update (`ppo_epochs`, `ppo_batch_size`,
+  `ppo_minibatch_size`, `policy_lr`, `critic_lr`, `ppo_ent_coef`, `ppo_clip_range`, `gae_gamma`,
+  `gae_lambda`, `standardize_returns`), `timestep_limit`, `n_checkpoints_to_keep`, and
+  `log_to_wandb` with `wandb_project_name`, `wandb_group_name` and `wandb_run_name`. The defaults
+  build the same run as before.
+- `learner.learn()` with no `total_steps` stops at `timestep_limit`.
+- A `build_env` in code run by `exec` (a docs checker, some IDE runners) is found by the run.
+
 ## 0.3.0
 
 - `Learner` trains on the GPU by default: `device="auto"` is CUDA when torch can see a GPU, and

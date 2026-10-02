@@ -228,3 +228,135 @@ def test_auto_is_the_gpu_when_torch_sees_one_and_else_the_cpu_saying_so(
     assert capsys.readouterr().out.strip() == NO_GPU_LINE
     assert resolve_device("cpu") == "cpu" and resolve_device("cuda") == "cuda"
     assert Learner.__init__.__kwdefaults__["device"] == "auto"
+
+
+def test_a_build_env_in_code_run_by_exec_trains(tmp_path: Path) -> None:
+    """A docs checker or an IDE runner executes a page's code in a namespace named ``__main__``
+    that is not the ``__main__`` module, where a run looking ``build_env`` up by its path would
+    not find it."""
+    import os
+    import subprocess
+    import sys
+
+    runner = tmp_path / "runner.py"
+    runner.write_text(
+        "import sys\n"
+        "code = open(sys.argv[1], encoding='utf-8').read()\n"
+        "exec(compile(code, '<block>', 'exec'), {'__name__': '__main__'})\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "block.py").write_text(SCRIPT, encoding="utf-8")
+    import royalelearn
+
+    here = str(Path(royalelearn.__file__).resolve().parents[1])
+    path = os.pathsep.join(p for p in (here, os.environ.get("PYTHONPATH", "")) if p)
+    env = {**os.environ, "OMP_NUM_THREADS": "1", "PYTHONPATH": path}
+    done = subprocess.run(
+        [sys.executable, str(runner), "block.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert "DONE" in done.stdout, done.stdout[-2000:]
+
+
+# -- the named settings, rlgym-ppo style -------------------------------------------------------
+
+
+def test_the_defaults_build_the_config_they_always_built(tmp_path: Path) -> None:
+    from royalelearn import config as cfg
+
+    plain = Learner(build_env, save_dir="runs/pin", device="cpu", threads=2)
+    assert cfg.config_hash(plain.config).startswith("8bcb1242ae4f")
+    other = Learner(
+        build_env,
+        save_dir="runs/pin",
+        device="cpu",
+        threads=2,
+        opponent="self",
+        steps_per_update=2048,
+        checkpoint_every=10000,
+    )
+    assert cfg.config_hash(other.config).startswith("77db39c799d0")
+
+
+def test_each_named_setting_reaches_the_run(tmp_path: Path) -> None:
+    from royalelearn import config as cfg
+
+    config = Learner(
+        build_env,
+        save_dir=tmp_path / "a",
+        device="cpu",
+        trunk_channels=48,
+        trunk_blocks=3,
+        critic_hidden=96,
+        policy_lr=1e-4,
+        critic_lr=3e-4,
+        ppo_epochs=5,
+        ppo_batch_size=256,
+        ppo_minibatch_size=64,
+        ppo_ent_coef=0.02,
+        ppo_clip_range=0.1,
+        gae_lambda=0.95,
+        gae_gamma=0.995,
+        standardize_returns=False,
+        n_checkpoints_to_keep=7,
+    ).config
+    net, ppo, advantage = config.net, config.ppo, config.advantage
+    assert (net.channels, net.card_embed, net.blocks, net.value_hidden) == (48, 48, 3, 96)
+    assert (ppo.lr_actor, ppo.lr_critic, ppo.n_epochs) == (1e-4, 3e-4, 5)
+    assert (ppo.batch_size, ppo.minibatch_size, ppo.clip_range) == (256, 64, 0.1)
+    assert ppo.ent_coef == cfg.ConstantSpec(0.02)
+    assert advantage.gae_lambda == 0.95 and advantage.gamma == cfg.ConstantSpec(0.995)
+    assert advantage.standardize_rewards is False
+    assert config.checkpoint.keep == 7
+    with pytest.raises(PreflightError):
+        _ = Learner(
+            build_env, save_dir=tmp_path / "b", ppo_batch_size=100, ppo_minibatch_size=64
+        ).config
+
+
+def test_log_to_wandb_names_the_project_group_and_run(tmp_path: Path) -> None:
+    sinks = Learner(
+        build_env,
+        save_dir=tmp_path / "a",
+        log_to_wandb=True,
+        wandb_project_name="my-bots",
+        wandb_group_name="hog",
+        wandb_run_name="first",
+    ).config.metrics.sinks
+    (wandb,) = [s for s in sinks if s.kind == "wandb"]
+    assert wandb.enabled
+    assert wandb.options == {"project": "my-bots", "group": "hog", "name": "first"}
+    plain = Learner(build_env, save_dir=tmp_path / "b").config.metrics.sinks
+    assert not [s for s in plain if s.kind == "wandb"]
+
+
+def test_the_wandb_sink_hands_group_and_name_to_wandb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+    import types
+
+    from royalelearn.metrics.sinks import CompositeSink
+    from royalelearn.metrics.wandb_sink import WandbSink
+
+    seen: dict[str, object] = {}
+    fake = types.ModuleType("wandb")
+    fake.init = lambda **kwargs: seen.update(kwargs) or types.SimpleNamespace(id="x")
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    sink = WandbSink(CompositeSink([]), enable=True, project="p", group="g", name="n")
+    sink.open(identity={"run_id": "r"}, config_json="{}", run_dir=tmp_path)  # type: ignore[arg-type]
+    assert (seen["project"], seen["group"], seen["name"]) == ("p", "g", "n")
+
+
+def test_timestep_limit_is_where_learn_stops_when_it_is_given_no_total(tmp_path: Path) -> None:
+    learner = Learner(
+        build_env, n_envs=2, device="cpu", save_dir=tmp_path / "a", timestep_limit=32, **TINY
+    )
+    learner.learn()
+    assert learner.steps >= 32
+    with pytest.raises(PreflightError, match="timestep_limit"):
+        Learner(build_env, device="cpu", save_dir=tmp_path / "b", **TINY).learn()

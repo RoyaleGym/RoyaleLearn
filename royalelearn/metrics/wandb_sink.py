@@ -42,6 +42,8 @@ class WandbSink(MetricsSink):
         entity: str | None = None,
         tags: Sequence[str] = (),
         mode: str | None = None,
+        group: str | None = None,
+        name: str | None = None,
     ) -> None:
         self.inner = inner
         self.enable = bool(enable)
@@ -49,6 +51,8 @@ class WandbSink(MetricsSink):
         self.entity = entity
         self.tags = tuple(tags)
         self.mode = mode
+        self.group = group
+        self.name = name
         self.run_id: str | None = None
         self._run: Any = None
 
@@ -74,6 +78,8 @@ class WandbSink(MetricsSink):
             entity=self.entity,
             tags=list(self.tags),
             mode=self.mode,
+            group=self.group,
+            name=self.name,
             dir=str(run_dir),
             id=self.run_id,
             resume="allow",

@@ -26,6 +26,7 @@ or ``python -m royalelearn train`` instead.
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -151,20 +152,53 @@ def default_threads() -> int:
 
 
 class Learner:
-    """One training run, set up from ``build_env`` and a few settings.
+    """One training run, set up from ``build_env`` and named settings, each with a default.
 
-    ``n_envs`` battles are played at once, in this process. ``steps_per_update`` decisions are
-    collected between two updates of the network. ``opponent`` is "random" (a bot that plays a
-    random legal move now and then), "noop" (one that never plays) or "self" (copies of the
-    learner, past and present, and the scripted bots). ``device`` is "auto" (a GPU when torch
-    can see one, else the CPU, with a line saying so), "cuda" or "cpu". ``seed``
-    makes a run repeatable. ``viser=True`` streams one battle to the viewer (run
-    ``royaleviser`` in another terminal). ``resume=False`` refuses to carry on a run already in
-    ``save_dir`` rather than continuing it. ``verbose=True`` prints the whole start-up report.
-    ``threads`` is how many CPU threads the network's arithmetic uses (``default_threads``:
-    half the machine's logical cores, at most eight). ``extensions`` sets an add-on's config
-    sections by name, for example RoyaleImitate's
-    ``warm_start``.
+    The run:
+
+    - ``n_envs``: battles played at once, in this process.
+    - ``device``: "auto" (a GPU when torch can see one, else the CPU, with a line saying so),
+      "cuda" or "cpu". ``threads``: CPU threads for the network's arithmetic (default: half the
+      machine's logical cores, at most eight).
+    - ``save_dir``: where checkpoints, metric rows and the config go. Made again with the same
+      folder, a run carries on; ``resume=False`` refuses to instead.
+    - ``opponent``: "random" (a bot that plays a random legal move now and then), "noop" (one
+      that never plays) or "self" (copies of the learner, past and present, and the scripted
+      bots).
+    - ``timestep_limit``: where ``learn()`` stops when it is given no ``total_steps``.
+    - ``checkpoint_every``: decisions between checkpoints. ``n_checkpoints_to_keep``: how many.
+    - ``seed``: makes a run repeatable on one machine.
+
+    The network, one trunk shared by the policy and the critic:
+
+    - ``trunk_channels``: width of the convolutional trunk over the board.
+    - ``trunk_blocks``: residual blocks in it.
+    - ``critic_hidden``: the critic's hidden layer.
+
+    The update, named as rlgym-ppo names them:
+
+    - ``steps_per_update``: decisions collected between two updates.
+    - ``ppo_epochs``: passes over each update's decisions.
+    - ``ppo_batch_size``, ``ppo_minibatch_size``: decisions per optimizer step, and per forward
+      (a memory knob); by default half and an eighth of ``steps_per_update``.
+    - ``policy_lr``, ``critic_lr``: learning rates.
+    - ``ppo_ent_coef``: the entropy bonus; None keeps the default, which falls from 0.01 to 0.003
+      over 30 million decisions.
+    - ``ppo_clip_range``: the PPO clip.
+    - ``gae_gamma``: the discount; None keeps the default, which rises from 0.997 to 0.999.
+      ``gae_lambda``: GAE's lambda.
+    - ``standardize_returns``: scale rewards by the spread of the returns.
+
+    Watching:
+
+    - ``log_to_wandb``: send each update's numbers to Weights and Biases, under
+      ``wandb_project_name``, ``wandb_group_name`` and ``wandb_run_name``.
+    - ``viser``: stream one battle to the viewer (run ``royaleviser`` in another terminal).
+    - ``verbose``: print the whole start-up report.
+
+    ``extensions`` sets an add-on's config sections by name, for example RoyaleImitate's
+    ``warm_start``. Every other setting there is is a ``RunConfig`` field; ``learner.config``
+    shows them all.
     """
 
     def __init__(
@@ -173,15 +207,34 @@ class Learner:
         *,
         n_envs: int = 8,
         device: str = "auto",
-        save_dir: str | os.PathLike[str] = "runs/royalelearn",
-        opponent: str = "random",
-        steps_per_update: int = 1024,
-        checkpoint_every: int = 50_000,
-        seed: int | None = None,
-        viser: bool = False,
-        resume: bool = True,
-        verbose: bool = False,
         threads: int | None = None,
+        save_dir: str | os.PathLike[str] = "runs/royalelearn",
+        resume: bool = True,
+        opponent: str = "random",
+        timestep_limit: int | None = None,
+        checkpoint_every: int = 50_000,
+        n_checkpoints_to_keep: int = 3,
+        seed: int | None = None,
+        trunk_channels: int = 32,
+        trunk_blocks: int = 2,
+        critic_hidden: int = 64,
+        steps_per_update: int = 1024,
+        ppo_epochs: int = 3,
+        ppo_batch_size: int | None = None,
+        ppo_minibatch_size: int | None = None,
+        policy_lr: float = 2e-4,
+        critic_lr: float = 2e-4,
+        ppo_ent_coef: float | None = None,
+        ppo_clip_range: float = 0.2,
+        gae_gamma: float | None = None,
+        gae_lambda: float = 0.99,
+        standardize_returns: bool = True,
+        log_to_wandb: bool = False,
+        wandb_project_name: str | None = None,
+        wandb_group_name: str | None = None,
+        wandb_run_name: str | None = None,
+        viser: bool = False,
+        verbose: bool = False,
         extensions: Mapping[str, Any] | None = None,
         _coordinator_kwargs: dict[str, Any] | None = None,
     ) -> None:
@@ -193,6 +246,7 @@ class Learner:
         self.viser = bool(viser)
         self.resume = bool(resume)
         self.verbose = bool(verbose)
+        self.timestep_limit = None if timestep_limit is None else int(timestep_limit)
         self.steps = 0
         #: The checkpoint the last ``learn`` carried on from, or None for a fresh start.
         self.resumed_from: Path | None = None
@@ -211,7 +265,38 @@ class Learner:
                 f"steps_per_update {steps_per_update} is smaller than two decisions per battle "
                 f"of n_envs {n_envs}"
             )
-        width = 32
+        steps = int(steps_per_update)
+        width = int(trunk_channels)
+        ppo: dict[str, Any] = {
+            "timesteps_per_iteration": steps,
+            "batch_size": max(2, steps // 2) if ppo_batch_size is None else int(ppo_batch_size),
+            "minibatch_size": (
+                max(1, steps // 8) if ppo_minibatch_size is None else int(ppo_minibatch_size)
+            ),
+            "n_epochs": int(ppo_epochs),
+            "lr_actor": float(policy_lr),
+            "lr_critic": float(critic_lr),
+            "clip_range": float(ppo_clip_range),
+        }
+        if ppo_ent_coef is not None:
+            ppo["ent_coef"] = cfg.ConstantSpec(float(ppo_ent_coef))
+        advantage: dict[str, Any] = {
+            "gae_lambda": float(gae_lambda),
+            "standardize_rewards": bool(standardize_returns),
+        }
+        if gae_gamma is not None:
+            advantage["gamma"] = cfg.ConstantSpec(float(gae_gamma))
+        sinks = [cfg.SinkSpec("jsonl"), cfg.SinkSpec("console", options={"brief": True})]
+        if viser:
+            sinks.append(cfg.SinkSpec("viser"))
+        if log_to_wandb:
+            names = {
+                "project": wandb_project_name,
+                "group": wandb_group_name,
+                "name": wandb_run_name,
+            }
+            options = {key: value for key, value in names.items() if value is not None}
+            sinks.append(cfg.SinkSpec("wandb", options=options))
         settings: dict[str, Any] = {
             "run_name": self.save_dir.name,
             "runs_dir": str(self.save_dir.parent),
@@ -222,10 +307,11 @@ class Learner:
             ),
             "net": cfg.NetConfig(
                 channels=width,
-                blocks=2,
-                norm_groups=4,
+                blocks=int(trunk_blocks),
+                # GroupNorm's groups must divide the width; four for every width they can.
+                norm_groups=math.gcd(width, 4),
                 card_embed=width,
-                value_hidden=64,
+                value_hidden=int(critic_hidden),
                 # One trunk for the actor and the critic: on a CPU the update is most of an
                 # iteration, and two trunks double it.
                 separate_trunks=False,
@@ -234,17 +320,13 @@ class Learner:
             ),
             # Repeatable from a seed on one machine, without run_exact's bit-for-bit costs.
             "determinism": cfg.DeterminismConfig(tier="throughput", torch_threads=threads),
-            "ppo": cfg.PPOConfig(
-                timesteps_per_iteration=int(steps_per_update),
-                batch_size=max(2, int(steps_per_update) // 2),
-                minibatch_size=max(1, int(steps_per_update) // 8),
-            ),
+            "ppo": cfg.PPOConfig(**ppo),
+            "advantage": cfg.AdvantageConfig(**advantage),
             "ladder": _ladder(opponent),
-            "checkpoint": cfg.CheckpointConfig(every_env_steps=int(checkpoint_every), keep=3),
-            "metrics": cfg.MetricsConfig(
-                sinks=[cfg.SinkSpec("jsonl"), cfg.SinkSpec("console", options={"brief": True})]
-                + ([cfg.SinkSpec("viser")] if viser else [])
+            "checkpoint": cfg.CheckpointConfig(
+                every_env_steps=int(checkpoint_every), keep=int(n_checkpoints_to_keep)
             ),
+            "metrics": cfg.MetricsConfig(sinks=sinks),
         }
         if seed is not None:
             settings["master_seed"] = int(seed)
@@ -266,12 +348,20 @@ class Learner:
             self._config = cfg.validate(config)
         return self._config
 
-    def learn(self, total_steps: int) -> None:
-        """Train until the run has taken ``total_steps`` decisions in all, then checkpoint.
+    def learn(self, total_steps: int | None = None) -> None:
+        """Train until the run has taken ``total_steps`` decisions in all (``timestep_limit``
+        when none is given), then checkpoint.
 
         A run already in ``save_dir`` is carried on from its newest checkpoint, so calling this
         again, or in a new process, continues where the last one stopped.
         """
+        if total_steps is None:
+            total_steps = self.timestep_limit
+        if total_steps is None:
+            raise PreflightError(
+                "learn() needs to know where to stop: pass total_steps, or set timestep_limit "
+                "on the Learner"
+            )
         from .checkpoint import DirCheckpointStore
         from .coordinator import LearningCoordinator
         from .determinism import apply_cublas_workspace_config
@@ -287,6 +377,7 @@ class Learner:
             )
         if self.viser:
             os.environ.setdefault("ROYALEVISER", "1")
+        self._register_main()
         self.resumed_from = latest
         config = self.config
         print(
@@ -312,6 +403,25 @@ class Learner:
             self._model = run.model
             self._spec = run.spec
         self.run = run
+
+    def _register_main(self) -> None:
+        """Make a ``build_env`` from ``__main__`` findable by its path.
+
+        The run builds its environments from ``__main__.build_env``. A script run with python
+        holds it there already; code run by ``exec`` in a namespace named ``__main__`` -- a docs
+        checker, some IDE runners -- does not, and the battles, which are played in this
+        process, would not find it. So the function itself is put there under its name.
+        """
+        import sys
+
+        module, _, name = self._env_fn_path.rpartition(".")
+        main = sys.modules.get("__main__")
+        if (
+            module == "__main__"
+            and main is not None
+            and getattr(main, name, None) is not self.build_env
+        ):
+            setattr(main, name, self.build_env)
 
     def save(self, path: str | os.PathLike[str]) -> Path:
         """Write the trained bot to the folder ``path``: weights and what they play. Load it with
