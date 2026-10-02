@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
 - A `Learner` made again on the same `save_dir` with other training settings (learning rates,
   epochs, batch sizes, the entropy bonus, the discount) carries the run on and prints what
