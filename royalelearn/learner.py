@@ -27,6 +27,7 @@ or ``python -m royalelearn train`` instead.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +129,8 @@ class Learner:
     makes a run repeatable. ``viser=True`` streams one battle to the viewer (run
     ``royaleviser`` in another terminal). ``resume=False`` refuses to carry on a run already in
     ``save_dir`` rather than continuing it. ``verbose=True`` prints the whole start-up report.
+    ``extensions`` sets an add-on's config sections by name, for example RoyaleImitate's
+    ``warm_start``.
     """
 
     def __init__(
@@ -144,6 +147,7 @@ class Learner:
         viser: bool = False,
         resume: bool = True,
         verbose: bool = False,
+        extensions: Mapping[str, Any] | None = None,
         _coordinator_kwargs: dict[str, Any] | None = None,
     ) -> None:
         path = _dotted(build_env)
@@ -157,6 +161,10 @@ class Learner:
         #: The checkpoint the last ``learn`` carried on from, or None for a fresh start.
         self.resumed_from: Path | None = None
         self._kwargs = dict(_coordinator_kwargs or {})
+        self._extensions = dict(extensions or {})
+        #: The last ``learn``'s run, finished and closed: its model, spec and codec, for an add-on
+        #: that writes something from the trained run. None before ``learn``.
+        self.run: Any = None
         self._model: Any = None
         self._spec: Any = None
         if steps_per_update < 2 * n_envs:
@@ -211,7 +219,12 @@ class Learner:
         if self._config is None:
             settings = dict(self._settings)
             settings["env"] = _env_spec(self.build_env, self._env_fn_path)
-            self._config = cfg.validate(cfg.RunConfig(**settings))
+            config = cfg.RunConfig(**settings)
+            if self._extensions:
+                from .extensions import with_sections
+
+                config = with_sections(config, **self._extensions)
+            self._config = cfg.validate(config)
         return self._config
 
     def learn(self, total_steps: int) -> None:
@@ -259,6 +272,7 @@ class Learner:
             self.steps = int(run.cumulative_timesteps)
             self._model = run.model
             self._spec = run.spec
+        self.run = run
 
     def save(self, path: str | os.PathLike[str]) -> Path:
         """Write the trained bot to the folder ``path``: weights and what they play. Load it with

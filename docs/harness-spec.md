@@ -1207,7 +1207,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `coord_conv` | `true` | | the arena is not translation-invariant: own half, enemy half, the river, the bridges, the tower rects |
 | `separate_trunks` | `true` | | makes "the mask and the entropy bonus never touch the critic" structural |
 | `policy_head` | `"pointer"` | `"pointer"` / `"factored"` | `factored` writes the same flat log-probabilities as three stages: wait or act, then which hand slot or ability button, then which tile. A slot is a candidate when any of its tiles is legal; with no candidate it waits |
-| `factored_act_init` | 0.1 | probability | the factored head's P(act) at initialisation, through the gate's bias. Not in `arch_digest`: it is a starting value, not a shape. A factored actor's spec.json records it and the head |
+| `factored_act_init` | 0.1 | probability | the factored head's P(act) at initialisation, through the gate's bias. Not in `arch_digest`: it is a starting value, not a shape. A factored actor's spec.json records it and the head: `royalelearn.learn.nets.head_meta(net)`, which a run's `artifact_spec()` carries and a tool writing its own `SnapshotSpec` must put in its `meta` |
 | `logit_scale` | `"rsqrt_c"` | | one over the square root of C on the pointer inner product |
 | `init` | `"orthogonal"` | | gain sqrt(2) hidden, **0.01 policy head**, 1.0 value head |
 | `noop_bias` | 0.0 | logits | self-limiting at init; the formula for when it is needed is in section 8.4. Refused with the factored head, which has no no-op logit |

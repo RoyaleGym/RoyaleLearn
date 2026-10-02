@@ -178,3 +178,21 @@ def test_the_env_function_is_in_the_identity_and_nothing_else_moves(tmp_path: Pa
     named = msgspec.structs.replace(plain, env_fn="test_learner.build_env")
     other = msgspec.structs.replace(plain, env_fn="test_learner.other_env")
     assert len({env_value_digest(plain), env_value_digest(named), env_value_digest(other)}) == 3
+
+
+def test_an_add_ons_section_is_passed_through_and_an_unknown_one_named(tmp_path: Path) -> None:
+    with pytest.raises(PreflightError, match="no_such_section"):
+        _ = Learner(
+            build_env, save_dir=tmp_path / "x", extensions={"no_such_section": {}}
+        ).config
+
+
+def test_the_finished_run_is_kept_for_add_ons(tmp_path: Path) -> None:
+    learner = Learner(build_env, n_envs=2, device="cpu", save_dir=tmp_path / "run", **TINY)
+    assert learner.run is None
+    learner.learn(total_steps=32)
+    run = learner.run
+    assert run is not None and run.model is not None
+    codec = run.row_codec()
+    assert codec.spec.n_actions == run.spec.n_actions
+    assert run.snapshot_template.arch_digest == run.arch_digest

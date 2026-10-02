@@ -8,6 +8,8 @@
   then which tile) over the same action space, with `net.factored_act_init` for the gate's start.
 - `ppo.entropy_coef_stages`: one entropy coefficient for each of those three stages.
 - `SeedSnapshot.weight`: how often the pool draws a seed, as a multiplier on its draw weight.
+- `Learner(..., extensions={...})` sets an add-on's config sections, such as RoyaleImitate's
+  `warm_start`, and `learner.run` keeps the finished run for an add-on to read.
 
 ## 0.2.0
 

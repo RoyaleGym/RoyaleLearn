@@ -1178,6 +1178,8 @@ class LearningCoordinator:
     def artifact_spec(self) -> SnapshotSpec:
         """What an actor this run can load must agree with: section 11.6's compatibility fields
         and the action layout. The pool's template is this plus where the snapshot came from."""
+        from .learn.nets import head_meta
+
         assert self.report is not None
         return SnapshotSpec(
             snapshot_id="",
@@ -1189,18 +1191,8 @@ class LearningCoordinator:
             frame_stack=self.spec.frame_stack,
             num_cards=self.spec.num_cards,
             vector_size=self.spec.vector_size,
-            meta=self._head_meta(),
+            meta=head_meta(self.config.net),
         )
-
-    def _head_meta(self) -> dict[str, Any]:
-        """What a factored actor's spec.json says about its head, so that a reader rebuilds the
-        same net from the folder alone. ``arch_digest`` already tells the two heads apart; this
-        names which one, and the gate's starting value the digest leaves out. Empty for the
-        pointer head, so its folders are what they always were."""
-        net = self.config.net
-        if net.policy_head == "pointer":
-            return {}
-        return {"policy_head": net.policy_head, "factored_act_init": net.factored_act_init}
 
     def _build_ladder(self) -> None:
         """The pool, the archive, the fit, the seed set and the gate.

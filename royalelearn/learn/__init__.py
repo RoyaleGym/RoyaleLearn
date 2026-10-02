@@ -40,6 +40,7 @@ _EXPORTS: dict[str, str] = {
     "FactoredStages": ".nets",
     "POLICY_HEADS": ".nets",
     "build_policy_head": ".nets",
+    "head_meta": ".nets",
     "entropy_bonus": ".ppo",
     "RectBuffer": ".buffer",
     "RectGather": ".inference",

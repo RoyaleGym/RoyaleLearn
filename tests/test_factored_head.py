@@ -321,3 +321,16 @@ def test_a_factored_snapshot_names_its_head_and_plays_as_the_live_actor(tmp_path
 def test_a_pointer_runs_artifact_spec_has_no_head_meta(tmp_path: Path) -> None:
     with coordinator(tiny_config(tmp_path)) as run:
         assert run.artifact_spec().meta == {}
+
+
+def test_head_meta_is_the_rule_the_run_writes(tmp_path: Path) -> None:
+    from royalelearn.learn.nets import head_meta
+
+    assert head_meta(_arch(policy_head="pointer", factored_act_init=0.4)) == {}
+    assert head_meta(_arch(factored_act_init=0.4)) == {
+        "policy_head": "factored",
+        "factored_act_init": 0.4,
+    }
+    config = _staged(tmp_path, None)
+    with coordinator(config) as run:
+        assert run.artifact_spec().meta == head_meta(config.net)

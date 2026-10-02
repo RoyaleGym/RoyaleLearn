@@ -60,6 +60,7 @@ __all__ = [
     "ResBlock",
     "ValueHead",
     "build_policy_head",
+    "head_meta",
     "resolve_dtype",
 ]
 
@@ -530,6 +531,18 @@ class FactoredPolicyHead(PointerPolicyHead):
             _zero_bias(self.buttons)
         with torch.no_grad():
             self.gate.bias.fill_(math.log(self.act_init / (1.0 - self.act_init)))
+
+
+def head_meta(arch: ArchSpec) -> dict[str, Any]:
+    """What an actor's ``spec.json`` meta says about its policy head, so that a reader rebuilds
+    the same net from the folder alone: the head's name and the factored gate's starting value,
+    which ``arch_digest`` leaves out. Empty for the pointer head, so its folders are what they
+    always were. A tool that writes a ``SnapshotSpec`` of its own, rather than taking a run's
+    ``artifact_spec()``, puts this in the spec's ``meta``.
+    """
+    if arch.policy_head == "pointer":
+        return {}
+    return {"policy_head": arch.policy_head, "factored_act_init": arch.factored_act_init}
 
 
 def build_policy_head(spec: EnvSpec, arch: ArchSpec) -> PointerPolicyHead:
