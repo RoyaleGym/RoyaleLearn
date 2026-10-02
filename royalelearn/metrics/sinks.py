@@ -219,7 +219,9 @@ class ConsoleSink(MetricsSink):
         self._iterations = 0
 
     def open(self, *, identity: RunIdentity, config_json: str, run_dir: Path) -> None:
-        self._print(f"run {identity.master_seed} in {run_dir}")
+        # The brief form is the Learner's, whose own first line already names the folder.
+        if not self.brief:
+            self._print(f"run {identity.master_seed} in {run_dir}")
 
     def write(self, row: MetricRow) -> None:
         self._iterations += 1

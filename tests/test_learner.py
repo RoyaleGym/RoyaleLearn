@@ -167,6 +167,20 @@ def test_the_brief_console_line() -> None:
     assert "-" in brief_line({"run/iteration": 1})
 
 
+def test_the_brief_console_says_nothing_on_open(tmp_path: Path) -> None:
+    """The Learner's own first line names the folder; the sink's "run <seed> in <dir>" line
+    told a first-time user nothing more."""
+    import io
+
+    from royalelearn.metrics.sinks import ConsoleSink
+
+    for brief, lines in ((True, 0), (False, 1)):
+        stream = io.StringIO()
+        sink = ConsoleSink(brief=brief, stream=stream)
+        sink.open(identity=type("I", (), {"master_seed": 1})(), config_json="{}", run_dir=tmp_path)  # type: ignore[arg-type]
+        assert len(stream.getvalue().splitlines()) == lines
+
+
 def test_the_env_function_is_in_the_identity_and_nothing_else_moves(tmp_path: Path) -> None:
     import msgspec
 
