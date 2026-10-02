@@ -50,6 +50,7 @@ from .layout import (
     STATE_OBS_READY,
     BufferHandle,
     ControlLayout,
+    checked_segment_name,
     control_segment_name,
     read_error,
 )
@@ -182,7 +183,7 @@ class ProcessRolloutSource(RolloutSourceBase):
         while True:
             try:
                 segment = shared_memory.SharedMemory(
-                    create=True, size=layout.total_bytes, name=name
+                    create=True, size=layout.total_bytes, name=checked_segment_name(name)
                 )
                 break
             except FileExistsError:

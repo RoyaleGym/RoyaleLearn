@@ -53,7 +53,12 @@ from ..api.buffer import ExperienceBuffer
 from ..api.policy import ObsBatch
 from ..api.rollout import EPISODE_END_NONE, GROUP_DEAD, GROUP_LEARNER
 from ..errors import CheckpointFormatError
-from ..rollout.layout import BufferHandle, BufferLayout, buffer_segment_name
+from ..rollout.layout import (
+    BufferHandle,
+    BufferLayout,
+    buffer_segment_name,
+    checked_segment_name,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.buffer import ObsCodec
@@ -333,7 +338,7 @@ class RectBuffer(ExperienceBuffer):
             row_bytes=codec.row_bytes(spec),
             codec_version=codec.codec_version,
         )
-        self._name = segment_name or buffer_segment_name(run_id)
+        self._name = checked_segment_name(segment_name or buffer_segment_name(run_id))
         self.shm = shared_memory.SharedMemory(
             name=self._name, create=True, size=self.layout.total_bytes
         )

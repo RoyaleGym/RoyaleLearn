@@ -1488,11 +1488,11 @@ Notes an implementer needs:
 `LAYOUT_VERSION: int = 1`:
 
 ```
-Segment A   "royalelearn-buf-<run_id>"          the experience buffer: learner-owned, worker-written
+Segment A   "rlb-<run_id[:8]>-<pid>-<n>"          the experience buffer: learner-owned, worker-written
     header    128 B    magic, LAYOUT_VERSION, cycles, n_slots, row_bytes, obs offsets, codec_version
     obs       (T+1) * R * row_bytes             the rectangle; index(t, r) = t * R + r
 
-Segment B   "royalelearn-ctl-<run_id>-<w>"      one per worker, covering all its shards
+Segment B   "rlc-<run_id[:8]>-<w>"               one per worker, covering all its shards
     per shard, per parity p in {0, 1}:
         control  64 B    state u32 | cycle u64 | n_slots u32 | err_code u32 | err_len u32 | t_env_ns u64
         error   512 B    the child's traceback, utf-8

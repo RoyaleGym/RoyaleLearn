@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- Runs on macOS: shared-memory segment names are at most 30 characters (macOS refuses longer
+  ones), and a longer name is refused on every platform.
+
 ## 0.4.1
 
 - A `Learner` made again on the same `save_dir` with other training settings (learning rates,

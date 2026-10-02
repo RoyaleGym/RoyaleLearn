@@ -8,12 +8,12 @@ against the Python worker is its acceptance criterion.
 
 Two segments:
 
-Segment A, one per run, ``royalelearn-buf-<run_id>``
+Segment A, one per run, ``rlb-<run_id[:8]>``
     a 128-byte header and then the experience rectangle itself -- the learner owns it, the
     workers write observation rows into it, and the learner never copies an observation on the
     CPU except into its pinned staging ring.
 
-Segment B, one per worker, ``royalelearn-ctl-<run_id>-<w>``
+Segment B, one per worker, ``rlc-<run_id[:8]>-<w>``
     the scalars and control words of every shard that worker holds, double-buffered by parity
     so that the parent can be reading the round it was handed while the child fills the next.
 
@@ -54,6 +54,7 @@ __all__ = [
     "HEADER",
     "LAYOUT_VERSION",
     "MAGIC",
+    "MAX_SEGMENT_NAME",
     "PARITIES",
     "PLAN",
     "SCALARS",
@@ -68,6 +69,7 @@ __all__ = [
     "ControlLayout",
     "Record",
     "buffer_segment_name",
+    "checked_segment_name",
     "control_segment_name",
     "read_error",
     "write_error",
@@ -254,12 +256,32 @@ def _aligned(offset: int) -> int:
     return (offset + ALIGN - 1) // ALIGN * ALIGN
 
 
+#: The longest segment name, in characters: macOS caps a POSIX shared-memory name at 31 bytes
+#: with the leading slash Python adds (PSHMNAMLEN), and refuses a longer one when it is created.
+MAX_SEGMENT_NAME = 30
+
+
+def checked_segment_name(name: str) -> str:
+    """``name``, or a ``ValueError`` if macOS would refuse it -- raised on every platform, so a
+    name too long is found by whichever machine runs first, not only by a Mac."""
+    if len(name) > MAX_SEGMENT_NAME:
+        raise ValueError(
+            f"shared-memory segment name {name!r} is {len(name)} characters; macOS refuses a "
+            f"name past {MAX_SEGMENT_NAME} (31 with its slash)"
+        )
+    return name
+
+
 def buffer_segment_name(run_id: str) -> str:
-    return f"royalelearn-buf-{run_id}"
+    """The run's buffer, by the first 8 characters of its id. The coordinator adds its process
+    id and a counter, which is what makes the name unique."""
+    return f"rlb-{run_id[:8]}"
 
 
 def control_segment_name(run_id: str, worker: int) -> str:
-    return f"royalelearn-ctl-{run_id}-{worker}"
+    """One worker's control segment. A stale segment of the same name makes the farm retry
+    under ``<name>-<attempt>``."""
+    return f"rlc-{run_id[:8]}-{worker}"
 
 
 def write_error(view: memoryview, text: str) -> int:
