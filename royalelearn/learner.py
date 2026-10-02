@@ -60,19 +60,40 @@ def _dotted(env_fn: Any) -> str:
     return f"{module}.{name}"
 
 
-def _env_spec(env_fn: Any, path: str) -> cfg.EnvFactorySpec:
-    """The env spec of a run whose environments ``env_fn`` builds, describing what it built."""
+#: The file in ``save_dir`` that records what ``build_env`` built, and what each part a user
+#: edits is called when it changes. The engine's own build is checked by the run identity.
+ENVIRONMENT_FILE = "environment.json"
+ENVIRONMENT_PARTS = {
+    "reward_fn": "the reward",
+    "state_mutator": "the decks",
+    "obs_builder": "the observation",
+    "action_parser": "the actions",
+    "termination_cond": "when a battle ends",
+    "truncation_cond": "when a battle is cut off",
+    "decision_ms": "the decision rate",
+    "reveal": "what the bot sees of its opponent",
+}
+
+
+def _env_spec(env_fn: Any, path: str) -> tuple[cfg.EnvFactorySpec, dict[str, Any]]:
+    """The env spec of a run whose environments ``env_fn`` builds, describing what it built, and
+    the parts of the env's own ``config()`` a user edits in ``build_env``."""
     env = env_fn()
     try:
         engine = type(env.engine)
-        decision_ms = int(env.config().get("decision_ms", 500))
+        config = env.config()
+        decision_ms = int(config.get("decision_ms", 500))
         truncation = _truncation(env.truncation)
     finally:
         env.close()
+    parts = msgspec.json.decode(
+        msgspec.json.encode({key: config.get(key) for key in ENVIRONMENT_PARTS})
+    )
     spec = cfg.default_env_spec(f"{engine.__module__}.{engine.__qualname__}")
-    return msgspec.structs.replace(
+    spec = msgspec.structs.replace(
         spec, env_fn=path, decision_ms=decision_ms, truncation=truncation
     )
+    return spec, parts
 
 
 def _truncation(condition: Any) -> list[Any]:
@@ -339,13 +360,14 @@ class Learner:
         self._env_fn_path = path
         self._settings = settings
         self._config: cfg.RunConfig | None = None
+        self._environment: dict[str, Any] = {}
 
     @property
     def config(self) -> cfg.RunConfig:
         """The whole run's config, every setting spelled out (the env is built once to read)."""
         if self._config is None:
             settings = dict(self._settings)
-            settings["env"] = _env_spec(self.build_env, self._env_fn_path)
+            settings["env"], self._environment = _env_spec(self.build_env, self._env_fn_path)
             config = cfg.RunConfig(**settings)
             if self._extensions:
                 from .extensions import with_sections
@@ -386,6 +408,10 @@ class Learner:
         self._register_main()
         self.resumed_from = latest
         config = self.config
+        if latest is not None:
+            self._say_what_changed()
+        (self.save_dir / ENVIRONMENT_FILE).parent.mkdir(parents=True, exist_ok=True)
+        (self.save_dir / ENVIRONMENT_FILE).write_bytes(msgspec.json.encode(self._environment))
         print(
             f"training in {self.save_dir} on {config.env.engine.cls.rsplit('.', 1)[-1]}: "
             f"{config.rollout.games_per_worker} battles at once, a line every "
@@ -432,6 +458,28 @@ class Learner:
             self._model = run.model
             self._spec = run.spec
         return run
+
+    def _say_what_changed(self) -> None:
+        """One line when ``build_env`` builds another environment than the run's last one.
+
+        A notice and not a refusal: training an existing bot on a new reward or deck is a thing
+        to do on purpose. Done by mistake, it is the line that says so.
+        """
+        record = self.save_dir / ENVIRONMENT_FILE
+        if not record.is_file():
+            return
+        before = msgspec.json.decode(record.read_bytes())
+        changed = [
+            name
+            for key, name in ENVIRONMENT_PARTS.items()
+            if key in before and before[key] != self._environment.get(key)
+        ]
+        if changed:
+            print(
+                f"build_env makes a different environment from this run's last one: "
+                f"{', '.join(changed)}. The bot carries on and learns from the new one; to start a "
+                "new bot instead, give it another save_dir."
+            )
 
     def _register_main(self) -> None:
         """Make a ``build_env`` from ``__main__`` findable by its path.

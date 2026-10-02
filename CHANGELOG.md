@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3
+
+- A run carried on from `save_dir` with another environment from `build_env` (the reward, the
+  decks, the observation, the actions, when a battle ends) says so in one line, naming what
+  changed. The run's folder keeps `environment.json` for it.
+
 ## 0.4.2
 
 - Runs on macOS: shared-memory segment names are at most 30 characters (macOS refuses longer

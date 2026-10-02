@@ -482,3 +482,41 @@ def test_a_stopped_run_and_its_checkpoints_load_as_a_bot(tmp_path: Path) -> None
         assert bool(np.asarray(obs["blue"]["action_mask"])[bot(obs["blue"])])
     with pytest.raises(PreflightError, match="saved bot"):
         Learner.load_policy(tmp_path)
+
+
+# -- carrying a run on with another environment ------------------------------------------------
+
+
+def build_env_crowns():
+    """``build_env`` with another reward: the same run folder, a different environment."""
+    from royalegym import ClashParallelEnv, CrownReward, MockEngine
+    from royalegym.done_condition import GameOverCondition, StepLimitCondition
+
+    return ClashParallelEnv(
+        MockEngine(),
+        reward_fn=CrownReward(),
+        termination_cond=GameOverCondition(),
+        truncation_cond=StepLimitCondition(6),
+    )
+
+
+def test_a_changed_environment_is_named_when_a_run_carries_on(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save = tmp_path / "run"
+    Learner(build_env, n_envs=2, device="cpu", save_dir=save, **TINY).learn(total_steps=32)
+    assert (save / "environment.json").is_file()
+    Learner(build_env, n_envs=2, device="cpu", save_dir=save, **TINY).learn(total_steps=48)
+    assert "different environment" not in capsys.readouterr().out
+    # The same build_env, edited between two runs: the same name builds another reward.
+    import sys
+
+    module = sys.modules[build_env.__module__]
+    build_env_crowns.__qualname__ = build_env_crowns.__name__ = "build_env"
+    monkeypatch.setattr(module, "build_env", build_env_crowns)
+    changed = Learner(build_env_crowns, n_envs=2, device="cpu", save_dir=save, **TINY)
+    changed.learn(total_steps=64)
+    assert changed.resumed_from is not None
+    out = capsys.readouterr().out
+    assert "the reward" in out and "another save_dir" in out, out
+    assert "the decks" not in out
