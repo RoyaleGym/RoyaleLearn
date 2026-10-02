@@ -121,7 +121,7 @@ def test_a_package_is_named_by_the_content_of_its_files(tmp_path: Path) -> None:
     folder = Path(module.__file__).parent
     first = package_content_digest(module)
     assert first == package_content_digest(module) and len(first) == 64
-    (folder / "__pycache__").mkdir()
+    (folder / "__pycache__").mkdir(exist_ok=True)  # the import may have made it already
     (folder / "__pycache__" / "x.pyc").write_bytes(b"cache")
     assert package_content_digest(module) == first, "a compiled cache moved the name"
     (folder / "more.py").write_text("y = 1\n", encoding="utf-8")
