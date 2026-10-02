@@ -31,6 +31,7 @@ from .version import __version__, git_describe
 # Resolution is deferred so that the import cost and the torch dependency of a name are
 # paid only by the caller that asks for it.
 _EXPORTS: dict[str, tuple[str, str | None]] = {
+    "Learner": (".learner", "Learner"),
     "LearningCoordinator": (".coordinator", "LearningCoordinator"),
     "RunConfig": (".config", "RunConfig"),
     "load_config": (".config", "load_config"),

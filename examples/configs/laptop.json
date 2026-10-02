@@ -40,7 +40,8 @@
         }
       }
     ],
-    "decision_ms": 500
+    "decision_ms": 500,
+    "env_fn": null
   },
   "eval_env": null,
   "extra_component_modules": [],

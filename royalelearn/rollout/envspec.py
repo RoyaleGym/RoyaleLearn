@@ -184,6 +184,8 @@ def env_value_digest(spec: EnvFactorySpec, extra_modules: tuple[str, ...] = ()) 
             "termination": [component(item) for item in spec.termination],
             "truncation": [component(item) for item in spec.truncation],
             "decision_ms": spec.decision_ms,
+            # Only when set, so every digest of a component-built environment is unchanged.
+            **({"env_fn": spec.env_fn} if spec.env_fn is not None else {}),
         }
     )
 
@@ -240,6 +242,10 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     termination: list[ComponentSpec]
     truncation: list[ComponentSpec] = msgspec.field(default_factory=list)
     decision_ms: int = 500
+    #: A top-level function returning a built ``ClashParallelEnv``, by its dotted path
+    #: (``module.function``), as ``royalelearn.Learner`` takes it. When set, it builds every env
+    #: and the components above only describe it; None builds them from the components.
+    env_fn: str | None = None
 
     def digest(self) -> str:
         """sha256 of the canonical JSON of this spec."""
@@ -272,6 +278,13 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         """
         del viser, recorder
         from royalegym.env import EnvFactory
+
+        if self.env_fn is not None:
+            import functools
+
+            return functools.partial(
+                _env_from_fn, self.env_fn, tuple(self.truncation), tuple(extra_modules)
+            )
 
         recipe: dict[str, Any] = {
             "engine": self.engine.recipe(extra_modules),
@@ -347,6 +360,29 @@ class EnvFactorySpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         from royalegym.done_condition import AnyCondition
 
         return (AnyCondition, {"conditions": [s.build(extra_modules) for s in specs]})
+
+
+def _env_from_fn(
+    path: str, truncation: tuple[ComponentSpec, ...], extra_modules: tuple[str, ...]
+) -> Any:
+    """One env from an ``env_fn`` spec, its truncation replaced by the spec's.
+
+    The spec's ``truncation`` is the env's for every env a run builds from the function, so the
+    places that change it on the spec -- an evaluation env without a step limit, the preflight's
+    battle played to its end -- change it for these envs too. ``royalelearn.Learner`` writes the
+    function's own truncation into the spec, so a training env is what the function built.
+    """
+    env = resolve_component(path, extra_modules)()
+    conditions = [spec.build(extra_modules) for spec in truncation]
+    if not conditions:
+        env.truncation = None
+    elif len(conditions) == 1:
+        env.truncation = conditions[0]
+    else:
+        from royalegym.done_condition import AnyCondition
+
+        env.truncation = AnyCondition(conditions=conditions)
+    return env
 
 
 #: What to run when the engine's compiled data and its data files disagree.

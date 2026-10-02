@@ -207,10 +207,15 @@ class ConsoleSink(MetricsSink):
 
     FORMAT_VERSION = 1
 
-    def __init__(self, *, every: int = 1, width: int = 34, stream: Any = None) -> None:
+    def __init__(
+        self, *, every: int = 1, width: int = 34, stream: Any = None, brief: bool = False
+    ) -> None:
         self.every = max(1, int(every))
         self.width = int(width)
         self.stream = stream
+        #: One line an iteration instead of the block: the iteration, the steps so far, the
+        #: battles that finished, the crowns taken minus conceded per battle and the seconds.
+        self.brief = bool(brief)
         self._iterations = 0
 
     def open(self, *, identity: RunIdentity, config_json: str, run_dir: Path) -> None:
@@ -219,6 +224,9 @@ class ConsoleSink(MetricsSink):
     def write(self, row: MetricRow) -> None:
         self._iterations += 1
         if self._iterations % self.every:
+            return
+        if self.brief:
+            self._print(brief_line(row))
             return
         groups: dict[str, list[tuple[str, Any]]] = {}
         for key, value in row.items():
@@ -244,6 +252,19 @@ class ConsoleSink(MetricsSink):
 
     def _print(self, line: str) -> None:
         print(line, file=self.stream)
+
+
+def brief_line(row: MetricRow) -> str:
+    """One iteration in one line, for the console's ``brief`` form."""
+    crowns = row.get("env/crown_diff")
+    crowns_text = "     -" if crowns is None else f"{float(crowns):+6.2f}"  # type: ignore[arg-type]
+    return (
+        f"update {int(row.get('run/iteration', 0)):>5}"  # type: ignore[arg-type]
+        f"  steps {int(row.get('run/cumulative_timesteps', 0)):>11,}"  # type: ignore[arg-type]
+        f"  battles {int(row.get('env/episodes_completed', 0) or 0):>4}"  # type: ignore[arg-type]
+        f"  crowns {crowns_text} a battle"
+        f"  {float(row.get('time/iteration', 0.0) or 0.0):5.0f} s"  # type: ignore[arg-type]
+    )
 
 
 class CompositeSink(MetricsSink):
