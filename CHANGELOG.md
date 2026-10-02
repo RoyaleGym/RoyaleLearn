@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - `ladder.opponent_mode` and `ladder.release_mode` take `stochastic`, `argmax`, or a decode of your
   own: `plugin:<module>:<function>`, called with a batch's masked log-probabilities, mask and
-  observation vector, returning one legal action per row. No other decode is built in.
+  observation vector, returning one legal action per row. No other decode is built in, and a
+  config that names another is refused.
+- `royalelearn.extensions` adds `LearningCoordinator`, `SCRIPTED_NAMES` and `build_opponent`, for
+  add-ons such as RoyaleImitate's recording and cloning.
 
 ## 0.4.3
 
