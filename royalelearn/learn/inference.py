@@ -44,7 +44,7 @@ from ..api.policy import ObsBatch
 from ..api.rollout import GROUP_DEAD, GROUP_LEARNER, GROUP_SCRIPTED
 from ..seeding import ACT_CYCLE, derive_generator, stream_path
 from .buffer import _StagingRing
-from .decode import STOCHASTIC, decode_actions, parse_mode
+from .decode import GTAUCAP, STOCHASTIC, decode_actions, elixir_at_cap, parse_mode
 from .distribution import MaskedCategorical, noop_checked_upstream, noop_violation_message
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -357,12 +357,14 @@ class BatchedInference:
                 actions = distribution.sample(uniforms)
             else:
                 spec = self.buffer.spec
+                capped = parse_mode(mode)[0] == GTAUCAP
                 actions = decode_actions(
                     distribution,
                     mode,
                     uniforms,
                     hand_size=spec.hand_size,
                     tiles=spec.tiles[0] * spec.tiles[1],
+                    at_cap=elixir_at_cap(spec, obs.vector) if capped else None,
                 )
             host = _numpy(torch.cat([actions, _noop_flag(obs.mask)]), np.int64)
         _refuse_without_noop(host, obs.mask)

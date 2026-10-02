@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `gtaucap:<x>`, a decode mode for `ladder.opponent_mode` and `ladder.release_mode`: `gtau:<x>`, and
+  it also plays whenever the seat's elixir is full.
+
 ## 0.2.0
 
 - `Learner(build_env).learn(total_steps=...)`: train a bot in one call, with defaults that run on a

@@ -104,11 +104,12 @@ class EvalActors:
         """
         import torch
 
-        from ..learn.decode import decode_actions
+        from ..learn.decode import GTAUCAP, decode_actions, elixir_at_cap, parse_mode
         from ..learn.distribution import MaskedCategorical
 
         # This policy's own frames, not the resolver's. See the module docstring.
         history: list[dict[str, np.ndarray]] = []
+        capped = parse_mode(self.release_mode)[0] == GTAUCAP
 
         def act(obs: Mapping[str, Any], uniform: float, _rng: Any) -> int:
             batch = self.obs_batch(obs, history)
@@ -121,6 +122,7 @@ class EvalActors:
                     draw,
                     hand_size=self.spec.hand_size,
                     tiles=self.spec.tiles[0] * self.spec.tiles[1],
+                    at_cap=elixir_at_cap(self.spec, batch.vector) if capped else None,
                 )
                 return int(chosen[0].item())
 

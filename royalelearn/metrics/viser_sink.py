@@ -332,6 +332,9 @@ class ViserSink(MetricsSink):
             if self.unavailable is not None and now < self._retry_at:
                 return
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # macOS caps one datagram at the send buffer, 9216 bytes by default.
+            with contextlib.suppress(OSError):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
             try:
                 sock.bind((self.host, self.port))
             except OSError as exc:
