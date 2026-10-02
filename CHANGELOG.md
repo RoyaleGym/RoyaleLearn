@@ -5,6 +5,10 @@
 - A `Learner` made again on the same `save_dir` with other training settings (learning rates,
   epochs, batch sizes, the entropy bonus, the discount) carries the run on and prints what
   changed. Another network, environment or opponent setup is refused, saying so in words.
+- Ctrl-C during `learner.learn()` stops after the current update, writes a checkpoint and returns,
+  so the script carries on (to `learner.save`, say). A second Ctrl-C stops at once.
+- `Learner.load_policy` loads a run's folder (its newest checkpoint) or one checkpoint, as well as
+  a folder `learner.save` wrote.
 
 ## 0.4.0
 

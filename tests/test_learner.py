@@ -8,6 +8,7 @@ environment's own observation, and refuses what it cannot run, saying what to do
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -400,3 +401,84 @@ def test_a_run_with_another_network_is_refused_in_words(tmp_path: Path) -> None:
     with pytest.raises(PreflightError, match="another save_dir") as refused:
         wider.learn(total_steps=64)
     assert "arch_digest" in str(refused.value)
+
+
+# -- stopping and watching a stopped run -------------------------------------------------------
+
+
+def _ctrl_c_on_iterations(monkeypatch: pytest.MonkeyPatch, presses: set[int]) -> None:
+    """Press Ctrl-C at the start of the given iterations (1 is the first)."""
+    import signal
+
+    from royalelearn.coordinator import LearningCoordinator
+
+    original = LearningCoordinator._iterate
+    calls = {"n": 0}
+
+    def iterate(self: Any, started: float) -> str:
+        calls["n"] += 1
+        if calls["n"] in presses:
+            signal.raise_signal(signal.SIGINT)
+        return original(self, started)
+
+    monkeypatch.setattr(LearningCoordinator, "_iterate", iterate)
+
+
+def test_ctrl_c_stops_after_the_update_with_a_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from royalelearn.checkpoint import DirCheckpointStore
+
+    _ctrl_c_on_iterations(monkeypatch, {1})
+    save = tmp_path / "run"
+    learner = Learner(build_env, n_envs=2, device="cpu", save_dir=save, **TINY)
+    try:
+        learner.learn(total_steps=10_000)
+    except KeyboardInterrupt:
+        pytest.fail("Ctrl-C reached the script: the run did not turn it into a stop")
+    assert learner.steps == 16, "the run went on past the update Ctrl-C was pressed in"
+    latest = DirCheckpointStore(save).latest()
+    assert latest is not None and latest.name.endswith("16")
+    assert "Ctrl-C" in capsys.readouterr().out
+    learner.save(tmp_path / "bot")  # the script carries on after learn() returns
+
+
+def test_a_second_ctrl_c_stops_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+
+    from royalelearn.coordinator import LearningCoordinator
+
+    original = LearningCoordinator._iterate
+
+    def pressed_twice(self: Any, started: float) -> str:
+        signal.raise_signal(signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
+        return original(self, started)
+
+    monkeypatch.setattr(LearningCoordinator, "_iterate", pressed_twice)
+    learner = Learner(build_env, n_envs=2, device="cpu", save_dir=tmp_path / "run", **TINY)
+    with pytest.raises(KeyboardInterrupt):
+        learner.learn(total_steps=10_000)
+    assert learner.steps == 0
+
+
+def test_a_stopped_run_and_its_checkpoints_load_as_a_bot(tmp_path: Path) -> None:
+    import numpy as np
+
+    from royalelearn.checkpoint import DirCheckpointStore
+
+    save = tmp_path / "run"
+    learner = Learner(build_env, n_envs=2, device="cpu", save_dir=save, **TINY)
+    learner.learn(total_steps=32)
+    learner.save(tmp_path / "bot")
+    latest = DirCheckpointStore(save).latest()
+    assert latest is not None
+    env = build_env()
+    obs, _ = env.reset(seed=4)
+    saved = Learner.load_policy(tmp_path / "bot", greedy=True)
+    for where in (save, latest):
+        bot = Learner.load_policy(where, greedy=True)
+        assert bot(obs["blue"]) == saved(obs["blue"])
+        assert bool(np.asarray(obs["blue"]["action_mask"])[bot(obs["blue"])])
+    with pytest.raises(PreflightError, match="saved bot"):
+        Learner.load_policy(tmp_path)

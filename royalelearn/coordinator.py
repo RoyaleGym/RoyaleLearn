@@ -696,6 +696,7 @@ class _Control:
         self.printer = printer or (lambda _line: None)
         self._previous: Any = None
         self._installed = False
+        self._stopping = False
         if install_signal:
             self._install()
 
@@ -707,8 +708,17 @@ class _Control:
             self._installed = False
 
     def _on_sigint(self, _signum: int, _frame: Any) -> None:
+        if self._stopping:
+            # A second press means now: what the first one asked to finish is abandoned, and the
+            # loop's own handler makes its emergency save on the way out.
+            self.close()
+            raise KeyboardInterrupt
+        self._stopping = True
         self.pending = "q"
         self.resume.set()
+        self.printer(
+            "Ctrl-C: stopping after this update, with a checkpoint. Press it again to stop now."
+        )
 
     def poll(self) -> str:
         """The next command, or the empty string. One stat call per round."""

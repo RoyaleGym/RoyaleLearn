@@ -100,7 +100,7 @@ def _truncation(condition: Any) -> list[Any]:
 
 def _quiet(line: str) -> None:
     """The start-up report, cut to what a person training a first bot wants to see."""
-    if line.startswith(("checkpoint", "device")):
+    if line.startswith(("checkpoint", "device", "Ctrl-C")):
         print(line)
 
 
@@ -421,10 +421,12 @@ class Learner:
             device=self.device,
             resume=latest,
             run_dir=self.save_dir,
-            install_signal_handler=False,
             **kwargs,
         )
         with run:
+            # What a bot is besides its weights, beside the checkpoints, so that a run stopped
+            # with Ctrl-C, or killed, loads as a bot from its folder.
+            self._write_record(self.save_dir, run.spec)
             run.learn(until_timesteps=total_steps)
             self.steps = int(run.cumulative_timesteps)
             self._model = run.model
@@ -460,14 +462,44 @@ class Learner:
         folder = Path(path)
         folder.mkdir(parents=True, exist_ok=True)
         (folder / WEIGHTS_FILE).write_bytes(_encode_tensors(self._model.actor.state_dict()))
-        record = {"format": 1, "env_spec": self._spec, "net": self.config.net}
-        (folder / POLICY_FILE).write_bytes(msgspec.json.encode(record))
+        self._write_record(folder, self._spec)
         return folder
+
+    def _write_record(self, folder: Path, spec: Any) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
+        record = {"format": 1, "env_spec": spec, "net": self.config.net}
+        (folder / POLICY_FILE).write_bytes(msgspec.json.encode(record))
 
     @staticmethod
     def load_policy(path: str | os.PathLike[str], *, greedy: bool = False) -> Bot:
         """A bot saved by ``save``: call it on one seat's observation to get its action."""
         return Bot.load(path, greedy=greedy)
+
+
+#: Where a checkpoint keeps the actor's weights.
+CHECKPOINT_ACTOR = Path("actor_critic") / WEIGHTS_FILE
+
+
+def _bot_files(folder: Path) -> tuple[Path, Path]:
+    """``(policy.json, weights)`` for a saved bot, a run's folder (its newest checkpoint) or one
+    checkpoint of a run."""
+    from .checkpoint import DirCheckpointStore
+
+    record, weights = folder / POLICY_FILE, folder / WEIGHTS_FILE
+    if (folder / CHECKPOINT_ACTOR).is_file():
+        record, weights = folder.parent.parent / POLICY_FILE, folder / CHECKPOINT_ACTOR
+    elif record.is_file() and not weights.is_file():
+        latest = DirCheckpointStore(folder).latest() if (folder / "checkpoints").is_dir() else None
+        if latest is None:
+            raise PreflightError(f"{folder} holds a run with no checkpoint yet: train it longer")
+        weights = latest / CHECKPOINT_ACTOR
+    if not (record.is_file() and weights.is_file()):
+        raise PreflightError(
+            f"{folder} is not a saved bot, a run's folder or one of its checkpoints: it needs "
+            f"{POLICY_FILE} and the weights. learner.save(folder) writes a saved bot, and a run's "
+            "save_dir loads as its newest checkpoint"
+        )
+    return record, weights
 
 
 class Bot:
@@ -494,16 +526,18 @@ class Bot:
         from .learn.actor_critic import ClashActor
         from .learn.nets import ClashTrunk, build_policy_head, resolve_dtype
 
-        folder = Path(path)
-        if not (folder / POLICY_FILE).is_file():
-            raise PreflightError(f"{folder} is not a saved bot: it has no {POLICY_FILE}")
-        record = msgspec.json.decode((folder / POLICY_FILE).read_bytes())
+        record_file, weights = _bot_files(Path(path))
+        record = msgspec.json.decode(record_file.read_bytes())
         spec = msgspec.convert(record["env_spec"], EnvSpec)
         net = msgspec.convert(record["net"], cfg.NetConfig)
         actor = ClashActor(
             ClashTrunk(spec, net), build_policy_head(spec, net), resolve_dtype(net.autocast_dtype)
         )
-        actor.load_state_dict(_decode_tensors((folder / WEIGHTS_FILE).read_bytes(), "cpu"))
+        state = _decode_tensors(weights.read_bytes(), "cpu")
+        # A checkpoint names the actor's tensors from the actor-critic pair: "actor.trunk...".
+        if state and all(name.startswith("actor.") for name in state):
+            state = {name.removeprefix("actor."): tensor for name, tensor in state.items()}
+        actor.load_state_dict(state)
         actor.eval()
         return cls(actor, spec, net, greedy=greedy)
 
