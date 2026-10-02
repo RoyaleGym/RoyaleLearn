@@ -54,8 +54,9 @@ CHECKER = Path(__file__).resolve().parent / "_shell_fences.py"
 #: contributor is not the same promise. ``running.md`` is here because it is the page the
 #: README sends somebody to the first time a run misbehaves, and the block it opens with
 #: is the second thing they will paste. ``extensions.md`` tells a reader to install a
-#: package of their own, and they paste that command too.
-READER_PAGES = ("README.md", "docs/running.md", "docs/extensions.md")
+#: package of their own, and they paste that command too. ``guide.md`` is what the README held
+#: before it was cut to a page, and its commands are the same promise.
+READER_PAGES = ("README.md", "docs/running.md", "docs/extensions.md", "docs/guide.md")
 
 
 @pytest.mark.parametrize("page", READER_PAGES)
