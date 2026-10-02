@@ -72,6 +72,7 @@
     "coord_conv": true,
     "separate_trunks": true,
     "policy_head": "pointer",
+    "factored_act_init": 0.1,
     "logit_scale": "rsqrt_c",
     "init": "orthogonal",
     "noop_bias": 0.0,
@@ -99,6 +100,7 @@
       "end": 0.0,
       "over_env_steps": 10000000
     },
+    "entropy_coef_stages": null,
     "max_grad_norm": 0.5,
     "lr_actor": 0.0002,
     "lr_critic": 0.0002,

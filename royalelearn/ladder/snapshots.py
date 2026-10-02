@@ -128,11 +128,16 @@ class DiskSnapshotStore(SnapshotStore):
         folder = self.root / digest
         folder.mkdir(parents=True, exist_ok=True)
         (folder / WEIGHTS_NAME).write_bytes(payload)
+        template = self.template or SnapshotSpec(snapshot_id=snapshot_id)
         spec = msgspec.structs.replace(
-            self.template or SnapshotSpec(snapshot_id=snapshot_id),
+            template,
             snapshot_id=snapshot_id,
             step=int(meta.get("step", 0)),
-            meta={key: value for key, value in meta.items() if key != "step"},
+            # The run's own facts (a factored head's) first, then this snapshot's.
+            meta={
+                **template.meta,
+                **{key: value for key, value in meta.items() if key != "step"},
+            },
         )
         (folder / SPEC_NAME).write_bytes(msgspec.json.encode(spec))
         self._index[snapshot_id] = digest

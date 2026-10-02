@@ -4,6 +4,9 @@
 
 - `gtaucap:<x>`, a decode mode for `ladder.opponent_mode` and `ladder.release_mode`: `gtau:<x>`, and
   it also plays whenever the seat's elixir is full.
+- `net.policy_head = "factored"`: the policy as three stages (wait or act, then which card or button,
+  then which tile) over the same action space, with `net.factored_act_init` for the gate's start.
+- `ppo.entropy_coef_stages`: one entropy coefficient for each of those three stages.
 
 ## 0.2.0
 

@@ -201,6 +201,25 @@ METRICS: dict[str, MetricSpec] = {
         "2026-09-23 do not carry this key, and that norm is how to join them to one "
         "that does.",
     ),
+    "ppo/entropy_gate": _m(
+        "nats",
+        "The entropy's first chain-rule term: wait against act. With entropy_candidate and "
+        "entropy_tile it sums to ppo/entropy, over the same rows.",
+    ),
+    "ppo/entropy_candidate": _m(
+        "nats",
+        "The entropy's second term: P(act) times the entropy of which hand slot or ability "
+        "button, given act.",
+    ),
+    "ppo/entropy_tile": _m(
+        "nats",
+        "The entropy's third term: each slot's probability times the entropy of its tile, "
+        "given that slot.",
+    ),
+    "ppo/p_act": _m(
+        "fraction",
+        "Mean P(act), one minus p(no-op), over the rows whose mask offered more than the no-op.",
+    ),
     "ppo/noop_entropy": _m(
         "nats",
         "Binary entropy of play against wait, over the rows whose mask offered more than the "
@@ -926,6 +945,10 @@ CONDITIONAL: dict[str, str] = {
     ),
     "ppo/actor_lr_scale": "the run schedules the actor's learning-rate scale",
     "policy/button_press_rate": "the environment has ability buttons",
+    **dict.fromkeys(
+        ("ppo/entropy_gate", "ppo/entropy_candidate", "ppo/entropy_tile", "ppo/p_act"),
+        "net.policy_head is factored or ppo.entropy_coef_stages is set, and the actor trained",
+    ),
     "ppo/actor_frozen": "the run schedules the actor's learning-rate scale",
     "ppo/ev_at_unfreeze": "this iteration is the first after a frozen stretch",
     "ppo/iterations_since_unfreeze": "the actor has been unfrozen after a frozen stretch",

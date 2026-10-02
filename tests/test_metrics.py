@@ -62,6 +62,11 @@ PRODUCED_ELSEWHERE: dict[str, str] = {
     **{key: "coordinator" for key in schema.METRICS if key.startswith("throughput/")},
     **{key: "coordinator" for key in schema.METRICS if key.startswith("time/")},
     **{key: "coordinator" for key in schema.METRICS if key.startswith("health/")},
+    # only from an update handed the entropy's stages (tests/test_factored_head.py)
+    "ppo/entropy_gate": "PPO update with stages",
+    "ppo/entropy_candidate": "PPO update with stages",
+    "ppo/entropy_tile": "PPO update with stages",
+    "ppo/p_act": "PPO update with stages",
     # per-step counters, reduced in the worker where they are produced
     "policy/noop_rate": "rollout worker",
     # only from an environment with ability buttons (tests/test_ability_buttons.py)

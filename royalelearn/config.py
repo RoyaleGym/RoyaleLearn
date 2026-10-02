@@ -205,7 +205,13 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     coord_conv: bool = True
     #: Makes "the mask and the entropy bonus never touch the critic" structural.
     separate_trunks: bool = True
+    #: "pointer": one logit per action, the no-op's from a pooled summary. "factored": three
+    #: stages -- wait or act, then which hand slot or ability button, then which tile -- whose
+    #: product is the same flat distribution (``learn/nets.py``, ``FactoredPolicyHead``).
     policy_head: str = "pointer"
+    #: The factored head's P(act) at initialisation, set through the gate's bias. A starting
+    #: value and not a shape, so it is left out of ``arch_digest``; the pointer head ignores it.
+    factored_act_init: float = 0.1
     logit_scale: str = "rsqrt_c"
     #: Orthogonal, gain sqrt(2) hidden, 0.01 policy head, 1.0 value head.
     init: str = "orthogonal"
@@ -265,6 +271,11 @@ class PPOConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: sits near 0.94, so a constant coefficient would bias every converged policy toward
     #: overplaying. The alarms outlive the schedule.
     ent_coef_noop: ScheduleSpec = LinearSpec(0.02, 0.0, 10_000_000)
+    #: None: ``ent_coef`` on the whole entropy. Three numbers ``(gate, candidate, tile)``: the
+    #: entropy's chain-rule split -- wait or act, which slot or button given act, which tile given
+    #: the slot, each weighted by the probability of reaching it -- with a coefficient each, in
+    #: place of ``ent_coef``. The three terms sum to the whole entropy, on either policy head.
+    entropy_coef_stages: tuple[float, ...] | None = None
     #: Applied to the actor and the critic parameter sets SEPARATELY.
     max_grad_norm: float = 0.5
     lr_actor: float = 2e-4
@@ -1070,6 +1081,12 @@ def check_consistency(config: RunConfig) -> list[str]:
         )
     if ppo.n_epochs < 1:
         problems.append("ppo.n_epochs must be at least 1")
+    stages = ppo.entropy_coef_stages
+    if stages is not None and (len(stages) != 3 or any(c < 0 for c in stages)):
+        problems.append(
+            f"ppo.entropy_coef_stages {list(stages)} is not three coefficients of 0 or more, "
+            "for the gate, the candidate and the tile entropy, in that order"
+        )
     if ppo.forced_rows not in FORCED_ROW_ARMS:
         problems.append(
             f"ppo.forced_rows {ppo.forced_rows!r} is not one of {', '.join(FORCED_ROW_ARMS)}"

@@ -81,6 +81,7 @@ __all__ = [
     "chunked_critic_pass",
     "clipped_fraction",
     "dual_clipped_fraction",
+    "entropy_bonus",
     "explained_variance",
     "standardise",
     "surrogate",
@@ -295,6 +296,35 @@ def _row_validity(buffer: RectBuffer) -> Tensor:
 # --------------------------------------------------------------------------
 
 
+def entropy_bonus(
+    distribution: Any,
+    ent_coef: float,
+    stages: Sequence[float] | None,
+    *,
+    hand_size: int,
+    tiles: int,
+) -> Tensor:
+    """``(B,)``: what the entropy term rewards on each row, before the sign and the scale.
+
+    ``ent_coef`` on the whole entropy, or with ``ppo.entropy_coef_stages`` set, one coefficient on
+    each of the gate, candidate and tile terms of its chain-rule split
+    (``MaskedCategorical.stage_entropies``), which sum to the whole.
+    """
+    if stages is None:
+        return ent_coef * distribution.entropy()
+    gate, candidate, tile = distribution.stage_entropies(hand_size, tiles)
+    return stages[0] * gate + stages[1] * candidate + stages[2] * tile
+
+
+#: The keys an update handed the entropy's stages adds to its row.
+STAGE_KEYS: tuple[str, ...] = (
+    "ppo/entropy_gate",
+    "ppo/entropy_candidate",
+    "ppo/entropy_tile",
+    "ppo/p_act",
+)
+
+
 class PPOUpdate(Update):
     """The shipped update: a critic pass, GAE, and the epochs over the rectangle.
 
@@ -328,9 +358,19 @@ class PPOUpdate(Update):
         progress: Callable[[str], None] | None = None,
         extra_actor_terms: Sequence[ActorLossTerm] = (),
         freeze: FreezeTracker | None = None,
+        stage_layout: tuple[int, int] | None = None,
     ) -> None:
         #: Said once per epoch while the update runs, because nothing else is said during it.
         self.progress = progress
+        #: ``(hand_size, tiles)`` when the run reads the entropy's three stages -- a factored head,
+        #: or ``ppo.entropy_coef_stages`` -- and None otherwise, when the update computes no stage
+        #: and publishes no stage key.
+        self.stage_layout = stage_layout
+        if config.entropy_coef_stages is not None and stage_layout is None:
+            raise TypeError(
+                "ppo.entropy_coef_stages weights the entropy's three stages, and this update was "
+                "given no stage_layout (hand_size, tiles) to split the action space by"
+            )
         #: Terms extensions add to the actor's loss. Empty, the update adds no operation, no key
         #: and no state.
         self.extra_actor_terms: tuple[ActorLossTerm, ...] = tuple(extra_actor_terms)
@@ -618,6 +658,8 @@ class PPOUpdate(Update):
         )
         result.actor_trained = not self._frozen
         result.extra = self._extra_fields(sched, result.explained_variance)
+        if self.stage_layout is not None and not self._frozen:
+            result.extra.update(diagnostics.stage_fields())
         # A frozen iteration has no KL to observe: the backoff would read the diagnostics'
         # empty 0.0 as a policy that did not move and count it towards nothing.
         if self.backoff is not None and not self._frozen and self.backoff.observe(result.kl):
@@ -697,13 +739,23 @@ class PPOUpdate(Update):
         )
         policy_loss = -dual.mean() * weight
         value_loss = config.vf_coef * mean_squared_error * weight
-        entropy_loss = (
-            -(
-                sched.ent_coef * result.entropy.mean()
-                + sched.ent_coef_noop * result.noop_entropy.mean()
+        stages = self._stages(result.distribution)
+        if config.entropy_coef_stages is None:
+            entropy_loss = (
+                -(
+                    sched.ent_coef * result.entropy.mean()
+                    + sched.ent_coef_noop * result.noop_entropy.mean()
+                )
+                * weight
             )
-            * weight
-        )
+        else:
+            entropy_loss = (
+                -(
+                    self._staged_bonus(stages).mean()
+                    + sched.ent_coef_noop * result.noop_entropy.mean()
+                )
+                * weight
+            )
         loss = policy_loss + value_loss + entropy_loss
         if self.extra_actor_terms:
             if result.distribution is None:
@@ -738,6 +790,7 @@ class PPOUpdate(Update):
                 value_loss=mean_squared_error.detach(),
                 clip_range=config.clip_range,
                 dual_clip_c=config.dual_clip_c,
+                stages=stages,
             )
 
     def _critic_then_the_rows_that_can_move(
@@ -807,14 +860,14 @@ class PPOUpdate(Update):
             entropy, noop_entropy = distribution.entropy(), distribution.noop_entropy()
             logit_std = distribution.logit_std()
             n_legal = distribution.n_legal()
+            stages = self._stages(distribution)
             policy_loss = -dual.sum() * actor_scale
-            entropy_loss = (
-                -(
-                    sched.ent_coef * entropy.sum()
-                    + sched.ent_coef_noop * noop_entropy.sum()
-                )
-                * actor_scale
+            bonus = (
+                sched.ent_coef * entropy.sum()
+                if config.entropy_coef_stages is None
+                else self._staged_bonus(stages).sum()
             )
+            entropy_loss = -(bonus + sched.ent_coef_noop * noop_entropy.sum()) * actor_scale
             actor_loss = policy_loss + entropy_loss
             if self.extra_actor_terms:
                 extra = self._extra_actor_loss(
@@ -851,6 +904,7 @@ class PPOUpdate(Update):
             ratio = advantages = surr = dual = entropy = noop_entropy = empty
             logit_std = empty
             n_legal = minibatch.n_legal[:0]
+            stages = None if self.stage_layout is None else (empty, empty, empty, empty)
         with torch.no_grad():
             # What the skipped rows would have contributed to the surrogate, exactly: their
             # ratio is one, so their clipped surrogate is their own advantage, and the dual
@@ -873,7 +927,28 @@ class PPOUpdate(Update):
                 clip_range=config.clip_range,
                 dual_clip_c=config.dual_clip_c,
                 forced_dual=forced_dual,
+                stages=stages,
             )
+
+    def _stages(self, distribution: Any) -> tuple[Tensor, Tensor, Tensor, Tensor] | None:
+        """``(gate, candidate, tile, p_act)`` per row with the graph attached, or None when the
+        run reads no stage."""
+        if self.stage_layout is None:
+            return None
+        if distribution is None:
+            raise TypeError(
+                f"{type(self.model).__name__}.backprop returned no distribution, and the entropy's "
+                "stages are read off every legal action's log-probability"
+            )
+        hand_size, tiles = self.stage_layout
+        gate, candidate, tile = distribution.stage_entropies(hand_size, tiles)
+        return gate, candidate, tile, 1.0 - distribution.p_noop()
+
+    def _staged_bonus(self, stages: tuple[Tensor, ...] | None) -> Tensor:
+        """``(B,)``: ``ppo.entropy_coef_stages`` on the three terms."""
+        assert stages is not None and self.config.entropy_coef_stages is not None
+        coefs = self.config.entropy_coef_stages
+        return coefs[0] * stages[0] + coefs[1] * stages[1] + coefs[2] * stages[2]
 
     def _extra_actor_loss(
         self,
@@ -1402,6 +1477,9 @@ class _Diagnostics:
         #: own threshold, and is not worth one until something wants it.
         self.ratio_deviation: Tensor | None = None
         self.ratio_value = 0.0
+        #: The entropy's three stages and P(act), summed like the entropy over the rows that had
+        #: a choice. Empty unless the update was handed stages.
+        self._stage_sums: dict[str, Tensor] = {}
 
     def minibatch(
         self,
@@ -1420,6 +1498,7 @@ class _Diagnostics:
         clip_range: float,
         dual_clip_c: float,
         forced_dual: Tensor | None = None,
+        stages: tuple[Tensor, Tensor, Tensor, Tensor] | None = None,
     ) -> None:
         """One minibatch's numbers. Every tensor covers the rows the ACTOR ran on.
 
@@ -1477,6 +1556,10 @@ class _Diagnostics:
         self._sums["noop_entropy"] += (noop_entropy * chose).sum()
         self._sums["forced_rows"] += (n - chose_n)
         self._sums["entropy_normalised"] += ((entropy / legal) * chose).sum()
+        if stages is not None:
+            for name, value in zip(STAGE_KEYS, stages, strict=True):
+                total = (value.detach().to(chose.dtype) * chose).sum()
+                self._stage_sums[name] = self._stage_sums.get(name, 0.0) + total
         self._sums["logit_std"] += (logit_std * chose).sum()
         self._sums["kl"] += kl * chose_n
         self._sums["clip_fraction"] += clip * chose_n
@@ -1487,6 +1570,16 @@ class _Diagnostics:
         self._epoch_kl[index] += kl * chose_n
         self._epoch_clip[index] += clip * chose_n
         self._epoch_n[index] += chose_n
+
+    def stage_fields(self) -> dict[str, float]:
+        """``ppo/entropy_gate``, ``ppo/entropy_candidate``, ``ppo/entropy_tile`` and
+        ``ppo/p_act``, over the rows that had a choice, as ``ppo/entropy`` is."""
+        chose = float(self._chose.item())
+        return {
+            name: float((self._stage_sums[name] / chose).item()) if chose else 0.0
+            for name in STAGE_KEYS
+            if name in self._stage_sums
+        }
 
     def actor_forward(self, rows: int) -> None:
         """One forward the actor ran, and how many rows it was given."""

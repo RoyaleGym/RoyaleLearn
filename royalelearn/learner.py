@@ -302,7 +302,7 @@ class Bot:
         from .api.rollout import EnvSpec
         from .ladder.snapshots import _decode_tensors
         from .learn.actor_critic import ClashActor
-        from .learn.nets import ClashTrunk, PointerPolicyHead, resolve_dtype
+        from .learn.nets import ClashTrunk, build_policy_head, resolve_dtype
 
         folder = Path(path)
         if not (folder / POLICY_FILE).is_file():
@@ -311,7 +311,7 @@ class Bot:
         spec = msgspec.convert(record["env_spec"], EnvSpec)
         net = msgspec.convert(record["net"], cfg.NetConfig)
         actor = ClashActor(
-            ClashTrunk(spec, net), PointerPolicyHead(spec, net), resolve_dtype(net.autocast_dtype)
+            ClashTrunk(spec, net), build_policy_head(spec, net), resolve_dtype(net.autocast_dtype)
         )
         actor.load_state_dict(_decode_tensors((folder / WEIGHTS_FILE).read_bytes(), "cpu"))
         actor.eval()

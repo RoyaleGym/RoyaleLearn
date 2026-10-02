@@ -284,8 +284,9 @@ def test_a_config_an_older_build_wrote_loads_to_the_same_run() -> None:
     # The laptop profile's hash, which moves whenever a field joins the tree: 9b55b7465c98 until
     # ladder.scripted_opponents was added, c3344893bbe0 until ladder.seed_snapshots was,
     # b050051f72d6 until ladder.seat_decks was, 8001a12f5840 until ladder.opponent_mode was,
-    # ed6999f0accf until env.env_fn was.
-    assert cfg.config_hash(loaded).startswith("20e3ce6b03eb")
+    # ed6999f0accf until env.env_fn was, 20e3ce6b03eb until net.factored_act_init and
+    # ppo.entropy_coef_stages were.
+    assert cfg.config_hash(loaded).startswith("cdd7ed1bb5e8")
     assert len(said) == 1
     assert '"imitation": null' in said[0] and "alarms.imitation_handoff_kl" in said[0]
 

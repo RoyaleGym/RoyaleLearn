@@ -1017,6 +1017,12 @@ class LearningCoordinator:
             progress=self.printer,
             extra_actor_terms=self.actor_terms,
             freeze=self.freeze,
+            stage_layout=(
+                (self.spec.hand_size, self.spec.tiles[0] * self.spec.tiles[1])
+                if config.net.policy_head == "factored"
+                or config.ppo.entropy_coef_stages is not None
+                else None
+            ),
         )
         self._build_ladder()
         self.inference = BatchedInference(
@@ -1183,7 +1189,18 @@ class LearningCoordinator:
             frame_stack=self.spec.frame_stack,
             num_cards=self.spec.num_cards,
             vector_size=self.spec.vector_size,
+            meta=self._head_meta(),
         )
+
+    def _head_meta(self) -> dict[str, Any]:
+        """What a factored actor's spec.json says about its head, so that a reader rebuilds the
+        same net from the folder alone. ``arch_digest`` already tells the two heads apart; this
+        names which one, and the gate's starting value the digest leaves out. Empty for the
+        pointer head, so its folders are what they always were."""
+        net = self.config.net
+        if net.policy_head == "pointer":
+            return {}
+        return {"policy_head": net.policy_head, "factored_act_init": net.factored_act_init}
 
     def _build_ladder(self) -> None:
         """The pool, the archive, the fit, the seed set and the gate.
@@ -1345,11 +1362,11 @@ class LearningCoordinator:
     def build_actor(self, device: Any) -> Any:
         """A bare actor of this run's architecture, for a snapshot to load into."""
         from .learn.actor_critic import ClashActor
-        from .learn.nets import ClashTrunk, PointerPolicyHead, resolve_dtype
+        from .learn.nets import ClashTrunk, build_policy_head, resolve_dtype
 
         actor = ClashActor(
             ClashTrunk(self.spec, self.config.net),
-            PointerPolicyHead(self.spec, self.config.net),
+            build_policy_head(self.spec, self.config.net),
             resolve_dtype(self.config.net.autocast_dtype),
         )
         return actor.to(device)

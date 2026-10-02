@@ -1206,10 +1206,11 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `card_embed` | 64 | must equal `channels` | the pointer inner product |
 | `coord_conv` | `true` | | the arena is not translation-invariant: own half, enemy half, the river, the bridges, the tower rects |
 | `separate_trunks` | `true` | | makes "the mask and the entropy bonus never touch the critic" structural |
-| `policy_head` | `"pointer"` | `"pointer"` / `"slot_conv"` / `"flat_mlp"` | the latter two exist as ablations |
+| `policy_head` | `"pointer"` | `"pointer"` / `"factored"` | `factored` writes the same flat log-probabilities as three stages: wait or act, then which hand slot or ability button, then which tile. A slot is a candidate when any of its tiles is legal; with no candidate it waits |
+| `factored_act_init` | 0.1 | probability | the factored head's P(act) at initialisation, through the gate's bias. Not in `arch_digest`: it is a starting value, not a shape. A factored actor's spec.json records it and the head |
 | `logit_scale` | `"rsqrt_c"` | | one over the square root of C on the pointer inner product |
 | `init` | `"orthogonal"` | | gain sqrt(2) hidden, **0.01 policy head**, 1.0 value head |
-| `noop_bias` | 0.0 | logits | self-limiting at init; the formula for when it is needed is in section 8.4 |
+| `noop_bias` | 0.0 | logits | self-limiting at init; the formula for when it is needed is in section 8.4. Refused with the factored head, which has no no-op logit |
 | `autocast_dtype` | `"bfloat16"` | | Ampere bf16 tensor cores; bf16 keeps fp32's exponent range so `finfo.min` masking is safe and no `GradScaler` is needed |
 | `device` | `"cuda"` | | |
 | **`ppo`** | | | |
@@ -1223,6 +1224,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `value_clipping` | `false` | | |
 | `ent_coef` | `Linear(0.01 -> 0.003 over 30e6 env steps)` | | the community range across the three references; exploration matters less as the pool strengthens |
 | `ent_coef_noop` | `Linear(0.02 -> 0.0 over 10e6 env steps)` | | a warm-start guard against no-op collapse, applied to a binary entropy bounded by 0.693 nats, so while it is on it needs a larger coefficient than the joint term. It anneals to zero because `H2(p_noop)` is maximised at `p_noop = 0.5` while a healthy policy sits near 0.94: a constant coefficient would bias every converged policy toward overplaying. The alarms outlive the schedule |
+| `entropy_coef_stages` | null | `[gate, candidate, tile]` | null puts `ent_coef` on the whole entropy. Three numbers put one coefficient on each term of the entropy's chain-rule split -- wait or act; which slot or button given act; which tile given the slot -- in place of `ent_coef`. The terms sum to the whole entropy on either head, and an update that reads them publishes `ppo/entropy_gate`, `ppo/entropy_candidate`, `ppo/entropy_tile` and `ppo/p_act` |
 | `max_grad_norm` | 0.5 | | applied to the actor and the critic parameter sets **separately** |
 | `lr_actor`, `lr_critic` | 2e-4 | | the community moved down from 3e-4 for long runs |
 | `adam_eps` | 1e-5 | | the PPO paper's epsilon, not torch's 1e-8 |

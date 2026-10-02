@@ -37,6 +37,10 @@ from ..api.policy import ActionDistribution
 
 __all__ = ["MaskedCategorical", "noop_checked_upstream"]
 
+#: What ``stage_entropies`` puts in an illegal entry before a log-sum-exp: finite, so that a row
+#: with nothing legal stays finite in value and in gradient, and far below any log-probability.
+_STAGE_FILL = -1e30
+
 #: Set in two places. Inside the update's minibatch loop, after the critic pass has checked the
 #: no-op bit of every cell that loop can train on (docs/harness-spec.md section 18.1, "How a row
 #: is classed, and what checks it"). And in the rollout's forwards, which read the no-op bit back
@@ -173,6 +177,41 @@ class MaskedCategorical(ActionDistribution):
         """
         p = self._logp.exp()
         return -(p * torch.where(self._mask, self._logp, torch.zeros_like(self._logp))).sum(-1)
+
+    def stage_entropies(self, hand_size: int, tiles: int) -> tuple[Tensor, Tensor, Tensor]:
+        """``(gate, candidate, tile)``, each ``(B,)`` float32: the entropy split by the chain rule.
+
+        Read as three choices -- wait or act; given act, which hand slot or ability button; given
+        a slot, which tile -- the entropy is ``H(gate) + P(act) H(candidate | act)
+        + sum_s P(s) H(tile | s)``, and these are those three terms, so they sum to ``entropy()``
+        exactly. They are a function of the flat distribution alone, so they mean the same thing
+        whichever head wrote it. The layout is the no-op, ``hand_size * tiles`` grid actions, then
+        the buttons.
+        """
+        logp, mask = self._logp, self._mask
+        batch = logp.shape[0]
+        grid = 1 + hand_size * tiles
+        # A finite fill and explicit legality rather than -inf: a log-sum-exp over a row with
+        # nothing legal in it is then finite, and so is its gradient, which -inf would make NaN.
+        legal_logp = logp.masked_fill(~mask, _STAGE_FILL)
+        tile_legal = mask[:, 1:grid].reshape(batch, hand_size, tiles)
+        tile_logp = legal_logp[:, 1:grid].reshape(batch, hand_size, tiles)
+        slot_logp = torch.logsumexp(tile_logp, dim=-1)
+        candidate_legal = torch.cat([tile_legal.any(-1), mask[:, grid:]], dim=-1)
+        candidate_logp = torch.cat([slot_logp, legal_logp[:, grid:]], dim=-1)
+        act_legal = candidate_legal.any(-1)
+        act_logp = torch.logsumexp(candidate_logp, dim=-1)
+
+        def plogp(log_p: Tensor, log_q: Tensor, legal: Tensor) -> Tensor:
+            """``p log(p / q)`` from logs, and zero where ``p`` cannot be reached."""
+            ratio = torch.where(legal, log_p - log_q, torch.zeros_like(log_p))
+            return torch.where(legal, log_p.exp() * ratio, torch.zeros_like(log_p))
+
+        zero = torch.zeros_like(act_logp)
+        gate = -(plogp(logp[:, NOOP], zero, mask[:, NOOP]) + plogp(act_logp, zero, act_legal))
+        candidate = -plogp(candidate_logp, act_logp[:, None], candidate_legal).sum(-1)
+        tile = -plogp(tile_logp, slot_logp[..., None], tile_legal).sum(dim=(-2, -1))
+        return gate, candidate, tile
 
     def noop_entropy(self) -> Tensor:
         """``(B,)`` float32: the binary entropy of p(no-op) against p(play anything).

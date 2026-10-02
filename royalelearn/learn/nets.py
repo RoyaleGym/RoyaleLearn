@@ -30,8 +30,9 @@ of the action that was taken, and the whole importance ratio rests on that ident
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
+import msgspec
 import torch
 from torch import Tensor, nn
 
@@ -50,11 +51,15 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..config import ArchSpec
 
 __all__ = [
+    "POLICY_HEADS",
     "ClashTrunk",
     "DefaultNetworkFactory",
+    "FactoredPolicyHead",
+    "FactoredStages",
     "PointerPolicyHead",
     "ResBlock",
     "ValueHead",
+    "build_policy_head",
     "resolve_dtype",
 ]
 
@@ -72,6 +77,13 @@ EMBED_STD: float = 0.02
 #: architecture digest of every run, and so refuse every checkpoint and snapshot on disk, for a
 #: feature most of them never switched on. It enters the digest only when ``card_ids`` exists.
 CARD_ID_EMBED: int = 8
+
+#: What ``NetConfig.policy_head`` may name.
+POLICY_HEADS: tuple[str, ...] = ("pointer", "factored")
+#: The fill the factored head masks its stages with before each ``log_softmax``. Finite, so that
+#: a stage's log-probability plus another's never overflows to -inf on the way to the flat vector,
+#: and far enough below any logit that its probability is exactly zero.
+_STAGE_FILL: float = -1e9
 
 #: What ``NetConfig.autocast_dtype`` may name. float32 means no autocast at all.
 DTYPES: dict[str, torch.dtype] = {
@@ -175,6 +187,38 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
             f"{expected}. The pointer head writes the grid and then one logit per button"
         )
     _logit_scale(arch)
+    if arch.policy_head not in POLICY_HEADS:
+        raise PreflightError(
+            f"net.policy_head {arch.policy_head!r} is not one of {', '.join(POLICY_HEADS)}"
+        )
+    if arch.policy_head == "factored":
+        if arch.noop_bias != 0.0:
+            raise PreflightError(
+                f"net.noop_bias is {arch.noop_bias}, and the factored head has no no-op logit to "
+                "add it to: its gate starts at net.factored_act_init instead"
+            )
+        if not 0.0 < arch.factored_act_init < 1.0:
+            raise PreflightError(
+                f"net.factored_act_init {arch.factored_act_init} is not a probability strictly "
+                "between 0 and 1"
+            )
+
+
+def _arch_for_digest(arch: ArchSpec) -> Any:
+    """The architecture as ``arch_digest`` reads it: every field but ``factored_act_init``.
+
+    That one is where the factored head's gate starts, not a shape or a function of the weights,
+    so a clone made with another value still loads. Leaving it out also keeps the digest of every
+    network built before the field existed exactly what it was. The struct keeps the config's own
+    field order, which is the order the canonical encoding writes a struct in.
+    """
+    fields = [
+        (f.name, f.type, f.default)
+        for f in msgspec.structs.fields(arch)
+        if f.name != "factored_act_init"
+    ]
+    shape = msgspec.defstruct(type(arch).__name__, fields, frozen=True)
+    return shape(**{name: getattr(arch, name) for name, _, _ in fields})
 
 
 def _flat(value: Any) -> list[Any]:
@@ -395,6 +439,109 @@ class PointerPolicyHead(nn.Module):
             _zero_bias(self.buttons)
 
 
+class FactoredStages(NamedTuple):
+    """The factored head's three stages, as float32 log-probabilities.
+
+    ``wait`` and ``act`` are ``(B,)`` and sum to one in probability. ``candidate`` is
+    ``(B, P + K)``: the hand slots, then the ability buttons, given act. ``tile`` is ``(B, P, T)``:
+    each slot's tiles in the parser's ``y * nx + x`` order, given that slot. An illegal entry has
+    probability zero; a slot with no legal tile has a tile row nothing reaches.
+    """
+
+    wait: Tensor
+    act: Tensor
+    candidate: Tensor
+    tile: Tensor
+
+
+class FactoredPolicyHead(PointerPolicyHead):
+    """Wait or act; then, given act, which hand slot or ability button; then which tile.
+
+    The pointer head's tile map and card queries are kept: the tile stage is each slot's tile
+    logits from the same inner product, normalised over that slot's legal tiles. The candidate
+    stage scores a slot from its card query beside the pooled board, and a button from the pooled
+    board alone. The gate scores act against wait from the pooled board, starting at
+    ``net.factored_act_init``.
+
+    ``forward`` writes the product as the flat vector the pointer head writes, in log space:
+    ``log p(no-op) = log P(wait)``, ``log p(s, t) = log P(act) + log P(s | act) + log P(t | s)``
+    and ``log p(button b) = log P(act) + log P(b | act)``. A slot is a candidate iff any of its
+    tiles is legal and a button iff its mask bit is set; with no candidate the gate waits. So the
+    masked distribution built on it is this one, and everything downstream of the logits --
+    sampling, the stored log-probability, ``gtau`` -- is unchanged.
+    """
+
+    def __init__(self, spec: EnvSpec, arch: ArchSpec) -> None:
+        super().__init__(spec, arch)
+        del self.noop
+        channels = arch.channels
+        self.grid = spec.n_grid_actions
+        self.act_init = float(arch.factored_act_init)
+        self.gate = nn.Linear(2 * channels, 1)
+        self.slot = nn.Linear(3 * channels, 1)
+
+    def stages(self, features: Tensor, obs: ObsBatch) -> FactoredStages:
+        """The three stages on the rows of ``obs``, masked by its mask."""
+        mapped = self._mapped(features)
+        batch = mapped.shape[0]
+        hand = self.hand.hand_size
+        tiles = self._tiles(mapped, obs).float().reshape(batch, hand, -1)
+        legal_tiles = obs.mask[:, NOOP + 1 : self.grid].view(batch, hand, -1)
+        tile = torch.log_softmax(tiles.masked_fill(~legal_tiles, _STAGE_FILL), dim=-1)
+
+        pooled = _pool(mapped)
+        query, _ = self._queries(obs.vector)
+        board = pooled[:, None, :].expand(-1, hand, -1)
+        slot = self.slot(torch.cat([query.to(pooled.dtype), board], dim=-1)).squeeze(-1)
+        parts = [slot.float()]
+        if self.buttons is not None:
+            parts.append(self.buttons(pooled).float())
+        legal = torch.cat([legal_tiles.any(-1), obs.mask[:, self.grid :]], dim=-1)
+        candidate = torch.log_softmax(
+            torch.cat(parts, dim=-1).masked_fill(~legal, _STAGE_FILL), dim=-1
+        )
+
+        act_logit = self.gate(pooled).squeeze(-1).float()
+        act_logit = act_logit.masked_fill(~legal.any(-1), _STAGE_FILL)
+        gate = torch.log_softmax(torch.stack([torch.zeros_like(act_logit), act_logit], -1), -1)
+        return FactoredStages(gate[:, 0], gate[:, 1], candidate, tile)
+
+    def forward(self, features: Tensor, obs: ObsBatch) -> Tensor:
+        """``(B, n_actions)`` float32: the flat log-probabilities, illegal entries included (the
+        masked distribution built on them removes those)."""
+        wait, act, candidate, tile = self.stages(features, obs)
+        hand = self.hand.hand_size
+        grid = act[:, None, None] + candidate[:, :hand, None] + tile
+        parts = [wait[:, None], grid.reshape(grid.shape[0], -1)]
+        if self.buttons is not None:
+            parts.append(act[:, None] + candidate[:, hand:])
+        return torch.cat(parts, dim=-1)
+
+    def initialise(self, generator: torch.Generator) -> None:
+        _orthogonal(self.feature.weight, HIDDEN_GAIN, generator)
+        _zero_bias(self.feature)
+        with torch.no_grad():
+            self.card_embed.weight.normal_(0.0, EMBED_STD, generator=generator)
+        for linear in (self.query, self.query_bias, self.slot, self.gate):
+            _orthogonal(linear.weight, HEAD_GAIN, generator)
+            _zero_bias(linear)
+        if self.buttons is not None:
+            _orthogonal(self.buttons.weight, HEAD_GAIN, generator)
+            _zero_bias(self.buttons)
+        with torch.no_grad():
+            self.gate.bias.fill_(math.log(self.act_init / (1.0 - self.act_init)))
+
+
+def build_policy_head(spec: EnvSpec, arch: ArchSpec) -> PointerPolicyHead:
+    """The policy head ``net.policy_head`` names. Every place that builds an actor -- the factory,
+    a snapshot's bare actor, a saved bot -- comes through here, so none of them can build the
+    other head than the weights were trained in."""
+    _check_arch(spec, arch)
+    if arch.policy_head == "factored":
+        return FactoredPolicyHead(spec, arch)
+    return PointerPolicyHead(spec, arch)
+
+
 class ValueHead(nn.Module):
     """One scalar from the pooled board, the scalar vector and a summary of the mask.
 
@@ -453,15 +600,13 @@ class DefaultNetworkFactory(NetworkFactory):
         self, spec: EnvSpec, arch: ArchSpec, device: Any = "cpu", dtype: Any = None
     ) -> ActorCritic:
         _check_arch(spec, arch)
-        if arch.policy_head != "pointer":
-            raise PreflightError(f"net.policy_head {arch.policy_head!r} is not one of 'pointer'")
         if arch.init != "orthogonal":
             raise PreflightError(f"net.init {arch.init!r} is not one of 'orthogonal'")
         torch_device = torch.device(device)
         autocast_dtype = resolve_dtype(arch.autocast_dtype if dtype is None else dtype)
 
         generator = self.generator()
-        actor = ClashActor(ClashTrunk(spec, arch), PointerPolicyHead(spec, arch))
+        actor = ClashActor(ClashTrunk(spec, arch), build_policy_head(spec, arch))
         actor.initialise(generator)
         model: ActorCritic
         if arch.separate_trunks:
@@ -486,7 +631,7 @@ class DefaultNetworkFactory(NetworkFactory):
         """
         return digest_of(
             {
-                "arch": arch,
+                "arch": _arch_for_digest(arch),
                 "obs_space": {
                     key: {"shape": k.shape, "dtype": k.dtype, "low": k.low, "high": k.high}
                     for key, k in spec.obs_space.items()
@@ -497,7 +642,11 @@ class DefaultNetworkFactory(NetworkFactory):
                 "hand_size": spec.hand_size,
                 "tiles": spec.tiles,
                 "trunk": ClashTrunk.__name__,
-                "head": PointerPolicyHead.__name__,
+                "head": (
+                    FactoredPolicyHead
+                    if arch.policy_head == "factored"
+                    else PointerPolicyHead
+                ).__name__,
                 "actor_critic": (
                     SeparateActorCritic.__name__
                     if arch.separate_trunks
