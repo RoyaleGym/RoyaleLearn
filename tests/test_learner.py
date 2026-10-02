@@ -520,3 +520,26 @@ def test_a_changed_environment_is_named_when_a_run_carries_on(
     out = capsys.readouterr().out
     assert "the reward" in out and "another save_dir" in out, out
     assert "the decks" not in out
+
+
+def test_a_policy_record_written_beside_weights_loads_as_a_bot(tmp_path: Path) -> None:
+    """``write_policy_record`` is what an add-on writes beside an actor's weights so that
+    ``Learner.load_policy`` loads the folder; ``royalelearn.extensions`` carries it."""
+    import numpy as np
+
+    from royalelearn.extensions import write_policy_record
+    from royalelearn.ladder.snapshots import _encode_tensors
+
+    learner = Learner(build_env, n_envs=2, device="cpu", save_dir=tmp_path / "run", **TINY)
+    learner.learn(total_steps=16)
+    folder = tmp_path / "artifact"
+    folder.mkdir()
+    weights = _encode_tensors(learner.run.model.actor.state_dict())
+    (folder / "actor.safetensors").write_bytes(weights)
+    write_policy_record(folder, learner.run.spec, learner.config.net)
+    learner.save(tmp_path / "bot")
+    env = build_env()
+    obs, _ = env.reset(seed=2)
+    loaded = Learner.load_policy(folder, greedy=True)
+    assert loaded(obs["blue"]) == Learner.load_policy(tmp_path / "bot", greedy=True)(obs["blue"])
+    assert bool(np.asarray(obs["blue"]["action_mask"])[loaded(obs["blue"])])

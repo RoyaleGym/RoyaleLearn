@@ -541,6 +541,8 @@ _SURFACE: dict[str, str] = {
     # the scripted bots, by name
     "SCRIPTED_NAMES": "royalelearn.rollout.scripted",
     "build_opponent": "royalelearn.rollout.scripted",
+    # what an actor folder needs beside its weights to load as a bot
+    "write_policy_record": "royalelearn.learner",
 }
 
 __all__ = sorted(

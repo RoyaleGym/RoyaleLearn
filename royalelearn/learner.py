@@ -38,7 +38,7 @@ import numpy as np
 from . import config as cfg
 from .errors import IdentityMismatch, PreflightError
 
-__all__ = ["Bot", "Learner"]
+__all__ = ["Bot", "Learner", "write_policy_record"]
 
 #: Who sits in the other seat, by name.
 OPPONENTS = ("random", "noop", "self")
@@ -514,14 +514,23 @@ class Learner:
         return folder
 
     def _write_record(self, folder: Path, spec: Any) -> None:
-        folder.mkdir(parents=True, exist_ok=True)
-        record = {"format": 1, "env_spec": spec, "net": self.config.net}
-        (folder / POLICY_FILE).write_bytes(msgspec.json.encode(record))
+        write_policy_record(folder, spec, self.config.net)
 
     @staticmethod
     def load_policy(path: str | os.PathLike[str], *, greedy: bool = False) -> Bot:
         """A bot saved by ``save``: call it on one seat's observation to get its action."""
         return Bot.load(path, greedy=greedy)
+
+
+def write_policy_record(folder: str | os.PathLike[str], env_spec: Any, net: Any) -> Path:
+    """Write ``policy.json`` into ``folder``: what a bot is besides its weights, the environment
+    spec it plays and the network its weights fit. With the actor's weights beside it as
+    ``actor.safetensors``, the folder loads with ``Learner.load_policy``."""
+    target = Path(folder)
+    target.mkdir(parents=True, exist_ok=True)
+    record = {"format": 1, "env_spec": env_spec, "net": net}
+    (target / POLICY_FILE).write_bytes(msgspec.json.encode(record))
+    return target / POLICY_FILE
 
 
 #: Where a checkpoint keeps the actor's weights.

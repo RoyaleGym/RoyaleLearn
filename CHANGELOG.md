@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- `royalelearn.extensions.write_policy_record(folder, env_spec, net)` writes the `policy.json` that
+  lets `Learner.load_policy` load an actor folder another tool wrote, such as a clone.
+
 ## 0.5.0
 
 - `ladder.opponent_mode` and `ladder.release_mode` take `stochastic`, `argmax`, or a decode of your
