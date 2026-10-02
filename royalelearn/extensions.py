@@ -536,6 +536,11 @@ _SURFACE: dict[str, str] = {
     "pattern": "royalelearn.metrics.schema",
     # errors
     "PreflightError": "royalelearn.errors",
+    # a run without training it: what a tool that trains or records for a run builds
+    "LearningCoordinator": "royalelearn.coordinator",
+    # the scripted bots, by name
+    "SCRIPTED_NAMES": "royalelearn.rollout.scripted",
+    "build_opponent": "royalelearn.rollout.scripted",
 }
 
 __all__ = sorted(
