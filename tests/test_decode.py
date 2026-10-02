@@ -1,242 +1,169 @@
-"""How a frozen policy picks its action: ``stochastic``, ``argmax``, ``gtau:<x>``, ``gtaucap:<x>``.
+"""How a frozen policy picks its action: ``stochastic``, ``argmax``, or a decode of your own.
 
-``gtau`` plays when ``1 - p(no-op) > x`` and then takes the group with the largest summed
-probability -- a hand slot summed over its tiles, or one ability button -- and that slot's most
-likely tile, or the press. An illegal action's probability is zero before anything is read. The
-rule is checked on hand-built distributions, then on a run's own opponent seats. ``gtaucap`` is
-``gtau`` that also plays whenever the seat's elixir is at the cap.
+``ladder.opponent_mode`` and ``ladder.release_mode`` take ``stochastic`` (sample the masked
+distribution), ``argmax`` (its most likely action) or ``plugin:<module>:<function>``: a function
+of your own, called with the masked log-probabilities, the mask and the observation vector of a
+batch of rows, which returns one action per row. A plugin's actions are checked against the mask.
+Nothing else is built in, and a name that is not one of these is refused saying how to supply it.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from royalelearn import config as cfg
-from royalelearn.learn.decode import decode_actions, elixir_at_cap, gtau_actions, parse_mode
+from royalelearn.learn.decode import decode_actions, parse_mode, resolve_decoder
 from royalelearn.testing import coordinator, tiny_config
 
 torch = pytest.importorskip("torch")
 
-HAND, TILES, BUTTONS = 4, 6, 2
-GRID = 1 + HAND * TILES
+PLUGIN = "plugin:test_decode:first_legal_play"
+SEEN: dict[str, Any] = {}
 
 
-def _log_probs(masses: dict[int, float], legal: set[int] | None = None) -> torch.Tensor:
-    """One row whose legal actions carry ``masses`` (normalised), everything else illegal."""
-    width = GRID + BUTTONS
-    p = torch.zeros(width)
-    for action, mass in masses.items():
-        p[action] = mass
-    if legal is not None:
-        for action in range(width):
-            if action not in legal:
-                p[action] = 0.0
-    p = p / p.sum()
-    return p.log()[None, :]
+def first_legal_play(log_probs: Any, mask: Any, vector: Any) -> Any:
+    """A decode for the tests: each row's first legal action after the no-op, else the no-op."""
+    SEEN["shapes"] = (tuple(log_probs.shape), tuple(mask.shape), tuple(vector.shape))
+    plays = mask.clone()
+    plays[:, 0] = False
+    first = plays.int().argmax(-1)
+    return torch.where(plays.any(-1), first, torch.zeros_like(first))
 
 
-def _gtau(lp: torch.Tensor, x: float = 0.12, at_cap: bool | None = None) -> int:
-    cap = None if at_cap is None else torch.tensor([at_cap])
-    return int(gtau_actions(lp, threshold=x, hand_size=HAND, tiles=TILES, at_cap=cap)[0])
+def illegal_choice(log_probs: Any, mask: Any, vector: Any) -> Any:
+    """Plays the last action of every row, legal or not."""
+    return torch.full((mask.shape[0],), mask.shape[1] - 1, dtype=torch.int64)
 
 
-def _tile(slot: int, tile: int) -> int:
-    return 1 + slot * TILES + tile
+def _distribution(rows: int = 6, width: int = 12, seed: int = 0) -> Any:
+    from royalelearn.learn.distribution import MaskedCategorical
+
+    generator = torch.Generator().manual_seed(seed)
+    mask = torch.rand((rows, width), generator=generator) < 0.4
+    mask[:, 0] = True
+    mask[1, 1:] = False  # one row with nothing but the no-op
+    logits = torch.randn((rows, width), generator=generator)
+    return MaskedCategorical(logits, mask)
 
 
-def test_it_waits_when_the_play_mass_is_under_the_threshold() -> None:
-    assert _gtau(_log_probs({0: 0.90, _tile(1, 2): 0.10})) == 0
-    assert _gtau(_log_probs({0: 0.885, _tile(1, 2): 0.115})) == 0
-    assert _gtau(_log_probs({0: 0.87, _tile(1, 2): 0.13})) == _tile(1, 2)
-
-
-def test_it_plays_the_slot_with_the_most_summed_mass_at_that_slots_best_tile() -> None:
-    # Slot 2 holds the single most likely tile, but slot 0's tiles sum to more.
-    masses = {
-        0: 0.5,
-        _tile(2, 5): 0.2,
-        _tile(0, 1): 0.1,
-        _tile(0, 3): 0.12,
-        _tile(0, 4): 0.08,
-    }
-    assert _gtau(_log_probs(masses)) == _tile(0, 3)
-
-
-def test_a_button_is_a_group_of_its_own() -> None:
-    masses = {0: 0.5, _tile(1, 0): 0.1, _tile(1, 1): 0.1, GRID + 1: 0.3}
-    assert _gtau(_log_probs(masses)) == GRID + 1
-    masses[_tile(1, 2)] = 0.15
-    assert _gtau(_log_probs(masses)) == _tile(1, 2)
-
-
-def test_an_illegal_action_counts_as_nothing() -> None:
-    masses = {0: 0.5, _tile(3, 0): 0.4, _tile(1, 0): 0.1}
-    legal = {0, _tile(1, 0)}
-    assert _gtau(_log_probs(masses, legal)) == _tile(1, 0)
-    assert _gtau(_log_probs({0: 1.0}, {0}), x=0.0) == 0
-
-
-def test_the_mode_names_parse_and_bad_ones_are_refused() -> None:
-    assert parse_mode("stochastic") == ("stochastic", 0.0)
-    assert parse_mode("argmax") == ("argmax", 0.0)
-    assert parse_mode("gtau:0.12") == ("gtau", 0.12)
-    assert parse_mode("gtaucap:0.3") == ("gtaucap", 0.3)
-    for bad in ("gtau", "gtau:1", "gtau:-0.1", "gtau:x", "greedy", "gtaucap", "gtaucap:1.5"):
-        with pytest.raises(ValueError):
+def test_the_built_ins_and_a_plugin_parse_and_anything_else_is_refused() -> None:
+    assert parse_mode("stochastic") == ("stochastic", "")
+    assert parse_mode("argmax") == ("argmax", "")
+    assert parse_mode(PLUGIN) == ("plugin", "test_decode:first_legal_play")
+    for bad in ("threshold:0.3", "threshold_plus:0.6", "greedy", "plugin:", "plugin:onlymodule"):
+        with pytest.raises(ValueError, match="plugin:<module>:<function>") as refused:
             parse_mode(bad)
+        assert "is not built in" in str(refused.value) or bad.startswith("plugin")
+    with pytest.raises(ValueError, match="decode 'threshold' is not built in"):
+        parse_mode("threshold:0.3")
     problems = cfg.check_consistency(
-        cfg.RunConfig(ladder=cfg.LadderConfig(opponent_mode="gtau:2", release_mode="gtaucap:0.2"))
+        cfg.RunConfig(ladder=cfg.LadderConfig(opponent_mode="threshold:0.6", release_mode=PLUGIN))
     )
-    assert [p for p in problems if "opponent_mode" in p] and not [
-        p for p in problems if "release_mode" in p
-    ]
+    assert [p for p in problems if "opponent_mode" in p]
+    assert not [p for p in problems if "release_mode" in p]
 
 
-def test_at_the_elixir_cap_it_plays_what_gtau_would_play() -> None:
-    masses = {0: 0.95, _tile(2, 1): 0.03, _tile(2, 4): 0.01, GRID: 0.01}
-    assert _gtau(_log_probs(masses)) == 0
-    assert _gtau(_log_probs(masses), at_cap=False) == 0
-    assert _gtau(_log_probs(masses), at_cap=True) == _tile(2, 1)
-    # Over the threshold the cap changes nothing; with nothing legal to play it still waits.
-    over = {0: 0.5, _tile(1, 0): 0.5}
-    assert _gtau(_log_probs(over), at_cap=True) == _gtau(_log_probs(over)) == _tile(1, 0)
-    assert _gtau(_log_probs({0: 1.0}, {0}), at_cap=True) == 0
+def test_a_plugin_decides_with_the_log_probs_the_mask_and_the_vector() -> None:
+    dist = _distribution()
+    vector = torch.zeros((6, 5))
+    got = decode_actions(dist, PLUGIN, torch.zeros(6), vector=vector)
+    assert got.tolist() == first_legal_play(dist.log_probs, dist.mask, vector).tolist()
+    assert SEEN["shapes"] == ((6, 12), (6, 12), (6, 5))
+    assert int(got[1]) == 0
 
 
-def test_gtaucap_without_the_elixir_is_refused_not_decoded_as_gtau() -> None:
-    from royalelearn.learn.distribution import MaskedCategorical
-
-    lp = _log_probs({0: 0.95, _tile(2, 1): 0.05})
-    dist = MaskedCategorical(lp, torch.isfinite(lp))
-    with pytest.raises(ValueError, match="elixir"):
-        decode_actions(dist, "gtaucap:0.12", torch.zeros(1), hand_size=HAND, tiles=TILES)
-    # And plain gtau never reads one it is handed.
-    cap = torch.tensor([True])
-    for mode, want in (("gtau:0.12", 0), ("gtaucap:0.12", _tile(2, 1))):
-        got = decode_actions(dist, mode, torch.zeros(1), hand_size=HAND, tiles=TILES, at_cap=cap)
-        assert int(got[0]) == want, mode
+def test_the_built_ins_are_the_distributions_own_sample_and_mode() -> None:
+    dist = _distribution(seed=1)
+    uniforms = torch.linspace(0.05, 0.95, 6)
+    vector = torch.zeros((6, 5))
+    assert decode_actions(dist, "stochastic", uniforms, vector=vector).tolist() == (
+        dist.sample(uniforms).tolist()
+    )
+    assert decode_actions(dist, "argmax", uniforms, vector=vector).tolist() == (
+        dist.mode().tolist()
+    )
 
 
-def test_the_cap_is_read_from_the_own_elixir_field_by_name(tmp_path: Path) -> None:
-    with coordinator(tiny_config(tmp_path)) as run:
-        spec = run.spec
-    (offset,) = [o for name, o, _ in spec.vector_layout if name == "own_elixir"]
-    assert offset != 0 or [n for n, o, _ in spec.vector_layout if o == 0] == ["own_elixir"]
-    vector = torch.zeros((4, spec.vector_size))
-    vector[:, offset] = torch.tensor([1.0, 0.995, 0.99, 0.0])
-    vector[:, [i for i in range(spec.vector_size) if i != offset]] = 1.0
-    assert elixir_at_cap(spec, vector).tolist() == [True, True, False, False]
-
-
-def test_a_runs_opponent_seats_are_decoded_by_opponent_mode(tmp_path: Path) -> None:
-    import msgspec
-
-    from royalelearn.api.policy import ObsBatch
-    from royalelearn.learn.distribution import MaskedCategorical
-
-    ladder = msgspec.structs.replace(tiny_config(tmp_path).ladder, opponent_mode="gtau:0.12")
-    with coordinator(tiny_config(tmp_path, ladder=ladder)) as run:
-        spec = run.spec
-        actor = run.model.actor
-        rows = 16
-        generator = torch.Generator().manual_seed(5)
-        mask = torch.rand((rows, spec.n_actions), generator=generator) < 0.02
-        mask[:, 0] = True
-        obs = ObsBatch(
-            spatial=torch.rand(
-                (rows, spec.frame_stack * spec.spatial_shape[0], *spec.tiles), generator=generator
-            ),
-            vector=torch.rand((rows, spec.vector_size), generator=generator),
-            mask=mask,
-            mask_planes=mask[:, 1:].float().view(rows, spec.hand_size, *spec.tiles),
+def test_a_plugin_that_plays_an_illegal_action_is_refused() -> None:
+    with pytest.raises(ValueError, match="illegal"):
+        decode_actions(
+            _distribution(),
+            "plugin:test_decode:illegal_choice",
+            torch.zeros(6),
+            vector=torch.zeros((6, 5)),
         )
-        uniforms = torch.rand(rows, generator=generator)
-        with torch.no_grad():
-            for p in actor.parameters():
-                p.add_(0.05)
-            got = run.inference._act_frozen(actor, obs, uniforms)
-            dist = MaskedCategorical(actor.logits(obs).float(), obs.mask)
-            want = decode_actions(
-                dist,
-                "gtau:0.12",
-                uniforms,
-                hand_size=spec.hand_size,
-                tiles=spec.tiles[0] * spec.tiles[1],
-            )
-            sampled = dist.sample(uniforms)
-    assert got.tolist() == want.tolist()
-    assert got.tolist() != sampled.tolist(), "gtau and sampling agree here, so nothing is tested"
 
 
-def _obs(spec, rows: int, generator) -> object:
+def test_a_plugin_that_cannot_be_found_is_refused_by_name() -> None:
+    for target in ("plugin:no_such_module_here:fn", "plugin:test_decode:no_such_function"):
+        with pytest.raises(ValueError, match=target.split(":", 1)[1]):
+            resolve_decoder(target)
+
+
+def _obs(spec: Any, rows: int, seed: int) -> Any:
     from royalelearn.api.policy import ObsBatch
 
+    generator = torch.Generator().manual_seed(seed)
     mask = torch.rand((rows, spec.n_actions), generator=generator) < 0.02
     mask[:, 0] = True
     return ObsBatch(
         spatial=torch.rand(
             (rows, spec.frame_stack * spec.spatial_shape[0], *spec.tiles), generator=generator
         ),
-        vector=torch.rand((rows, spec.vector_size), generator=generator) * 0.9,
+        vector=torch.rand((rows, spec.vector_size), generator=generator),
         mask=mask,
         mask_planes=mask[:, 1:].float().view(rows, spec.hand_size, *spec.tiles),
     )
 
 
-def test_gtaucap_opponent_seats_play_at_the_cap(tmp_path: Path) -> None:
+def test_a_runs_opponent_seats_are_decoded_by_the_plugin(tmp_path: Path) -> None:
     import msgspec
 
     from royalelearn.learn.distribution import MaskedCategorical
 
-    # A threshold no row clears: gtau waits everywhere, so every play below is the cap's.
-    ladder = msgspec.structs.replace(tiny_config(tmp_path).ladder, opponent_mode="gtaucap:0.999")
+    ladder = msgspec.structs.replace(tiny_config(tmp_path).ladder, opponent_mode=PLUGIN)
     with coordinator(tiny_config(tmp_path, ladder=ladder)) as run:
         spec = run.spec
         actor = run.model.actor
-        rows = 16
-        obs = _obs(spec, rows, torch.Generator().manual_seed(7))
-        (offset,) = [o for name, o, _ in spec.vector_layout if name == "own_elixir"]
-        capped = torch.arange(rows) % 2 == 0
-        obs.vector[capped, offset] = 1.0
-        uniforms = torch.zeros(rows)
+        obs = _obs(spec, 16, seed=5)
+        uniforms = torch.rand(16, generator=torch.Generator().manual_seed(6))
         with torch.no_grad():
-            got = torch.as_tensor(run.inference._act_frozen(actor, obs, uniforms))
+            got = run.inference._act_frozen(actor, obs, uniforms)
             dist = MaskedCategorical(actor.logits(obs).float(), obs.mask)
-            tiles = spec.tiles[0] * spec.tiles[1]
-            gtau = decode_actions(
-                dist, "gtau:0.999", uniforms, hand_size=spec.hand_size, tiles=tiles
-            )
-            free = decode_actions(dist, "gtau:0.0", uniforms, hand_size=spec.hand_size, tiles=tiles)
-    playable = obs.mask[:, 1:].any(-1)
-    assert gtau.tolist() == [0] * rows
-    assert got[~capped].tolist() == [0] * int((~capped).sum())
-    assert got[capped].tolist() == free[capped].tolist()
-    assert bool((got[capped & playable] != 0).all()) and bool((capped & playable).any())
+            sampled = dist.sample(uniforms)
+    want = first_legal_play(dist.log_probs, obs.mask, obs.vector)
+    assert got.tolist() == want.tolist()
+    assert got.tolist() != sampled.tolist(), "the plugin and sampling agree here: nothing tested"
 
 
-def test_gtaucap_release_seats_play_at_the_cap(tmp_path: Path) -> None:
+def test_a_runs_release_seats_are_decoded_by_the_plugin(tmp_path: Path) -> None:
     import numpy as np
 
     with coordinator(tiny_config(tmp_path)) as run:
-        spec = run.spec
         actors = run.eval_actors
-        actors.release_mode = "gtaucap:0.999"
-        (offset,) = [o for name, o, _ in spec.vector_layout if name == "own_elixir"]
-        env = spec.env_factory.factory()()
+        actors.release_mode = PLUGIN
+        env = run.spec.env_factory.factory()()
         observations, _ = env.reset(seed=3)
-        env_obs = next(iter(observations.values()))
-        mask = np.asarray(env_obs["action_mask"]).copy()
-        assert mask[1:].any(), "the sample observation offers no play, so nothing is tested"
-        # Two legal plays beside the no-op: an untrained net's play mass is then far under the
-        # threshold, so gtau alone waits.
-        mask[1 + np.flatnonzero(mask[1:])[2:]] = False
-        env_obs = dict(env_obs, action_mask=mask)
+        seat = next(iter(observations.values()))
+        mask = np.asarray(seat["action_mask"])
+        assert mask[1:].any(), "the observation offers no play, so nothing is tested"
         policy = actors.policy(run.model.actor)
-        low = dict(env_obs, vector=np.asarray(env_obs["vector"]).copy())
-        low["vector"][offset] = 0.0
-        full = dict(env_obs, vector=np.asarray(env_obs["vector"]).copy())
-        full["vector"][offset] = 1.0
-        assert policy(low, 0.0, None) == 0
-        assert policy(full, 0.0, None) != 0
+        assert policy(seat, 0.5, None) == int(np.flatnonzero(mask[1:])[0]) + 1
+
+
+def test_a_run_refuses_a_plugin_it_cannot_find_before_it_starts(tmp_path: Path) -> None:
+    import msgspec
+
+    from royalelearn.errors import PreflightError
+
+    ladder = msgspec.structs.replace(
+        tiny_config(tmp_path).ladder, opponent_mode="plugin:no_such_module_here:fn"
+    )
+    with (
+        pytest.raises((PreflightError, ValueError), match="no_such_module_here"),
+        coordinator(tiny_config(tmp_path, ladder=ladder)),
+    ):
+        pass

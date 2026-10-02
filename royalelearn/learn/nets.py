@@ -469,7 +469,7 @@ class FactoredPolicyHead(PointerPolicyHead):
     and ``log p(button b) = log P(act) + log P(b | act)``. A slot is a candidate iff any of its
     tiles is legal and a button iff its mask bit is set; with no candidate the gate waits. So the
     masked distribution built on it is this one, and everything downstream of the logits --
-    sampling, the stored log-probability, ``gtau`` -- is unchanged.
+    sampling, the stored log-probability, a decode plugin -- is unchanged.
     """
 
     def __init__(self, spec: EnvSpec, arch: ArchSpec) -> None:

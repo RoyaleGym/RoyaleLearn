@@ -1,68 +1,60 @@
-"""How a frozen policy picks its action: sampled, its single most likely action, ``gtau`` or
-``gtaucap``.
+"""How a frozen policy picks its action: sampled, its most likely action, or a decode of your own.
 
-``stochastic`` samples the masked distribution, ``argmax`` takes its mode. On this action space
-neither is how a cloned policy plays best: sampled, it picks a rare action often enough to play
-badly, and its single most likely action is nearly always the no-op, so its mode barely plays.
+``stochastic`` samples the masked distribution; ``argmax`` takes its most likely action. Anything
+else is yours to write: ``plugin:<module>:<function>`` names a function that takes a batch of rows'
+masked log-probabilities ``(B, n_actions)``, their mask ``(B, n_actions)`` and their observation
+vector ``(B, V)``, all on the run's device, and returns ``(B,)`` integer actions. It should be
+deterministic and batched, like the two built in. Every action it returns is checked against the
+mask, and an illegal one stops the run naming the plugin.
 
-``gtau:<x>`` decides in two steps, reading the masked distribution (an illegal action's
-probability is zero before anything else is read):
-
-1. play iff ``1 - p(no-op) > x``; otherwise the no-op;
-2. if it plays, the group with the largest summed probability: each hand slot summed over its
-   tiles, and each ability button on its own. For a slot, that slot's most likely tile; for a
-   button, the press. With nothing legal but the no-op, the no-op.
-
-``gtaucap:<x>`` is ``gtau:<x>`` that also plays step 2's choice whenever the seat's own elixir is
-at the cap (the ``own_elixir`` field at 0.995 or more), so a seat that waits does not leak elixir.
-
-Batched on the device, one ``argmax`` per step, so a whole round of frozen seats is decoded in the
-forward that produced it.
+The learner's own seats always sample, because that is the policy the update trains. These modes
+are for frozen opponents (``ladder.opponent_mode``) and for evaluation (``ladder.release_mode``).
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import functools
+import importlib
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-    from ..api.rollout import EnvSpec
     from .distribution import MaskedCategorical
 
 __all__ = [
     "ARGMAX",
-    "GTAU",
-    "GTAUCAP",
+    "PLUGIN",
     "STOCHASTIC",
     "decode_actions",
-    "elixir_at_cap",
-    "gtau_actions",
     "mode_problems",
     "parse_mode",
+    "resolve_decoder",
 ]
 
-STOCHASTIC, ARGMAX, GTAU, GTAUCAP = "stochastic", "argmax", "gtau", "gtaucap"
-#: The elixir field, by its layout name, and the fraction of the cap that counts as full.
-OWN_ELIXIR = "own_elixir"
-AT_CAP = 0.995
+STOCHASTIC, ARGMAX, PLUGIN = "stochastic", "argmax", "plugin"
+_PLUGIN_PREFIX = PLUGIN + ":"
+
+#: A plugin decode: masked log-probabilities, mask and observation vector in, actions out.
+Decoder = Callable[[Any, Any, Any], Any]
 
 
-def parse_mode(mode: str) -> tuple[str, float]:
-    """``(kind, threshold)`` of a decode mode; the threshold is 0 for the two without one."""
+def parse_mode(mode: str) -> tuple[str, str]:
+    """``(kind, target)``: the target is ``<module>:<function>`` for a plugin, else empty."""
     if mode in (STOCHASTIC, ARGMAX):
-        return mode, 0.0
-    kind, _, arg = mode.partition(":")
-    if kind in (GTAU, GTAUCAP) and arg:
-        try:
-            threshold = float(arg)
-        except ValueError:
-            threshold = -1.0
-        if 0.0 <= threshold < 1.0:
-            return kind, threshold
+        return mode, ""
+    if mode.startswith(_PLUGIN_PREFIX):
+        module, _, function = mode[len(_PLUGIN_PREFIX) :].partition(":")
+        if module and function:
+            return PLUGIN, f"{module}:{function}"
+        raise ValueError(
+            f"decode mode {mode!r} names no function: write plugin:<module>:<function>"
+        )
+    name = mode.split(":", 1)[0]
     raise ValueError(
-        f"decode mode {mode!r} is not 'stochastic', 'argmax', 'gtau:<x>' or 'gtaucap:<x>' "
-        "with 0 <= x < 1"
+        f"decode {name!r} is not built in; 'stochastic' and 'argmax' are, or supply your own "
+        "with plugin:<module>:<function>"
     )
 
 
@@ -74,40 +66,26 @@ def mode_problems(mode: str, where: str) -> list[str]:
     return []
 
 
-def elixir_at_cap(spec: EnvSpec, vector: Tensor) -> Tensor:
-    """``(B,)`` bool: whether each row's own elixir is at the cap, read by the field's name."""
-    from ..obs_layout import field_slice
-
-    return vector[:, field_slice(spec, OWN_ELIXIR)][:, 0] >= AT_CAP
-
-
-def gtau_actions(
-    log_probs: Tensor,
-    *,
-    threshold: float,
-    hand_size: int,
-    tiles: int,
-    at_cap: Tensor | None = None,
-) -> Tensor:
-    """``(B,)`` int64: the ``gtau`` decode of masked log-probabilities ``(B, n_actions)`` laid out
-    as the no-op, ``hand_size * tiles`` grid actions, then any ability buttons. Rows where
-    ``at_cap`` is set play whatever the threshold says (``gtaucap``)."""
-    import torch
-
-    p = log_probs.exp()
-    batch = p.shape[0]
-    grid = 1 + hand_size * tiles
-    per_tile = p[:, 1:grid].reshape(batch, hand_size, tiles)
-    groups = torch.cat([per_tile.sum(-1), p[:, grid:]], dim=-1)
-    best = groups.argmax(-1)
-    slot = best.clamp(max=hand_size - 1)
-    tile = per_tile.argmax(-1).gather(1, slot[:, None])[:, 0]
-    action = torch.where(best < hand_size, 1 + slot * tiles + tile, grid + best - hand_size)
-    wants = (1.0 - p[:, 0]) > threshold
-    if at_cap is not None:
-        wants = wants | at_cap
-    play = wants & (groups.gather(1, best[:, None])[:, 0] > 0.0)
-    return torch.where(play, action, torch.zeros_like(action))
+@functools.cache
+def resolve_decoder(mode: str) -> Decoder | None:
+    """The plugin function ``mode`` names, imported, or None for a built-in mode. A module or
+    function that cannot be found is a ``ValueError`` naming it."""
+    kind, target = parse_mode(mode)
+    if kind != PLUGIN:
+        return None
+    module_name, function_name = target.split(":", 1)
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(
+            f"decode plugin {target!r}: cannot import {module_name!r} ({exc})"
+        ) from exc
+    function = getattr(module, function_name, None)
+    if not callable(function):
+        raise ValueError(
+            f"decode plugin {target!r}: {module_name} has no function {function_name!r}"
+        )
+    return function  # type: ignore[no-any-return]
 
 
 def decode_actions(
@@ -115,23 +93,33 @@ def decode_actions(
     mode: str,
     uniforms: Tensor,
     *,
-    hand_size: int,
-    tiles: int,
-    at_cap: Tensor | None = None,
+    vector: Tensor,
 ) -> Tensor:
     """``(B,)`` int64 actions of ``distribution`` under ``mode``; ``uniforms`` feed a sample, and
-    ``at_cap`` (``elixir_at_cap``) is required by ``gtaucap`` and read by nothing else."""
-    kind, threshold = parse_mode(mode)
+    a plugin is handed the rows' observation ``vector`` too."""
+    import torch
+
+    kind, target = parse_mode(mode)
     if kind == STOCHASTIC:
         return distribution.sample(uniforms)
     if kind == ARGMAX:
         return distribution.mode()
-    if kind == GTAUCAP and at_cap is None:
-        raise ValueError(f"decode mode {mode!r} needs each row's elixir (at_cap), none was given")
-    return gtau_actions(
-        distribution.log_probs,
-        threshold=threshold,
-        hand_size=hand_size,
-        tiles=tiles,
-        at_cap=at_cap if kind == GTAUCAP else None,
-    )
+    decoder = resolve_decoder(mode)
+    assert decoder is not None
+    mask = distribution.mask
+    actions = torch.as_tensor(decoder(distribution.log_probs, mask, vector), device=mask.device)
+    if actions.shape != (mask.shape[0],) or actions.dtype.is_floating_point:
+        raise ValueError(
+            f"decode plugin {target!r} returned {actions.dtype} {tuple(actions.shape)}; it must "
+            f"return one integer action per row, shape ({mask.shape[0]},)"
+        )
+    actions = actions.to(torch.int64)
+    in_range = (actions >= 0) & (actions < mask.shape[1])
+    legal = in_range & mask.gather(1, actions.clamp(0, mask.shape[1] - 1)[:, None])[:, 0]
+    if not bool(legal.all()):
+        rows = (~legal).nonzero().flatten()[:8].tolist()
+        raise ValueError(
+            f"decode plugin {target!r} chose an illegal action on rows {rows}: every action it "
+            "returns must be allowed by that row's mask"
+        )
+    return actions

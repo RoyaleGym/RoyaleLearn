@@ -1255,8 +1255,8 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `floor_admit_every_env_steps` | 50 000 000 | game-steps | a plateau cannot starve the pool |
 | `pool_working_size` | 48 | snapshots | sampling is linear in the pool per episode, in python |
 | `eval_seed_count` | 500 | seeds | |
-| `release_mode` | `"stochastic"` | | rating both the sampled and the argmax variant doubles the pool and the cost for no decision. It also takes `"argmax"` and `"gtau:<x>"`, decoded as `opponent_mode` is |
-| `opponent_mode` | `"stochastic"` | | how a frozen pool or seed opponent picks its action in TRAINING battles: `"stochastic"` samples (every run before this field), `"argmax"` takes the mode, and `"gtau:<x>"` plays when `1 - p(no-op) > x` and then takes the group with the largest summed probability -- a hand slot summed over its tiles, or one ability button -- at that slot's most likely tile, illegal actions counting as zero (`royalelearn/learn/decode.py`). The learner's seats always sample. Training battles are not rated, so it is not in the ladder context |
+| `release_mode` | `"stochastic"` | | rating both the sampled and the argmax variant doubles the pool and the cost for no decision. It also takes `"argmax"` and `"plugin:<module>:<function>"`, as `opponent_mode` does |
+| `opponent_mode` | `"stochastic"` | | how a frozen pool or seed opponent picks its action in TRAINING battles: `"stochastic"` samples (every run before this field), `"argmax"` takes the mode, and `"plugin:<module>:<function>"` calls a function of your own with the rows' masked log-probabilities, mask and observation vector, which returns one legal action per row (`royalelearn/learn/decode.py`). The learner's seats always sample. Training battles are not rated, so it is not in the ladder context |
 | `refit_every_iterations` | 10 | | |
 | `probe_every_iterations` | 0 | iterations | 0 is off, and off is the default: a probe plays real battles in the parent. Section 11.9 |
 | `probe_games` | 40 | battles per rung | paired, so 20 seeds of the frozen set, each from both sides |

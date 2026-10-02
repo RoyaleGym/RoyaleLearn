@@ -8,8 +8,8 @@ The head writes the same flat action space the pointer head writes, as log-proba
 
 A slot is a candidate iff any of its tiles is legal, a button iff its mask bit is set, and with no
 candidate the gate waits. So everything downstream of the logits -- the masked distribution, its
-sample, ``gtau`` -- is unchanged. The entropy splits exactly into a gate, a candidate and a tile
-term by the chain rule, and ``ppo.entropy_coef_stages`` can weight the three apart.
+sample, a decode plugin -- is unchanged. The entropy splits exactly into a gate, a candidate and a
+tile term by the chain rule, and ``ppo.entropy_coef_stages`` can weight the three apart.
 """
 
 from __future__ import annotations

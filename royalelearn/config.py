@@ -439,11 +439,9 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: decision.
     release_mode: str = "stochastic"
     #: How a frozen pool or seed opponent picks its action in TRAINING battles: "stochastic"
-    #: (it samples, as every run before this field), "argmax", or "gtau:<x>" (play when
-    #: 1 - p(no-op) > x, then the most probable slot's best tile or the most probable button;
-    #: ``learn/decode.py``), or "gtaucap:<x>" (gtau, and also play whenever that seat's elixir is
-    #: at the cap). The learner's own seats always sample. ``release_mode`` is the same
-    #: choice for evaluation and the gate.
+    #: (it samples, as every run before this field), "argmax" (its most likely action), or
+    #: "plugin:<module>:<function>", a decode of your own (``learn/decode.py``). The learner's
+    #: own seats always sample. ``release_mode`` is the same choice for evaluation and the gate.
     opponent_mode: str = "stochastic"
     refit_every_iterations: int = 10
     #: Iterations between probes of the LIVE policy against the fixed rungs below. Zero is off,

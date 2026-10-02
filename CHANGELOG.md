@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `ladder.opponent_mode` and `ladder.release_mode` take `stochastic`, `argmax`, or a decode of your
+  own: `plugin:<module>:<function>`, called with a batch's masked log-probabilities, mask and
+  observation vector, returning one legal action per row. No other decode is built in.
+
 ## 0.4.3
 
 - A run carried on from `save_dir` with another environment from `build_env` (the reward, the
@@ -37,8 +43,6 @@
 - `Learner` trains on the GPU by default: `device="auto"` is CUDA when torch can see a GPU, and
   otherwise the CPU, with one printed line saying so. On a CPU it uses half the machine's cores
   for the network (`threads=`).
-- `gtaucap:<x>`, a decode mode for `ladder.opponent_mode` and `ladder.release_mode`: `gtau:<x>`, and
-  it also plays whenever the seat's elixir is full.
 - `net.policy_head = "factored"`: the policy as three stages (wait or act, then which card or button,
   then which tile) over the same action space, with `net.factored_act_init` for the gate's start.
 - `ppo.entropy_coef_stages`: one entropy coefficient for each of those three stages.

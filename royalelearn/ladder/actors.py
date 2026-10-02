@@ -104,12 +104,12 @@ class EvalActors:
         """
         import torch
 
-        from ..learn.decode import GTAUCAP, decode_actions, elixir_at_cap, parse_mode
+        from ..learn.decode import decode_actions, resolve_decoder
         from ..learn.distribution import MaskedCategorical
 
         # This policy's own frames, not the resolver's. See the module docstring.
         history: list[dict[str, np.ndarray]] = []
-        capped = parse_mode(self.release_mode)[0] == GTAUCAP
+        resolve_decoder(self.release_mode)  # a plugin that cannot be found stops here
 
         def act(obs: Mapping[str, Any], uniform: float, _rng: Any) -> int:
             batch = self.obs_batch(obs, history)
@@ -117,12 +117,7 @@ class EvalActors:
                 distribution = MaskedCategorical(actor.logits(batch).float(), batch.mask)
                 draw = torch.tensor([uniform], dtype=torch.float32, device=batch.mask.device)
                 chosen = decode_actions(
-                    distribution,
-                    self.release_mode,
-                    draw,
-                    hand_size=self.spec.hand_size,
-                    tiles=self.spec.tiles[0] * self.spec.tiles[1],
-                    at_cap=elixir_at_cap(self.spec, batch.vector) if capped else None,
+                    distribution, self.release_mode, draw, vector=batch.vector
                 )
                 return int(chosen[0].item())
 

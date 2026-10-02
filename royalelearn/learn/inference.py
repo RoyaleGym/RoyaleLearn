@@ -44,7 +44,7 @@ from ..api.policy import ObsBatch
 from ..api.rollout import GROUP_DEAD, GROUP_LEARNER, GROUP_SCRIPTED
 from ..seeding import ACT_CYCLE, derive_generator, stream_path
 from .buffer import _StagingRing
-from .decode import GTAUCAP, STOCHASTIC, decode_actions, elixir_at_cap, parse_mode
+from .decode import STOCHASTIC, decode_actions, parse_mode, resolve_decoder
 from .distribution import MaskedCategorical, noop_checked_upstream, noop_violation_message
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -211,6 +211,7 @@ class BatchedInference:
         #: How a frozen opponent's seats pick their action (``learn/decode.py``); the learner's
         #: seats always sample, since that is the policy the update trains.
         parse_mode(opponent_mode)
+        resolve_decoder(opponent_mode)  # a plugin that cannot be found stops the run here
         self.opponent_mode = opponent_mode
         self.snapshots = snapshots
         self.master_seed = int(master_seed)
@@ -356,16 +357,7 @@ class BatchedInference:
             if mode == STOCHASTIC:
                 actions = distribution.sample(uniforms)
             else:
-                spec = self.buffer.spec
-                capped = parse_mode(mode)[0] == GTAUCAP
-                actions = decode_actions(
-                    distribution,
-                    mode,
-                    uniforms,
-                    hand_size=spec.hand_size,
-                    tiles=spec.tiles[0] * spec.tiles[1],
-                    at_cap=elixir_at_cap(spec, obs.vector) if capped else None,
-                )
+                actions = decode_actions(distribution, mode, uniforms, vector=obs.vector)
             host = _numpy(torch.cat([actions, _noop_flag(obs.mask)]), np.int64)
         _refuse_without_noop(host, obs.mask)
         return host[:-1].copy()
