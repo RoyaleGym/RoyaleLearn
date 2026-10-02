@@ -27,7 +27,8 @@ if __name__ == "__main__":
     learner.save("runs/my_bot/bot")
 ```
 
-It prints one line per update. The Quick Start below also plays a battle with the bot to watch.
+It prints one line per update. To watch your bot play, see
+[Watch It Play](https://royalegym.github.io/RoyaleGym/quickstart/#5-watch-it-play).
 
 ## Next
 
