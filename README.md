@@ -7,10 +7,10 @@ It is the trainer for the battles RoyaleGym runs, and it uses your NVIDIA graphi
 
 ## Install
 
-    pip install "royalegym[all]"
+    pip install "royalegym[all]" --find-links https://github.com/RoyaleGym/RoyaleGym/releases/expanded_assets/v0.1.1
 
-This is the `[learn]` part, for Python 3.12 or newer. Until it is on PyPI, see [Install](https://royalegym.github.io/RoyaleGym/install/)
-for the exact line.
+This is the `[learn]` part, for Python 3.12 or 3.13. On Windows with an NVIDIA card, install PyTorch
+first: [Install](https://royalegym.github.io/RoyaleGym/install/), step 4.
 
 ## Try it
 
@@ -22,8 +22,8 @@ def build_env():
     return make_env(reward=TowerHPReward())  # what the bot is paid for
 
 if __name__ == "__main__":
-    learner = Learner(build_env, save_dir="runs/my_bot")  # run again to carry on
-    learner.learn(total_steps=20_000)
+    learner = Learner(build_env, save_dir="runs/my_bot")
+    learner.learn(total_steps=20_000)  # counts all steps so far: raise it, run again to train more
     learner.save("runs/my_bot/bot")
 ```
 

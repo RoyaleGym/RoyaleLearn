@@ -321,7 +321,10 @@ What comes in: environments from RoyaleGym, with the engine build under them. Wh
 snapshots and checkpoints, in formats that are not fixed yet, a stream of numbers you can plot, and
 one frame per env step for a viewer if one is listening.
 
-### Install
+### Build from source (for contributors)
+
+To use RoyaleLearn, follow [Install](https://royalegym.github.io/RoyaleGym/install/) instead. This
+section is for working on RoyaleLearn itself.
 
 At the end of this you have the four public repos side by side, one virtual environment they all
 share, and a built engine. It takes six stages. Do stages 1 to 5 in order, because each one needs
