@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- A `Learner` made again on the same `save_dir` with other training settings (learning rates,
+  epochs, batch sizes, the entropy bonus, the discount) carries the run on and prints what
+  changed. Another network, environment or opponent setup is refused, saying so in words.
+
 ## 0.4.0
 
 - `Learner` names its settings the way rlgym-ppo does, each with a default: the network

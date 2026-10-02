@@ -36,7 +36,7 @@ import msgspec
 import numpy as np
 
 from . import config as cfg
-from .errors import PreflightError
+from .errors import IdentityMismatch, PreflightError
 
 __all__ = ["Bot", "Learner"]
 
@@ -149,6 +149,12 @@ def default_threads() -> int:
     """Threads for the network's arithmetic on a CPU: half the machine's logical cores (its
     physical ones, on most machines), at least one and at most ``MAX_DEFAULT_THREADS``."""
     return max(1, min(MAX_DEFAULT_THREADS, (os.cpu_count() or 2) // 2))
+
+
+#: The run-identity fields a ``Learner`` carries a run on across: the update's settings (learning
+#: rates, epochs, batch sizes, the entropy bonus, the discount). Anything else -- the network, the
+#: environment, the opponents -- is another run.
+TRAINING_SETTINGS = frozenset({"algo_digest"})
 
 
 class Learner:
@@ -389,7 +395,28 @@ class Learner:
         kwargs = dict(self._kwargs)
         if not self.verbose:
             kwargs.setdefault("printer", _quiet)
-        run = LearningCoordinator(
+        try:
+            run = self._train(LearningCoordinator, latest, int(total_steps), kwargs)
+        except IdentityMismatch as mismatch:
+            if latest is None or set(mismatch.differences) - TRAINING_SETTINGS:
+                raise PreflightError(
+                    f"{self.save_dir} holds a run started with another network, environment or "
+                    "opponent setup, so this one cannot carry it on. Use the settings it was "
+                    "started with, or give this run another save_dir. What differs:\n"
+                    + "\n".join(f"  {name}" for name in sorted(mismatch.differences))
+                ) from mismatch
+            print(
+                f"training settings changed since the last run in {self.save_dir}; carrying on "
+                "with the new ones"
+            )
+            kwargs["allow_identity_drift"] = True
+            run = self._train(LearningCoordinator, latest, int(total_steps), kwargs)
+        self.run = run
+
+    def _train(
+        self, coordinator: Any, latest: Path | None, total_steps: int, kwargs: dict[str, Any]
+    ) -> Any:
+        run = coordinator(
             self.config,
             device=self.device,
             resume=latest,
@@ -398,11 +425,11 @@ class Learner:
             **kwargs,
         )
         with run:
-            run.learn(until_timesteps=int(total_steps))
+            run.learn(until_timesteps=total_steps)
             self.steps = int(run.cumulative_timesteps)
             self._model = run.model
             self._spec = run.spec
-        self.run = run
+        return run
 
     def _register_main(self) -> None:
         """Make a ``build_env`` from ``__main__`` findable by its path.

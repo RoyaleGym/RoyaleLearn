@@ -360,3 +360,29 @@ def test_timestep_limit_is_where_learn_stops_when_it_is_given_no_total(tmp_path:
     assert learner.steps >= 32
     with pytest.raises(PreflightError, match="timestep_limit"):
         Learner(build_env, device="cpu", save_dir=tmp_path / "b", **TINY).learn()
+
+
+def test_a_run_carries_on_with_changed_training_settings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A learning rate or an epoch count changed between two runs of one ``save_dir`` is the
+    same bot trained on; the change is printed."""
+    save = tmp_path / "run"
+    Learner(build_env, n_envs=2, device="cpu", save_dir=save, **TINY).learn(total_steps=32)
+    capsys.readouterr()
+    again = Learner(
+        build_env, n_envs=2, device="cpu", save_dir=save, policy_lr=1e-4, ppo_epochs=2, **TINY
+    )
+    again.learn(total_steps=64)
+    assert again.steps >= 64 and again.resumed_from is not None
+    out = capsys.readouterr().out
+    assert "training settings changed" in out and "lr_actor" in out
+
+
+def test_a_run_with_another_network_is_refused_in_words(tmp_path: Path) -> None:
+    save = tmp_path / "run"
+    Learner(build_env, n_envs=2, device="cpu", save_dir=save, **TINY).learn(total_steps=32)
+    wider = Learner(build_env, n_envs=2, device="cpu", save_dir=save, trunk_channels=16, **TINY)
+    with pytest.raises(PreflightError, match="another save_dir") as refused:
+        wider.learn(total_steps=64)
+    assert "arch_digest" in str(refused.value)
