@@ -71,6 +71,10 @@ jobs:
 
   publish:
     needs: build
+    # Off until the owner sets the repository variable PYPI_PUBLISH to true (Settings > Secrets and
+    # variables > Actions > Variables), once the PyPI side is ready. Until then a tag builds and
+    # stops, instead of waiting in the environment for an approval nobody should give yet.
+    if: vars.PYPI_PUBLISH == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi
