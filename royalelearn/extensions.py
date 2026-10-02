@@ -516,6 +516,7 @@ _SURFACE: dict[str, str] = {
     "action_digest_of": "royalelearn.identity",
     "engine_build": "royalelearn.identity",
     "git_describe": "royalelearn.version",
+    "package_content_digest": "royalelearn.identity",
     "package_provenance": "royalelearn.identity",
     "royalegym_provenance": "royalelearn.identity",
     "section_digest": "royalelearn.identity",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2
+
+- A run that uses an add-on installed from a wheel (RoyaleImitate's `warm_start` or `imitation`,
+  installed with `pip install "royalegym[all]"`) starts. The run's identity names the add-on by
+  the content of its files, `content:<sha256>`, where there is no commit to name; it used to
+  refuse the run.
+
 ## 0.5.1
 
 - `royalelearn.extensions.write_policy_record(folder, env_spec, net)` writes the `policy.json` that

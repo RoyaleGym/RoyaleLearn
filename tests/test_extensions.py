@@ -234,19 +234,23 @@ def test_an_active_extension_is_recorded_by_commit_and_watched(
         _forget("watched_ext")
 
 
-def test_an_extension_whose_commit_cannot_be_named_refuses_the_run(
+def test_an_extension_installed_from_a_wheel_is_named_by_its_content(
     site: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, facts: Any  # noqa: F811
 ) -> None:
-    """Installed from a wheel, or inside somebody else's checkout: 'unknown' would make two runs
-    on two different builds of it one run."""
+    """Installed from a wheel, outside any repository, there is no commit to name. The package
+    is named by the digest of its files instead, so a run starts, and two runs on two different
+    builds of it are still two runs."""
     code = tmp_path / "loose"
     _package(code, "loose_ext")
     monkeypatch.syspath_prepend(str(code))
     _install(site, "loose-ext", {"loose_ext": "loose_ext:EXTENSION"}, code=code)
     try:
         used = with_sections(cfg.RunConfig(env=cfg.default_env_spec(cfg.MOCK_ENGINE)), loose_ext={})
-        with pytest.raises(PreflightError, match="cannot be named"):
-            I.compute_identity(used, **facts)
+        first = I.compute_identity(used, **facts).extensions["loose_ext"].git
+        assert first.startswith("content:") and len(first) == len("content:") + 64
+        assert first == I.compute_identity(used, **facts).extensions["loose_ext"].git
+        (code / "loose_ext" / "extra.py").write_text("x = 2\n", encoding="utf-8")
+        assert I.compute_identity(used, **facts).extensions["loose_ext"].git != first
     finally:
         _forget("loose_ext")
 

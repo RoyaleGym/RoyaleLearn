@@ -70,6 +70,7 @@ __all__ = [
     "env_spec_digest_of",
     "extension_records",
     "identity_differences",
+    "package_content_digest",
     "package_provenance",
     "royalegym_provenance",
     "run_id",
@@ -227,8 +228,8 @@ def extension_records(config: RunConfig) -> dict[str, ExtensionRecord] | None:
     every start. A section provided by an installed package also records the package: which
     distribution declared it, its ``__version__``, and its commit (``package_provenance``). A
     package whose commit cannot be named -- installed from a wheel, or not at the top of its own
-    repository -- refuses the run instead of recording ``unknown``, because two runs on two
-    different builds of it would then be one run.
+    repository -- is named by its content instead, ``content:<sha256>`` over its files
+    (``package_content_digest``), so that two runs on two different builds of it stay two runs.
     """
     from .errors import PreflightError
     from .extensions import active_extensions
@@ -237,7 +238,6 @@ def extension_records(config: RunConfig) -> dict[str, ExtensionRecord] | None:
     if not active:
         return None
     records: dict[str, ExtensionRecord] = {}
-    unknown: list[str] = []
     for entry in active:
         digest = section_digest(entry.extension.identity_value(entry.section), drop=())
         if entry.builtin:
@@ -246,18 +246,19 @@ def extension_records(config: RunConfig) -> dict[str, ExtensionRecord] | None:
         package = entry.extension.package
         git = package_provenance(package)
         if git == UNKNOWN:
-            unknown.append(f"{entry.name} ({getattr(package, '__name__', package)})")
+            digest_of_files = package_content_digest(package)
+            if digest_of_files == UNKNOWN:
+                raise PreflightError(
+                    f"the package providing the {entry.name!r} section cannot be named: it has "
+                    "no commit and no folder of files to name it by "
+                    f"({getattr(package, '__name__', package)})"
+                )
+            git = f"content:{digest_of_files}"
         records[entry.name] = ExtensionRecord(
             digest=digest,
             distribution=entry.distribution,
             version=str(getattr(package, "__version__", UNKNOWN)),
             git=git,
-        )
-    if unknown:
-        raise PreflightError(
-            "the commit of the package providing these sections cannot be named, so the run's "
-            f"identity could not say which code it ran: {', '.join(unknown)}. Install it "
-            "editable from a checkout whose top level is the package's parent folder"
         )
     return records
 
@@ -651,6 +652,31 @@ def package_provenance(package: Any) -> str:
         return UNKNOWN
     sha = head.stdout.strip()
     return f"{sha}-dirty" if _uncommitted(folder) else sha
+
+
+def package_content_digest(package: Any) -> str:
+    """sha256 over every file in ``package``'s folder, by relative path and bytes, compiled
+    caches left out; or ``"unknown"`` for a package with no folder.
+
+    What names a package installed from a wheel, which has no commit: the same files give the
+    same name wherever they are installed, and any change to one gives another.
+    """
+    try:
+        folder = Path(package.__file__).resolve().parent
+    except (AttributeError, TypeError):
+        return UNKNOWN
+    if not folder.is_dir():
+        return UNKNOWN
+    digest = hashlib.sha256()
+    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        relative = path.relative_to(folder)
+        if "__pycache__" in relative.parts or path.suffix in (".pyc", ".pyo"):
+            continue
+        name = relative.as_posix().encode("utf-8")
+        data = path.read_bytes()
+        digest.update(len(name).to_bytes(8, "little") + name)
+        digest.update(len(data).to_bytes(8, "little") + data)
+    return digest.hexdigest()
 
 
 @lru_cache(maxsize=1)

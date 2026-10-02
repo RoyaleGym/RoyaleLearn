@@ -4213,8 +4213,10 @@ exactly what they were before sections existed. That is tested.
   core fields, in name order. `RunConfig` itself has no field for any of them.
 - **The identity.** `RunIdentity.extensions` has one `ExtensionRecord` per section the run uses: the
   digest of the section's identity value (files by content digest, thresholds left out), and the
-  providing distribution, its `__version__` and its commit. A package whose commit cannot be named
-  refuses the run. Its folder is watched for uncommitted edits like the core packages.
+  providing distribution, its `__version__` and its commit. A package with no commit to name (one
+  installed from a wheel) is named `content:<sha256>` over its files instead
+  (`identity.package_content_digest`). Its folder is watched for uncommitted edits like the core
+  packages.
 - **The hooks.** `verify` (the files a section names, before preflight, every start), `prepare`
   (before the rollout buffer exists), `loaded` (after a resume's checkpoint load), `actor_lr_scale`
   (19.5), `actor_terms` (terms added to the actor's loss, section 9's update), `alarms` and

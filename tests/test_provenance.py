@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-from royalelearn.identity import package_provenance, section_digest
+from royalelearn.identity import package_content_digest, package_provenance, section_digest
 
 
 def _git(root: Path, *args: str) -> str:
@@ -112,3 +112,25 @@ def test_a_section_digest_follows_content_and_drops_the_named_keys() -> None:
     assert section_digest(base, drop=()) != section_digest(moved, drop=())
     named = {"file": "a.bin", "digest": "1"}
     assert section_digest(named, drop=("file",)) == section_digest({"digest": "1"}, drop=())
+
+
+def test_a_package_is_named_by_the_content_of_its_files(tmp_path: Path) -> None:
+    """What a wheel-installed package is named by: every file under its folder, by relative path
+    and bytes, compiled caches left out."""
+    module = _package(tmp_path / "a")
+    folder = Path(module.__file__).parent
+    first = package_content_digest(module)
+    assert first == package_content_digest(module) and len(first) == 64
+    (folder / "__pycache__").mkdir()
+    (folder / "__pycache__" / "x.pyc").write_bytes(b"cache")
+    assert package_content_digest(module) == first, "a compiled cache moved the name"
+    (folder / "more.py").write_text("y = 1\n", encoding="utf-8")
+    second = package_content_digest(module)
+    assert second != first
+    (folder / "more.py").write_text("y = 2\n", encoding="utf-8")
+    assert package_content_digest(module) != second
+    other = _package(tmp_path / "b")
+    (Path(other.__file__).parent / "more.py").write_text("y = 2\n", encoding="utf-8")
+    assert package_content_digest(other) == package_content_digest(module), (
+        "the same files in another folder are another name"
+    )
