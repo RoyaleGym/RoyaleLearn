@@ -114,6 +114,10 @@ To train against one fixed opponent and nothing else: one seed, `mix` set to `[0
 never adds anything. `tests/test_seed_snapshots.py` checks that every pool battle of such a run
 meets the seed.
 
+A seed can also carry a `weight`, which multiplies how often it is drawn (default 1). With two
+seeds weighted 2 and 3 and `pfsp_weighting` set to `"uniform"`, the pool meets them 40% and 60%
+of the time. Every other pool member keeps a weight of 1.
+
 ### Training one deck against a field of others
 
 `ladder.seat_decks` trains one deck, and only that deck, against the decks it will meet:

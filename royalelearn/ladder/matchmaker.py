@@ -320,6 +320,14 @@ class MixMatchmaker(Matchmaker):
         uniform = self.config.pfsp_uniform_floor
         weights = (1.0 - uniform) * shaped + uniform / count
         weights = np.maximum(weights, self.config.weight_floor_scale / count)
+        # Each seed's own multiplier (``SeedSnapshot.weight``); every other member keeps one.
+        seed_weights = {
+            f"seed:{seed.name}": float(seed.weight) for seed in self.config.seed_snapshots
+        }
+        if seed_weights:
+            weights = weights * np.array(
+                [seed_weights.get(candidate, 1.0) for candidate in candidates], dtype=np.float64
+            )
         return weights / weights.sum()
 
     def _predicted_score(

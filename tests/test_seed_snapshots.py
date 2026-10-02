@@ -199,3 +199,75 @@ def test_the_rows_say_whether_pool_battles_played_the_pool(tmp_path: Path) -> No
     full = counts(seeded(tmp_path, folder, sha256, mix=POOL_ONLY))
     assert full["pool"] > 0, full
     assert full == {"mirror": 0, "pool": full["pool"], "scripted": 0, "pool_fallback": 0}
+
+
+# -- weight --------------------------------------------------------------------------------------
+
+
+def _weighted_ladder(*weights: float, weighting: str = "uniform") -> cfg.LadderConfig:
+    seeds = tuple(
+        cfg.SeedSnapshot(name=f"s{i}", path=f"seeds/s{i}", sha256=f"{i}" * 64, weight=w)
+        for i, w in enumerate(weights)
+    )
+    return cfg.LadderConfig(mix=POOL_ONLY, pfsp_weighting=weighting, seed_snapshots=seeds)
+
+
+def _seeded_pool(tmp_path: Path, names: list[str]) -> Any:
+    from royalelearn.ladder.pool import LadderPool
+    from royalelearn.ladder.results import ResultLog
+
+    pool = LadderPool(ResultLog(tmp_path / "games.jsonl"), context="ctx")
+    for name in names:
+        pool.seed(name)
+    return pool
+
+
+def test_a_seeds_weight_multiplies_its_draw_weight() -> None:
+    from royalelearn.ladder.matchmaker import MixMatchmaker
+
+    matchmaker = MixMatchmaker(1, _weighted_ladder(2.0, 3.0))
+    weights = matchmaker.weights(("seed:s0", "seed:s1"), None, "uniform")
+    assert weights.tolist() == pytest.approx([0.4, 0.6])
+    # Beside a member that is not a seed, which keeps a weight of one.
+    weights = matchmaker.weights(("seed:s0", "seed:s1", "snap:v3"), None, "uniform")
+    assert weights.tolist() == pytest.approx([2 / 6, 3 / 6, 1 / 6])
+
+
+def test_the_battles_meet_the_seeds_in_their_weights(tmp_path: Path) -> None:
+    from royalelearn.ladder.matchmaker import MixMatchmaker
+
+    matchmaker = MixMatchmaker(1, _weighted_ladder(2.0, 3.0), n_battles=1)
+    pool = _seeded_pool(tmp_path, ["seed:s0", "seed:s1"])
+    met = [matchmaker.assign(0, ordinal, pool).opponent_id for ordinal in range(4000)]
+    assert met.count("seed:s1") / len(met) == pytest.approx(0.6, abs=0.03)
+
+
+def test_a_weight_of_one_is_the_draw_and_the_config_hash_there_were_before() -> None:
+    from royalelearn.ladder.matchmaker import MixMatchmaker
+
+    plain = MixMatchmaker(1, _weighted_ladder(1.0, 1.0, weighting="hard"))
+    weights = plain.weights(("seed:s0", "seed:s1", "snap:v3"), None, "hard")
+    assert weights.tolist() == pytest.approx([1 / 3] * 3)
+    config = cfg.laptop()
+    seeds = (
+        cfg.SeedSnapshot("bc", "artifacts/bc", "a" * 64),
+        cfg.SeedSnapshot("rl", "artifacts/rl", "b" * 64),
+    )
+    config = msgspec.structs.replace(
+        config, ladder=msgspec.structs.replace(config.ladder, seed_snapshots=seeds)
+    )
+    # The hash of this config before the weight existed: a seeded run carries on.
+    assert cfg.config_hash(config).startswith("098a9113520b")
+    heavier = msgspec.structs.replace(
+        config,
+        ladder=msgspec.structs.replace(
+            config.ladder, seed_snapshots=(msgspec.structs.replace(seeds[0], weight=2.0), seeds[1])
+        ),
+    )
+    assert cfg.config_hash(heavier) != cfg.config_hash(config)
+
+
+@pytest.mark.parametrize("weight", [0.0, -1.0, float("inf")])
+def test_a_weight_that_is_not_a_positive_number_is_refused(weight: float) -> None:
+    problems = cfg.check_consistency(cfg.RunConfig(ladder=_weighted_ladder(1.0, weight)))
+    assert [p for p in problems if "weight" in p and "s1" in p], problems

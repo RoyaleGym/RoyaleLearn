@@ -366,7 +366,9 @@ class RaterConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     draws: str = "davidson"
 
 
-class SeedSnapshot(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+class SeedSnapshot(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True
+):
     """A frozen actor the pool holds from the run's first iteration and never evicts.
 
     ``path`` is a folder holding ``actor.safetensors`` and ``spec.json``: a run's own snapshot
@@ -380,6 +382,11 @@ class SeedSnapshot(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
     path: str
     sha256: str
+    #: A multiplier on this seed's draw weight, after PFSP's shape and floor; every other member
+    #: of the pool keeps a weight of one. Two seeds weighted 2 and 3 under ``pfsp_weighting``
+    #: "uniform" are met 40/60. Left out of the config's encoding at 1, so a seeded config's hash
+    #: is what it was before the field existed.
+    weight: float = 1.0
 
 
 class SeatDecks(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -947,6 +954,11 @@ def _seed_snapshot_problems(ladder: LadderConfig) -> list[str]:
             problems.append(
                 f"ladder.seed_snapshots has a name {seed.name!r}: it becomes the pool id "
                 f"seed:<name>, so it must be non-empty and hold no ':'"
+            )
+        if not (math.isfinite(seed.weight) and seed.weight > 0):
+            problems.append(
+                f"ladder.seed_snapshots {seed.name!r}: weight {seed.weight} is not a positive "
+                "number (it multiplies the seed's draw weight)"
             )
         if not re.fullmatch(r"[0-9a-f]{64}", seed.sha256):
             problems.append(
