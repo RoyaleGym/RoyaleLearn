@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.4
+
+- The spells' ids reach the network. RoyaleGym's `SpatialObsBuilder(spell_identity=True)` adds a
+  `spell_ids` observation (four planes in the `card_ids` vocabulary). It is stored exactly beside
+  `card_ids`, carried in `ObsBatch.card_ids` after the card planes, and read through the same card
+  embedding into the trunk. It needs `card_identity`; a `spell_ids` without `card_ids`, or in
+  another vocabulary, is refused at start-up. Without it, every row, table and digest is as before.
+
 ## 0.5.3
 
 - The start-up check that plays a battle of no-ops to its end allows half a match past the

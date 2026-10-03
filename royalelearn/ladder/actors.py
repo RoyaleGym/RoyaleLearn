@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ..obs_layout import id_stack
+
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.rollout import EnvSpec
     from ..config import NetConfig
@@ -155,8 +157,9 @@ class EvalActors:
             .astype(np.float32)
         )
         frame = {"spatial": spatial, "planes": planes}
-        if "card_ids" in obs:
-            frame["ids"] = np.asarray(obs["card_ids"]).astype(np.int64)
+        ids = id_stack(obs)
+        if ids is not None:
+            frame["ids"] = np.asarray(ids).astype(np.int64)
         frames = self.spec.frame_stack
         stack = [frame]
         if frames > 1 and history is not None:

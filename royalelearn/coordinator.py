@@ -86,6 +86,7 @@ from .metrics.records import (
 )
 from .metrics.schema import for_run
 from .metrics.sinks import METRICS_NAME, build_sinks
+from .obs_layout import id_planes
 from .rollout.inline import (
     InlineRolloutSource,
     assignments_constant_within_episodes,
@@ -1477,9 +1478,11 @@ class LearningCoordinator:
             # minibatch carries the id planes and their embedding.
             card_ids=(
                 torch.zeros(
-                    (rows, *spec.obs_space["card_ids"].shape), dtype=torch.int64, device=self.device
+                    (rows, id_planes(spec.obs_space), *spec.tiles),
+                    dtype=torch.int64,
+                    device=self.device,
                 )
-                if "card_ids" in spec.obs_space
+                if id_planes(spec.obs_space)
                 else None
             ),
         )

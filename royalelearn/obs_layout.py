@@ -20,13 +20,18 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from .api.rollout import EnvSpec
 
 __all__ = [
+    "CARD_IDS",
     "HAND_AFFORDABLE",
     "HAND_CARD_ONEHOT",
     "HAND_COST",
+    "ID_KEYS",
     "REQUIRED_FIELDS",
+    "SPELL_IDS",
     "HandFields",
     "field_slice",
     "hand_fields",
+    "id_planes",
+    "id_stack",
     "resolve_fields",
 ]
 
@@ -37,6 +42,33 @@ HAND_COST = "own_hand_cost"
 HAND_AFFORDABLE = "own_hand_affordable"
 
 REQUIRED_FIELDS: tuple[str, ...] = (HAND_CARD_ONEHOT, HAND_COST, HAND_AFFORDABLE)
+
+#: The observation keys holding card ids per tile, in the order they are carried: the card on
+#: each tile (``SpatialObsBuilder(card_identity=True)``), then the spells' planes
+#: (``spell_identity=True``), which use the same ids. Wherever a row, a batch or the network
+#: holds ids, it holds the planes of every key present, in this order, as one block.
+CARD_IDS = "card_ids"
+SPELL_IDS = "spell_ids"
+ID_KEYS: tuple[str, ...] = (CARD_IDS, SPELL_IDS)
+
+
+def id_planes(obs_space: Mapping[str, object]) -> int:
+    """How many id planes one frame carries: the planes of every id key present, summed."""
+    return sum(int(obs_space[key].shape[0]) for key in ID_KEYS if key in obs_space)  # type: ignore[attr-defined]
+
+
+def id_stack(obs: Mapping[str, object]) -> object:
+    """One frame's id planes as one array, in ``ID_KEYS`` order, or None when it has none.
+
+    With ``card_ids`` alone this is that array itself, so an observation without spell ids is
+    carried exactly as before they existed.
+    """
+    import numpy as np
+
+    present = [np.asarray(obs[key]) for key in ID_KEYS if key in obs]
+    if not present:
+        return None
+    return present[0] if len(present) == 1 else np.concatenate(present, axis=0)
 
 
 def field_slice(spec: EnvSpec, name: str) -> slice:

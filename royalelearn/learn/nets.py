@@ -40,7 +40,7 @@ from royalegym.action import NOOP
 
 from ..api.policy import NetworkFactory
 from ..errors import PreflightError
-from ..obs_layout import hand_fields
+from ..obs_layout import hand_fields, id_planes
 from ..rollout.envspec import digest_of
 from ..seeding import TORCH_INIT, derive_int
 from .actor_critic import ClashActor, ClashCritic, SeparateActorCritic, SharedTrunkActorCritic
@@ -294,7 +294,8 @@ class ClashTrunk(nn.Module):
             ids = spec.obs_space["card_ids"]
             vocabulary = int(max(float(h) for h in _flat(ids.high))) + 1
             self.card_ids_embed = nn.Embedding(vocabulary, CARD_ID_EMBED, padding_idx=0)
-            self.in_channels += spec.frame_stack * ids.shape[0] * CARD_ID_EMBED
+            # The spells' planes (``spell_ids``) hold the same ids and go through this table too.
+            self.in_channels += spec.frame_stack * id_planes(spec.obs_space) * CARD_ID_EMBED
         self.stem = nn.Conv2d(self.in_channels, arch.channels, 3, padding=1)
         self.stem_norm = nn.GroupNorm(arch.norm_groups, arch.channels)
         self.body = nn.ModuleList(
@@ -667,6 +668,12 @@ class DefaultNetworkFactory(NetworkFactory):
                 ),
                 # Only when there are card ids to embed, so every digest before D2 is unchanged.
                 **({"card_id_embed": CARD_ID_EMBED} if "card_ids" in spec.obs_space else {}),
+                # Only when the spells' ids are on, so every digest before them is unchanged.
+                **(
+                    {"spell_id_planes": int(spec.obs_space["spell_ids"].shape[0])}
+                    if "spell_ids" in spec.obs_space
+                    else {}
+                ),
             }
         )
 

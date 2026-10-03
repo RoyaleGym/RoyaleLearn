@@ -29,6 +29,9 @@ The rule, per key:
     ``uint8``, exact, in a region of its own after the mask. It is never a plane of ``spatial``:
     a card id stored as a scaled half and read back as 6.997 would be embedded as card 6. Absent,
     the row is byte-for-byte what it always was.
+``spell_ids`` (only with ``spell_identity``, which needs card identity)
+    In the same region, after the ``card_ids`` planes, and the same ids. Absent, the region is
+    exactly the ``card_ids`` planes.
 
 Any other key is REFUSED at bind. The codec used to take the keys it knew and ignore the rest,
 which would have dropped card identity on the floor the day the builder started sending it.
@@ -54,6 +57,7 @@ import numpy as np
 
 from ..api.buffer import MIN_TABLE_STATES, CodecTable, ObsCodec
 from ..errors import PreflightError
+from ..obs_layout import CARD_IDS, SPELL_IDS, id_planes, id_stack
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from torch import Tensor
@@ -91,12 +95,12 @@ STORAGE: tuple[str, ...] = (STORAGE_UINT8, STORAGE_FLOAT16, STORAGE_STATIC, STOR
 
 #: The largest value one byte holds. The range of the storage type, not a fact about the arena.
 _UINT8_MAX = 255
-#: The key card identity arrives under, and every key this codec stores or derives.
-CARD_IDS = "card_ids"
+#: Every key this codec stores or derives. Card identity arrives under ``CARD_IDS``, and the
+#: spells' ids under ``SPELL_IDS``; both are stored in the one id region, card ids first.
 #: Derived like ``mask_planes``: the last ``n_buttons`` bits of the mask, never stored.
 ABILITY_READY = "ability_ready"
 KNOWN_KEYS: frozenset[str] = frozenset(
-    {"spatial", "vector", "action_mask", "mask_planes", CARD_IDS, ABILITY_READY}
+    {"spatial", "vector", "action_mask", "mask_planes", CARD_IDS, SPELL_IDS, ABILITY_READY}
 )
 _BITS_PER_BYTE = 8
 
@@ -320,6 +324,19 @@ class SpatialObsCodec(ObsCodec):
                 f"table says {bound.ids!r}; a worker and the learner handed these would disagree "
                 "about every row"
             )
+        if SPELL_IDS in spec.obs_space:
+            if not has_ids:
+                raise PreflightError(
+                    f"the observation carries {SPELL_IDS} without {CARD_IDS}; its ids are card "
+                    "ids, read through the card table, so it needs card identity on"
+                )
+            spell_high = int(np.max(np.asarray(spec.obs_space[SPELL_IDS].high)))
+            card_high = int(np.max(np.asarray(spec.obs_space[CARD_IDS].high)))
+            if spell_high != card_high:
+                raise PreflightError(
+                    f"{SPELL_IDS} declares ids up to {spell_high} and {CARD_IDS} up to "
+                    f"{card_high}; one table embeds both, so they must be one vocabulary"
+                )
         if has_ids:
             if bound.ids != STORAGE_UINT8:
                 raise PreflightError(
@@ -384,7 +401,7 @@ class SpatialObsCodec(ObsCodec):
         mask_bytes = math.ceil(spec.n_actions / _BITS_PER_BYTE)
         mask_start = vector_stop
         mask_stop = mask_start + mask_bytes
-        ids_planes = spec.obs_space[CARD_IDS].shape[0] if CARD_IDS in spec.obs_space else 0
+        ids_planes = id_planes(spec.obs_space)
         ids_start = mask_stop
         ids_stop = ids_start + ids_planes * cells
         return RowLayout(
@@ -504,7 +521,7 @@ class SpatialObsCodec(ObsCodec):
         target[layout.mask_start : layout.mask_stop] = np.packbits(mask, bitorder="little")
 
         if layout.ids_planes:
-            ids = np.asarray(obs[CARD_IDS])
+            ids = np.asarray(id_stack(obs))
             if ids.dtype != np.uint8:
                 # bind() proved the vocabulary fits a byte; a value outside it is a bug report.
                 over = int(np.count_nonzero((ids < 0) | (ids > _UINT8_MAX)))
