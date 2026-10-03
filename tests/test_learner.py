@@ -277,7 +277,7 @@ def test_a_build_env_in_code_run_by_exec_trains(tmp_path: Path) -> None:
     assert "DONE" in done.stdout, done.stdout[-2000:]
 
 
-# -- the named settings, rlgym-ppo style -------------------------------------------------------
+# -- the named settings -------------------------------------------------------
 
 
 def test_the_defaults_build_the_config_they_always_built(tmp_path: Path) -> None:

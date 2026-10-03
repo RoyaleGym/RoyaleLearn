@@ -202,7 +202,7 @@ class Learner:
     - ``trunk_blocks``: residual blocks in it.
     - ``critic_hidden``: the critic's hidden layer.
 
-    The update, named as rlgym-ppo names them:
+    The update:
 
     - ``steps_per_update``: decisions collected between two updates.
     - ``ppo_epochs``: passes over each update's decisions.

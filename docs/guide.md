@@ -305,8 +305,7 @@ loud each term really is, read `env/reward_terms_step_abs/<term>` in your metric
 You need four repos to train a bot, and all four are public, under the GitHub organisation
 [RoyaleGym](https://github.com/RoyaleGym). RoyaleLearn is the top layer. It imports `royalegym`
 and never reaches into the engine itself.
-Dependencies run one way, from RoyaleLearn to RoyaleGym to RoyaleSim. If you know RLGym, RocketSim
-and RLGym-PPO, this is the same split with the same names.
+Dependencies run one way, from RoyaleLearn to RoyaleGym to RoyaleSim.
 
 | Repo | What it is | To this repo |
 |---|---|---|

@@ -8,10 +8,8 @@ Every number here is either **[M]** measured with its source named, or **[A]** d
 from measured numbers, with the arithmetic shown. Nothing here is a menu: where two defensible
 choices existed, one was taken and the reason is given.
 
-Where this page says *the references*, it means the three learners this family already has:
-[rlgym-ppo](https://github.com/AechPro/rlgym-ppo), rlgym-learn with rlgym-learn-algos, and
-[rocket-learn](https://github.com/Rolv-Arild/rocket-learn). Their decisions are copied where they are
-right, and named where they are not.
+Where this page says *the references*, it means existing open-source PPO learners for other games.
+Their decisions are copied where they are right, and named where they are not.
 
 Terms, fixed once and used throughout:
 
@@ -202,7 +200,7 @@ start-up refuses `rollout.overlap = true`.
 Two consequences, stated so nobody re-derives them:
 
 - **The learner is the bottleneck on this machine, by about 2.5×.** Rollout capacity is ~3 300
-  timesteps/s against an update capacity of ~1 330. That inverts the usual RLGym situation and it is
+  timesteps/s against an update capacity of ~1 330. That inverts the usual situation and it is
   why `K = 3` and not 32, and why the network is 430 k parameters and not 4 M.
 - **"The harness is never the bottleneck" is an invariant with a number:** rollout capacity ≥ 2 ×
   update capacity on every shipped profile. `royalelearn bench` prints both, the run logs
@@ -346,7 +344,7 @@ Deleted in the first commit: `continuous_policy.py`, `discrete_policy.py`, `mult
 `value_estimator.py`, `experience_buffer.py`, `ppo_learner.py`, the `SEED_CLASSES` machinery in
 `__init__.py`, `NOTICE`, `LICENSE-APACHE-2.0`, the `[tool.ruff] extend-exclude` list, and the seed
 assertions in `tests/test_package.py`. `pyproject.toml`'s `license` becomes `{ text = "MIT" }`.
-`docs/design.md` loses its "The rlgym-ppo seed modules" section and gains one sentence recording that
+`docs/design.md` loses its section on the seed modules and gains one sentence recording that
 they were a reference and were removed when the harness landed.
 
 ---
@@ -2489,8 +2487,8 @@ of this layer.
 TrueSkill is rejected explicitly. It is online only, so it cannot refit history; its sigma shrinks
 monotonically and needs an artificial floor to stop the rating freezing; and at the floor the
 converged interval is about **plus or minus 92 Elo**, worse than a hundred games of direct
-head-to-head. Every one of those compromises exists because a Rocket League evaluation game is a real
-match in a real client. Here an evaluation battle costs a fraction of a second and is seed
+head-to-head. Every one of those compromises exists because, in the references' game, an evaluation
+game is a real match in a real client. Here an evaluation battle costs a fraction of a second and is seed
 reproducible, so the compromises should not be inherited along with the mechanism.
 
 `rating_above_v0` is reported alongside the anchored rating, so the headline curve reads as "Elo above

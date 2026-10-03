@@ -50,7 +50,7 @@
 
 ## 0.4.0
 
-- `Learner` names its settings the way rlgym-ppo does, each with a default: the network
+- `Learner` takes its settings by name, each with a default: the network
   (`trunk_channels`, `trunk_blocks`, `critic_hidden`), the update (`ppo_epochs`, `ppo_batch_size`,
   `ppo_minibatch_size`, `policy_lr`, `critic_lr`, `ppo_ent_coef`, `ppo_clip_range`, `gae_gamma`,
   `gae_lambda`, `standardize_returns`), `timestep_limit`, `n_checkpoints_to_keep`, and

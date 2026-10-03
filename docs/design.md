@@ -28,7 +28,7 @@ down with their reasons, in this folder, before the code lands.
 1. **Rollout workers** over `royalegym`'s self-play vectorised env (`ClashSelfPlayVecEnv`),
    with Rust-backed default observations and actions so Python stays off the per-tick path.
 2. **A PPO learner** (proximal policy optimisation) in torch for `royalegym`'s discrete
-   card-and-tile action space, replacing the seed's Rocket League policies.
+   card-and-tile action space.
 3. **A frozen-pool ladder**: periodic policy snapshots, ELO with confidence intervals
    against the pool, and the win rate that gates a snapshot into the pool.
 4. **Checkpoints** holding the policy, the critic, the optimizer, the pool index and the env
@@ -47,7 +47,7 @@ would score well on parity and badly on the thing anyone cares about.
 
 ## Conventions
 
-The harness follows the family's conventions, which will be familiar from RLGym:
+The harness follows these conventions:
 
 - **Every user-facing behaviour is an abstract base class (ABC) with swappable
   implementations.** In this repo that means the rollout worker, the learner, the ladder's
@@ -77,12 +77,12 @@ The harness follows the family's conventions, which will be familiar from RLGym:
 
 ## What the references contributed
 
-rlgym-ppo's `ppo/` subpackage sat in `royalelearn/` while the harness was designed. It was a
-reference for what a working RLGym-PPO learner looks like, and we removed it when the harness
-landed. It was never a foundation: its modules are bound to Rocket League's action layout.
-`docs/harness-spec.md` records the decisions worth keeping from them, with their reasons, and
-names them beside the ones we did not keep. `rlgym_ppo` is not a dependency of this package
-and will not become one.
+An existing open-source PPO package sat in `royalelearn/` while the harness was designed, as a
+reference for what a working learner looks like, and we removed it when the harness landed. It
+was never a foundation: its modules were bound to another game's action layout.
+`docs/harness-spec.md` records the decisions worth keeping from the references, with their
+reasons, and names them beside the ones we did not keep. No such package is a dependency of this
+one.
 
 ## What is open
 
