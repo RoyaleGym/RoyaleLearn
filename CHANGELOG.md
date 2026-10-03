@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+- The start-up check that plays a battle of no-ops to its end allows half a match past the
+  clock, so it passes on an engine whose level overtime ends after the clock (RoyaleSim's tower
+  drain).
+
 ## 0.5.2
 
 - A run that uses an add-on installed from a wheel (RoyaleImitate's `warm_start` or `imitation`,

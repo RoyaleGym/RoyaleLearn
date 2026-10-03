@@ -546,13 +546,15 @@ def _drive_to_game_over(config: RunConfig, spec: EnvSpec) -> tuple[Any, Any]:
 
     It runs the run's own environment with its step limit raised past the length of a match,
     because a truncation ends an episode before the engine does and this gate is about the
-    state the engine ends one in. The bound is the match's own length -- regulation, overtime
-    and a decision of slack, read off the environment rather than written down -- so a rules
-    change moves it.
+    state the engine ends one in. The bound is the match's own length -- regulation and
+    overtime, read off the environment rather than written down -- and half as much again: how
+    a level overtime ends is the engine's rule, and on RoyaleSim r31 the crown towers drain
+    after overtime until one falls or they draw, some ticks past the clock. The bound is there
+    to catch a battle that never ends, not to time one that does.
     """
     import msgspec
 
-    limit = (spec.regular_ticks + spec.overtime_ticks) // spec.decision_ticks + 2
+    limit = (spec.regular_ticks + spec.overtime_ticks) * 3 // 2 // spec.decision_ticks + 2
     factory = msgspec.structs.replace(
         config.env,
         truncation=[
