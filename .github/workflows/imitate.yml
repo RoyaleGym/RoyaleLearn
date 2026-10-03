@@ -66,6 +66,7 @@ jobs:
           pip install -e "RoyaleLearn[torch]"
           pip install -e "RoyaleLearn[dev]"
           pip install -e RoyaleImitate --no-deps
+          pip install pyarrow
 
       - name: RoyaleImitate's suite
         working-directory: RoyaleImitate
