@@ -44,11 +44,11 @@ ENGINES = [
     pytest.param("rust-subset", marks=pytest.mark.engine),
 ]
 
-#: Cards the catalogue test does not price, each graded by a strict xfail of its own. The Tri
-#: Wizards: from RoyaleSim round 9 a tap puts the three wizards down over several ticks, none
-#: of them within the two the catalogue test waits, and the Electro Wizard and Ice Wizard come
-#: down under THEIR OWN card ids (42, 23), so once all three are down the term prices the play
-#: at 7 + 4 + 3. It is an event-only card, and its fix waits with the other event-only cards.
+#: Cards the catalogue test does not price, each priced by a test of its own. The Tri Wizards:
+#: a tap puts the three wizards down over several ticks, none of them within the two the
+#: catalogue test waits. Before RoyaleSim 0.1.5 the Electro Wizard and Ice Wizard came down
+#: under their own card ids (42, 23) and the play priced at 7 + 4 + 3; from 0.1.5 each unit
+#: carries the played card's id.
 PRICED_ELSEWHERE = frozenset({"TriWizards"})
 #: How long the Tri Wizards test waits after the tap. On round 9 the last wizard is down 8
 #: ticks after it.
@@ -267,31 +267,13 @@ def test_every_cards_own_row_at_the_catalogue_level_is_the_catalogue_row(kind: s
     assert units >= 20, f"only {units} unit cards, so the check would be vacuous"
 
 
-class TriWizardsMispriced(AssertionError):
-    """The one failure the Tri Wizards test below is expected to raise, and no other."""
-
-
 @pytest.mark.parametrize("kind", ENGINES[1:])
-@pytest.mark.xfail(
-    strict=True,
-    raises=TriWizardsMispriced,
-    reason=(
-        "RoyaleSim puts the Tri Wizards' Electro and Ice Wizards down under their own card ids "
-        "(42, 23), so the term prices the play 14; stamping the played card's id waits with the "
-        "other event-only cards"
-    ),
-)
 def test_a_tri_wizards_play_puts_exactly_its_elixir_on_the_board(kind: str) -> None:
     """The Tri Wizards, priced once all three wizards are on the board.
 
     The catalogue test reads the board two ticks after a tap and the Tri Wizards arrive later,
     so this test waits ``TRI_WIZARDS_SETTLE_TICKS``. It also requires all three: with only the
     first wizard down the board prices at exactly 7 and would pass for the wrong reason.
-
-    Expected to fail, and only with ``TriWizardsMispriced``: a catalogue with no Tri Wizards, a
-    tap that did not land or a board without three wizards fails as an ordinary error. When
-    the engine stamps the card's id on all three this passes, ``strict`` turns that into a
-    failure, and the card comes out of ``PRICED_ELSEWHERE`` with the mark.
     """
     engine = _engine(kind)
     term = _term(engine)
@@ -309,8 +291,7 @@ def test_a_tri_wizards_play_puts_exactly_its_elixir_on_the_board(kind: str) -> N
         on_board = sum((term.unit_value(entity) for entity in t.put_down), Fraction(0))
         if on_board != _price(t.card):
             off.append((t.seat, str(on_board), str(_price(t.card))))
-    if off:
-        raise TriWizardsMispriced(f"Tri Wizards plays priced at something other than 7: {off}")
+    assert off == [], f"Tri Wizards plays priced at something other than 7: {off}"
 
 
 def _entity(card: Any, **stats: Any) -> EntityState:
