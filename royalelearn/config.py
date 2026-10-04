@@ -609,6 +609,10 @@ class DoctorConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: system RAM, and a cache that keeps growing can starve the whole machine, so a CUDA run
     #: caps its allocator by default (``LearningCoordinator(vram_fraction=...)``).
     vram_headroom_mb: int = 256
+    #: The share of the card a CUDA run's allocator may hold, in (0, 1], or None for no cap.
+    #: Unset leaves it to ``LearningCoordinator(vram_fraction=...)``, whose default caps at 0.8 on
+    #: Windows only. Unset is left out of the encoding, so no config hash moves.
+    vram_fraction: float | msgspec.UnsetType | None = msgspec.UNSET
 
 
 def default_env_spec(engine: str = RUST_ENGINE, *, max_steps: int = 480) -> EnvFactorySpec:

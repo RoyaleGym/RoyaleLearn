@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `doctor.vram_fraction` sets the GPU memory cap from a config: a share of the card in (0, 1],
+  or null for no cap. Unset, the constructor's `vram_fraction` decides, as before.
+
 ## 0.5.8
 
 - A CUDA run on Windows starts again: the memory cap named the device as `cuda` with no index,

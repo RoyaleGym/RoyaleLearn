@@ -91,3 +91,19 @@ def test_the_learner_passes_its_setting_on_and_refuses_a_bad_one(tmp_path: Any) 
     )
     with pytest.raises(PreflightError, match="vram_fraction"):
         Learner(build_env, device="cpu", save_dir=tmp_path / "c", vram_fraction=2)
+
+
+def test_a_config_sets_the_cap_and_unset_leaves_every_hash_alone() -> None:
+    """``doctor.vram_fraction``, when a config sets it, wins over the constructor's argument."""
+    import msgspec
+
+    from royalelearn import config as cfg
+
+    base = cfg.RunConfig()
+    assert "vram_fraction" not in cfg.dump_config(base)
+    for setting, expected in ((0.6, 0.6), (None, None)):
+        doctor = msgspec.structs.replace(base.doctor, vram_fraction=setting)
+        config = msgspec.structs.replace(base, doctor=doctor)
+        assert cfg.config_hash(config) != cfg.config_hash(base)
+        run = LearningCoordinator(config, printer=None, vram_fraction=0.9)
+        assert run.vram_fraction == expected

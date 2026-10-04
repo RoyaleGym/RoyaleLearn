@@ -857,7 +857,8 @@ class LearningCoordinator:
     ) -> None:
         self.config = validate(config)
         #: The share of the card this process's allocator may hold (``vram_cap``).
-        self.vram_fraction = vram_cap(vram_fraction)
+        doctor = self.config.doctor.vram_fraction
+        self.vram_fraction = vram_cap(vram_fraction if doctor is msgspec.UNSET else doctor)
         self.printer = printer or (lambda _line: None)
         self.geometry = geometry(self.config)
         self.codec_path = codec
