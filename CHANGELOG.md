@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.5
+
+- On Windows a GPU run caps its memory at 80% of the card by default. Windows backs a full card
+  with system RAM instead of failing, so without a cap torch's memory cache could take gigabytes
+  of it over a long run. Set it with `Learner(vram_fraction=...)`: a share of the card, or None
+  for no cap. Elsewhere there is no cap unless you set one. The start-up check that one
+  minibatch fits the card counts the cap.
+
 ## 0.5.4
 
 - The spells' ids reach the network. RoyaleGym's `SpatialObsBuilder(spell_identity=True)` adds a

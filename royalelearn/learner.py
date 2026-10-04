@@ -187,6 +187,9 @@ class Learner:
     - ``device``: "auto" (a GPU when torch can see one, else the CPU, with a line saying so),
       "cuda" or "cpu". ``threads``: CPU threads for the network's arithmetic (default: half the
       machine's logical cores, at most eight).
+    - ``vram_fraction``: the share of the GPU's memory training may hold. "auto" is 0.8 on
+      Windows, where a full card spills into system RAM instead of failing, and no cap elsewhere;
+      None is no cap.
     - ``save_dir``: where checkpoints, metric rows and the config go. Made again with the same
       folder, a run carries on; ``resume=False`` refuses to instead.
     - ``opponent``: "random" (a bot that plays a random legal move now and then), "noop" (one
@@ -235,6 +238,7 @@ class Learner:
         n_envs: int = 8,
         device: str = "auto",
         threads: int | None = None,
+        vram_fraction: float | str | None = "auto",
         save_dir: str | os.PathLike[str] = "runs/royalelearn",
         resume: bool = True,
         opponent: str = "random",
@@ -277,7 +281,10 @@ class Learner:
         self.steps = 0
         #: The checkpoint the last ``learn`` carried on from, or None for a fresh start.
         self.resumed_from: Path | None = None
-        self._kwargs = dict(_coordinator_kwargs or {})
+        from .coordinator import vram_cap
+
+        vram_cap(vram_fraction)  # a bad value is refused here, not at learn()
+        self._kwargs = {"vram_fraction": vram_fraction, **(_coordinator_kwargs or {})}
         self._extensions = dict(extensions or {})
         #: The last ``learn``'s run, finished and closed: its model, spec and codec, for an add-on
         #: that writes something from the trained run. None before ``learn``.

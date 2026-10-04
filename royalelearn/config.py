@@ -595,7 +595,9 @@ class DoctorConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: later. That is the argument for failing here rather than for a hard allocation cap, which
     #: would convert this into an out-of-memory error at an unpredictable hour of a long run --
     #: strictly worse than the slow run it replaced, because a legible penalty becomes an
-    #: illegible late crash.
+    #: illegible late crash. Windows is the exception, from 0.5.5: there the spill also takes
+    #: system RAM, and a cache that keeps growing can starve the whole machine, so a CUDA run
+    #: caps its allocator by default (``LearningCoordinator(vram_fraction=...)``).
     vram_headroom_mb: int = 256
 
 

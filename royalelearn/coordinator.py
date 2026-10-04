@@ -810,6 +810,27 @@ def _refuse_an_occupied_run_dir(run_dir: Path) -> None:
     )
 
 
+#: The share of the card a CUDA run's allocator may hold on Windows unless told otherwise. There a
+#: card that runs out is backed with system RAM rather than refused, so torch's cache, which only
+#: grows, can take gigabytes of it on a long run; the rest of the card is left to the display and
+#: to other programs. Elsewhere a full card is an out-of-memory error, and no cap is set.
+WINDOWS_VRAM_FRACTION = 0.8
+
+
+def vram_cap(setting: float | str | None, platform: str = sys.platform) -> float | None:
+    """The allocator cap for ``setting``: "auto" is ``WINDOWS_VRAM_FRACTION`` on Windows and
+    none elsewhere, a number in (0, 1] is that share of the card, and None is no cap."""
+    if setting is None:
+        return None
+    if setting == "auto":
+        return WINDOWS_VRAM_FRACTION if platform == "win32" else None
+    if isinstance(setting, str) or not 0 < float(setting) <= 1:
+        raise PreflightError(
+            f"vram_fraction is {setting!r}; it is 'auto', None, or a share of the card in (0, 1]"
+        )
+    return float(setting)
+
+
 class LearningCoordinator:
     """One run, from preflight to the last checkpoint.
 
@@ -832,8 +853,11 @@ class LearningCoordinator:
         install_signal_handler: bool = True,
         run_dir: str | Path | None = None,
         extra_actor_terms: Sequence[Any] = (),
+        vram_fraction: float | str | None = "auto",
     ) -> None:
         self.config = validate(config)
+        #: The share of the card this process's allocator may hold (``vram_cap``).
+        self.vram_fraction = vram_cap(vram_fraction)
         self.printer = printer or (lambda _line: None)
         self.geometry = geometry(self.config)
         self.codec_path = codec
@@ -930,6 +954,7 @@ class LearningCoordinator:
             torch.cuda.manual_seed_all(derive_int(config.master_seed, stream_path(TORCH_CUDA)))
 
         self.device = self._resolve_device(torch)
+        self._cap_vram(torch)
         # Before preflight, which takes a minute against the real engine: a stale digest is a
         # refusal that needs nothing built to be found, and it holds on a resume as on a fresh
         # start, because the identity carries the digests and only this makes them true.
@@ -1126,6 +1151,20 @@ class LearningCoordinator:
             self.printer(f"device        {wanted} is not available; this run uses the CPU")
             wanted = "cpu"
         return torch.device(wanted)
+
+    def _cap_vram(self, torch: Any) -> None:
+        """Hold this process's allocator to ``vram_fraction`` of the card, on a CUDA run.
+
+        Past the cap torch frees its cache and, if that is not enough, raises out-of-memory. Without
+        it, Windows backs an allocation the card cannot hold with host memory, so a cache that
+        keeps growing over a long run takes system RAM instead of failing.
+        """
+        if self.vram_fraction is None or self.device.type != "cuda":
+            return
+        torch.cuda.set_per_process_memory_fraction(self.vram_fraction, self.device)
+        self.printer(
+            f"vram cap      {self.vram_fraction:.0%} of the card (vram_fraction; None for none)"
+        )
 
     def _build_source(self) -> RolloutSource:
         if self._given_source is not None:
@@ -1414,7 +1453,10 @@ class LearningCoordinator:
         # else's process. `cuda.is_available()` answers a question about the machine.
         if not headroom or not str(self.device).startswith("cuda"):
             return
-        free_before, _total = torch.cuda.mem_get_info()  # pragma: no cover - no GPU in the suite
+        free_before, total = torch.cuda.mem_get_info()  # pragma: no cover - no GPU in the suite
+        if self.vram_fraction is not None:  # pragma: no cover
+            # Past the cap the run fails, so the cap is room the minibatch must fit in too.
+            free_before = min(free_before, int(self.vram_fraction * total))
         torch.cuda.reset_peak_memory_stats()  # pragma: no cover
         try:  # pragma: no cover
             self._probe_backward(torch)
