@@ -174,9 +174,8 @@ buys under about 10%, set it to 1 and spend the thread on a worker instead.
 The buffer row is `(T + obs.frame_stack) × R × row_bytes`: `T+1` cycles for the bootstrap row plus
 `frame_stack - 1` history cycles carried over from the previous iteration (section 9.1). At the laptop
 profile that is `229 × 192 × 14 163 B = 623 MB` (95 cards, 2026-09-22) **[A]**. The two larger profiles'
-figures are `115 × 1 536 × 14 163 B` and `115 × 3 072 × 14 163 B`. They were twice that while they
-asked for `rollout.overlap`, which bought a second rectangle; start-up has refused it since
-2026-09-22, because nothing honours it.
+figures are `115 × 1 536 × 14 163 B` and `115 × 3 072 × 14 163 B`. `rollout.overlap` adds a second
+rectangle of the same size: the copy the update trains on while the workers fill the first.
 
 ### 2.3 The laptop budget
 
@@ -193,9 +192,8 @@ so `228 × 144 = 32 832` timesteps and `228 × 96 = 21 888` game-steps.
 | **total, serial** | **~41** | **≈ 800 timesteps/s** |
 
 At `determinism.tier = "run_exact"` subtract 10-20%: **~680-720 timesteps/s**, so 100 M timesteps is
-**39-41 hours**. Overlapped collection would hide the rollout under the update, for
-~1 100 timesteps/s and 25 hours, at the cost of a second buffer (623 MB, 95 cards). It is not built:
-start-up refuses `rollout.overlap = true`.
+**39-41 hours**. Overlapped collection (`rollout.overlap`) hides the rollout under the
+update, at the cost of a second buffer (623 MB, 95 cards); no profile turns it on.
 
 Two consequences, stated so nobody re-derives them:
 
@@ -1192,7 +1190,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `max_restarts_per_worker` | 3 | | three restarts of one worker in a run raises rather than silently degrading throughput |
 | `launch_delay_s` | 0.5 | seconds | three `RustEngine` constructions at once each decode `calibration.json` and `arena.json` |
 | `stagger_first_reset` | `true` | | desynchronise episode phase across battles at run start, so episode ends spread across cycles |
-| `overlap` | `false` | | lag-1 collection under the update, for about 1.37x wall clock at the cost of a second buffer (623 MB at 95 cards). Not built: start-up refuses `true` (since 2026-09-22), and no profile sets it |
+| `overlap` | `false` | | lag-1 collection under the update, at the cost of a second buffer (623 MB at 95 cards). Refused under `determinism.tier` run_exact; no profile sets it |
 | `eval_workers` | 2 | processes | the gate's farm, built at gate time and closed after |
 | `eval_games_per_worker` | 24 | battles | |
 | **`net`** (`ArchSpec`) | | | |
@@ -3139,9 +3137,8 @@ blocked on workers that have not published, which rises when the workers cannot 
 number about workers idling), `inference_ms_per_round`, `discarded_rows_frac`, `gpu_util_frac`.
 
 **`time/`**: `iteration`, `collection`, `inference`, `env`, `codec`, `ipc`, `critic_pass`, `gae`,
-`update`, `checkpoint`, `gate`, `probe`, `residual`, and `overlap_saved` once there is an overlap
-to save anything (it was published as a hardcoded 0.0, which reads as "overlap saved nothing this
-iteration" rather than "there is no overlap", and is now absent). The ratio of collection to iteration is how you see
+`update`, `checkpoint`, `gate`, `probe`, `residual`, and `overlap_saved` with `rollout.overlap`
+on: the seconds the next batch's collection ran beside this update, and absent without it. The ratio of collection to iteration is how you see
 whether a run is environment-bound or learner-bound, and the residual is broken out because the
 reference's residual silently absorbs the four places it is actually slow.
 
@@ -3439,23 +3436,19 @@ failure is raised before the learner moves, so the emergency save keeps the lear
 describes. The row is written before the alarms read it because a halt checkpoints the learner that
 row describes, and the row has to be in `metrics.jsonl` by then (section 12.2).
 
-**`rollout.overlap` is REFUSED as of 2026-09-22, and what follows describes what it would do
-rather than what it does.** Half of it exists: `BatchedInference.begin_iteration` takes a
-`BehaviourSnapshot` and samples from it. The driver does not -- nothing passes one, there is no
-second thread, there is no second buffer, and `ppo/behaviour_lag_iterations` is in this sentence
-and in no schema. It was not a free thing to leave accepted: the preflight sizes TWO rectangles
-when it is set (`rollout/preflight.py`), so the `workstation` and `many_core` profiles shipped
-reserving twice the buffer memory for a feature that never ran, and that reservation is what the
-memory gate is checked against. `check_consistency` now says so instead. When the driver is
-built, delete this paragraph's first sentence and the refusal together.
-
-With `rollout.overlap = true` the collection of iteration `i` runs on a second thread and a second
-buffer while the update of iteration `i-1` runs on the default CUDA stream, against a
-`BehaviourSnapshot` of the actor taken at the iteration boundary. The lag is exactly one iteration by
-construction and the stored log-probs are the snapshot's, so the PPO ratio measures the true
-off-policyness and the clip bounds it. `ppo/behaviour_lag_iterations` is logged as 0 or 1 so the
-regime is visible in the run's config panel, and because sampling is driven by name-addressed uniforms
-the trajectory is identical either way.
+With `rollout.overlap = true` the workers keep writing the one rectangle they are attached to,
+and when a collection ends the update's rectangle takes a copy of it (`RectBuffer.copy_from`). The
+next iteration is then collected on a second thread, on a CUDA stream of its own, while the update
+trains on the copy; its learner seats sample from a `BehaviourSnapshot` of the actor taken just
+before the update, and its plan is drawn then, from the pool as it stands. The lag is exactly one
+iteration by construction and the stored log-probs are the snapshot's, so the PPO ratio measures
+the true off-policyness and the clip bounds it. The ratio invariant is asserted against the
+snapshot that sampled the batch, which is still the question it asks: do these bytes and this mask
+give back the stored log-probabilities. `ppo/behaviour_lag_iterations` is logged as 0 (the first
+batch, collected before any update) or 1, and `time/overlap_saved` is the seconds of collection
+that ran beside the update. A batch is collected ahead only when an iteration will train it; on
+`q` the one in flight is dropped, and a checkpoint does not hold it, so a resumed run collects it
+again. That is why `check_consistency` refuses overlap under `determinism.tier` run_exact.
 
 Invariants asserted once per iteration, before the update, each raising a named exception carrying the
 offending slot and cycle:

@@ -142,8 +142,8 @@ Every iteration writes a row of metrics. The timing keys are defined in
 
 `time/critic_pass` and `time/gae` are measured. Both run inside the update, before its first
 epoch, so their seconds are also inside `time/update`: read them as parts of it, not in addition
-to it. `time/overlap_saved` is in the schema but not written, because overlapped collection does
-not exist yet.
+to it. `time/overlap_saved` is written with `rollout.overlap` on: the seconds the next batch's
+collection ran beside the update.
 
 `time/residual` is the honest one to watch. Anything the harness spends that is not collection,
 update, checkpoint or gate shows up there as itself rather than being quietly absorbed.
@@ -230,9 +230,10 @@ faster per transition. Nobody has measured the learning cost of any of these cha
 and your cores. There are three workers in the `laptop` profile on a machine with eight threads,
 not thirty-two, because the learner is the bottleneck there.
 
-**`rollout.overlap` is not built.** It is meant to hide collection under the update, but the loop
-in `coordinator.py` collects and then updates. A config that turns it on is refused at start-up,
-and no profile turns it on. `time/overlap_saved` is not written.
+**`rollout.overlap`** collects the next iteration on a second thread while the update trains on
+a copy of this one, from a snapshot of the actor taken before the update, so every batch after the
+first is one update behind the learner (`ppo/behaviour_lag_iterations`). It costs a second
+rectangle of memory, which the start-up memory check counts. No profile turns it on.
 
 ## Which resource is biting
 

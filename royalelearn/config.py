@@ -168,11 +168,10 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Desynchronise episode phase across battles at run start, so episode ends spread across
     #: cycles instead of arriving in one spike.
     stagger_first_reset: bool = True
-    #: Lag-1 collection under the update. Costs a second rectangle, so it is off on 8 GB.
-    #: Spec 14.1's overlapped collection. REFUSED by ``check_consistency`` while true, because
-    #: nothing honours it and the preflight charges a second rectangle for it. It stays in the
-    #: config rather than being deleted so that a config carrying it gets a refusal naming the
-    #: section, instead of ``forbid_unknown_fields`` rejecting the whole file over one line.
+    #: Lag-1 collection under the update (spec 14.1): the next iteration's battles are played
+    #: on a second thread while the update trains on a copy of this one, sampled from the actor
+    #: as it stood before the update, so every batch is one update behind the learner. Costs a
+    #: second rectangle of memory. Refused under ``determinism.tier`` run_exact.
     overlap: bool = False
     eval_workers: int = 2
     eval_games_per_worker: int = 24
@@ -1061,21 +1060,13 @@ def check_consistency(config: RunConfig) -> list[str]:
             f"env.reward_fn: {problem}" for problem in shaping_weight_problems(env.reward_fn.kwargs)
         )
 
-    if rollout.overlap:
-        # Refused rather than accepted and ignored. Spec 14.1 says what it would do: collect
-        # iteration i on a second thread and a second buffer while the update of i-1 runs,
-        # against a BehaviourSnapshot taken at the boundary. HALF of that exists --
-        # BatchedInference.begin_iteration takes a snapshot and samples from it -- and the
-        # driver does not: nothing passes one, there is no second thread, there is no second
-        # buffer, and ppo/behaviour_lag_iterations is in the spec and in no schema.
-        #
-        # Meanwhile the flag was not free. preflight sizes TWO rectangles when it is set, so the
-        # two profiles that shipped with it on reserved twice the buffer memory for a feature
-        # that never ran, and that reservation is what the memory gate checks against.
+    if rollout.overlap and config.determinism.tier == "run_exact":
+        # run_exact promises that a resumed run is the run that never stopped. With overlap the
+        # batch collected beside the last update before a checkpoint is not in the checkpoint,
+        # and the resumed run collects it again from where the workers then stand.
         problems.append(
-            "rollout.overlap is not implemented: it is accepted, recorded in the run identity "
-            "and charged for (the preflight reserves a second rectangle) while changing "
-            "nothing. Spec 14.1 says what it would do. Leave it false until the driver exists"
+            "rollout.overlap cannot run under determinism.tier run_exact: the batch collected "
+            "beside the update is not in a checkpoint, so a resumed run is not the same run"
         )
 
     if rollout.shards_per_worker < 1:

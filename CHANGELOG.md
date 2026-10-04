@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.7
+
+- `rollout.overlap` runs: the next iteration is collected on a second thread while the update
+  trains on a copy of this one. Its learner seats sample from a snapshot of the actor taken just
+  before the update, so each batch after the first is one update behind the learner it trains,
+  and the ratio check is made against that snapshot. Rows carry
+  `ppo/behaviour_lag_iterations` and `time/overlap_saved`. It needs a second rectangle of memory,
+  is off by default, and is refused under `determinism.tier` run_exact.
+
 ## 0.5.6
 
 - `net.trunk_stride`, an opt-in stride for the residual trunk (1 or 2, default 1). At 2 a

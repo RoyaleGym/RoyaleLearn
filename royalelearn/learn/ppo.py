@@ -54,6 +54,7 @@ from torch.nn.utils import clip_grad_norm_, parameters_to_vector
 
 from royalegym.action import NOOP
 
+from ..api.policy import ObsBatch
 from ..api.update import ActorTermInputs, Update, UpdateResult, check_actor_terms
 from ..config import PPOConfig
 from ..errors import CheckpointFormatError
@@ -469,10 +470,19 @@ class PPOUpdate(Update):
 
     # -- the step ------------------------------------------------------------
 
-    def step(self, buffer: RectBuffer, sched: ScheduleState) -> UpdateResult:
-        """One iteration's whole update, and everything it reports about itself."""
+    def step(
+        self, buffer: RectBuffer, sched: ScheduleState, *, behaviour: Any = None
+    ) -> UpdateResult:
+        """One iteration's whole update, and everything it reports about itself.
+
+        ``behaviour`` is the actor that sampled the batch when it is not the one being trained:
+        with ``rollout.overlap`` a batch is collected beside the previous update, from a snapshot
+        taken before it. The ratio invariant is then asserted against that snapshot, which is
+        what the stored log-probabilities came from; the ratio the update clips is the learner's.
+        """
         started = time.perf_counter()
         config = self.config
+        self._behaviour = behaviour
         self._n_slots = buffer.n_slots
         self._ratio_unchecked = True
         self._frozen = sched.actor_lr_scale == 0.0
@@ -723,7 +733,13 @@ class PPOUpdate(Update):
         ratio = torch.exp(log_probs - minibatch.log_probs)
         if first:
             self._ratio_invariant(
-                ratio, minibatch.cells, minibatch.actions, diagnostics, sched.iteration
+                ratio,
+                minibatch.cells,
+                minibatch.actions,
+                diagnostics,
+                sched.iteration,
+                obs=minibatch.obs,
+                stored=minibatch.log_probs,
             )
         surr, dual = surrogate(
             ratio,
@@ -849,6 +865,10 @@ class PPOUpdate(Update):
                     actions,
                     diagnostics,
                     sched.iteration,
+                    obs=ObsBatch(
+                        *(None if t is None else t.index_select(0, rows) for t in minibatch.obs)
+                    ),
+                    stored=minibatch.log_probs.index_select(0, rows),
                 )
             advantages = minibatch.advantages.index_select(0, rows)
             surr, dual = surrogate(
@@ -1115,6 +1135,8 @@ class PPOUpdate(Update):
                 actions,
                 diagnostics,
                 sched.iteration,
+                obs=subset,
+                stored=minibatch.log_probs.index_select(0, rows),
             )
         empty = minibatch.advantages[:0]
         with torch.no_grad():
@@ -1186,6 +1208,9 @@ class PPOUpdate(Update):
         actions: Tensor,
         diagnostics: _Diagnostics,
         iteration: int,
+        *,
+        obs: ObsBatch | None = None,
+        stored: Tensor | None = None,
     ) -> None:
         """At the first minibatch of the first epoch every ratio should be one.
 
@@ -1197,6 +1222,12 @@ class PPOUpdate(Update):
         failure this is aimed at moves the ratio by a quantity of order one.
         """
         with torch.no_grad():
+            behaviour = getattr(self, "_behaviour", None)
+            if behaviour is not None and obs is not None and stored is not None:
+                # A batch sampled by a snapshot is checked against the snapshot: the learner
+                # has moved since, by design, and the question is still whether these bytes
+                # and this mask give back the log-probabilities that were stored.
+                ratio = torch.exp(behaviour.distribution(obs).log_prob(actions).float() - stored)
             diagnostics.ratio_deviation = (ratio - 1.0).abs().max()
             if not self._ratio_check_due(iteration):
                 return

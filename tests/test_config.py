@@ -430,32 +430,22 @@ def test_torch_is_importable_in_this_environment_or_the_check_is_vacuous() -> No
 # -- a flag the code does not honour -----------------------------------------
 
 
-def test_rollout_overlap_is_refused_rather_than_accepted_and_ignored() -> None:
-    """Nothing in the package reads ``rollout.overlap``, and it was not free to set.
-
-    Spec 14.1 describes it: the collection of iteration ``i`` on a second thread and a second
-    buffer while the update of ``i-1`` runs, against a ``BehaviourSnapshot`` taken at the
-    boundary. Half of that exists -- ``BatchedInference.begin_iteration`` takes a behaviour
-    snapshot and samples from it -- and the driver does not. No coordinator ever passes one,
-    there is no second thread, there is no second buffer, and ``ppo/behaviour_lag_iterations``
-    is in the spec and in no schema.
-
-    What the flag DID do is size the preflight for two rectangles
-    (``rollout/preflight.py:535``), so the two profiles that shipped with it on reserved twice
-    the buffer memory for a feature that never ran -- and that reservation is what the memory
-    gate then checks against. A flag that is accepted, recorded in the run identity and charged
-    for, while changing nothing, is worse than one that is refused.
-    """
+def test_rollout_overlap_is_refused_only_where_it_cannot_keep_its_promise() -> None:
+    """Overlapped collection runs (``tests/test_overlap.py``), except under run_exact: the batch
+    collected beside the update is not in a checkpoint, so a resumed run is not the same run."""
     import royalelearn.config as cfg
 
+    base = cfg.RunConfig()
     config = msgspec.structs.replace(
-        cfg.RunConfig(), rollout=msgspec.structs.replace(cfg.RolloutConfig(), overlap=True)
+        base,
+        rollout=msgspec.structs.replace(base.rollout, overlap=True),
+        determinism=msgspec.structs.replace(base.determinism, tier="throughput"),
     )
-    problems = cfg.check_consistency(config)
-    assert any("rollout.overlap" in problem for problem in problems), problems
-    assert any("14.1" in problem for problem in problems), (
-        "the refusal should send the reader to the section that says what it would have done"
+    assert not [p for p in cfg.check_consistency(config) if "rollout.overlap" in p]
+    exact = msgspec.structs.replace(
+        config, determinism=msgspec.structs.replace(config.determinism, tier="run_exact")
     )
+    assert any("rollout.overlap" in p for p in cfg.check_consistency(exact))
 
 
 def test_no_shipped_profile_asks_for_overlap() -> None:

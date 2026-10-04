@@ -918,6 +918,14 @@ class LearningCoordinator:
         #: the fill of unwritten memory on whatever its number, which after a resume is where a
         #: process's leftovers first differ from those of a run that never stopped.
         self._iterated_in_this_process = False
+        #: ``rollout.overlap``: the rectangle the workers write, when it is not the one the update
+        #: trains on; the thread collecting the next iteration beside the update; and what it
+        #: collected, waiting for the iteration that trains it. ``learn`` sets the limit, so a
+        #: batch is collected ahead only when an iteration will train it.
+        self.collect_buffer: Any = None
+        self._prefetch: threading.Thread | None = None
+        self._prefetched: Any = None
+        self._limit: int | None = None
 
     # -- construction --------------------------------------------------------
 
@@ -939,7 +947,7 @@ class LearningCoordinator:
         from .determinism import apply as apply_determinism
         from .learn.buffer import RectBuffer
         from .learn.gae import GAE
-        from .learn.inference import BatchedInference
+        from .learn.inference import BatchedInference, RectGather
         from .learn.nets import DefaultNetworkFactory
         from .learn.ppo import PPOUpdate
         from .learn.schedules import ScheduleSet
@@ -1069,6 +1077,25 @@ class LearningCoordinator:
             device=self.device,
             opponent_mode=config.ladder.opponent_mode,
         )
+        # With overlap the workers write one rectangle and the update trains on a copy of it,
+        # so the next iteration can be collected while this one trains. Without it they are one.
+        self.collect_buffer = self.buffer
+        self._train_gather = self.inference.gather
+        if config.rollout.overlap:
+            self.buffer = RectBuffer(
+                self.spec,
+                self.codec,
+                run_id=self.run_id,
+                cycles=self.geometry.cycles,
+                n_slots=self.geometry.n_slots,
+                device=self.device,
+                discard_opponent_rows=config.ppo.discard_opponent_rows,
+                segment_name=(
+                    f"{buffer_segment_name(self.run_id)}-{os.getpid():x}-{next(_SEGMENTS)}"
+                ),
+            )
+            self.buffer.set_static_planes(report.statics)
+            self._train_gather = RectGather(self.buffer, rows=self.geometry.n_slots)
         self.probe = PolicyProbe(self.spec)
         self.sinks: MetricsSink = build_sinks(
             config.metrics.sinks,
@@ -1110,6 +1137,7 @@ class LearningCoordinator:
         if self._closed:
             return
         self._closed = True
+        prefetch = self._prefetch
         for shutdown in (
             getattr(self, "control", None),
             getattr(self, "source", None),
@@ -1117,12 +1145,18 @@ class LearningCoordinator:
             getattr(self, "eval_player", None),
             getattr(self, "sinks", None),
             getattr(self, "results", None),
-            getattr(self, "buffer", None),
         ):
             if shutdown is None:
                 continue
             with contextlib.suppress(Exception):
                 shutdown.close()
+        # A collection beside the update stops when its source closes under it.
+        if prefetch is not None:
+            prefetch.join(timeout=self.config.rollout.round_timeout_s)
+        buffers = (getattr(self, "buffer", None), self.collect_buffer)
+        for buffer in {id(b): b for b in buffers if b is not None}.values():
+            with contextlib.suppress(Exception):
+                buffer.close()
 
     def _ratio_atol(self) -> float:
         """The tolerance the ratio invariant is asserted at, under this run's precision.
@@ -1581,6 +1615,7 @@ class LearningCoordinator:
         if not self._entered:
             raise RuntimeError("a LearningCoordinator runs inside its own with-block")
         limit = int(until_timesteps or self.config.timestep_limit)
+        self._limit = limit
         started = time.perf_counter()
         try:
             while self.cumulative_timesteps < limit:
@@ -1642,28 +1677,71 @@ class LearningCoordinator:
         self.rng.iteration = self.iteration
         self.rng.shard_streams = self.rollout_component.shard_streams()
 
-        plan = self.matchmaker.plan(self.iteration, self.pool, self.ratings, self.geometry)
-        self.buffer.begin_iteration(plan, self.geometry.cycles)
-        self.source.begin_iteration(plan, self.buffer, self.iteration)
-        self.inference.begin_iteration(plan)
-
-        collection = self._collect(plan, sched)
-        # Drained here, before anything learns from the batch: the drain checks, row by row,
-        # that the rollout's statistics were taken over the decoded masks' choice rows, and a
-        # failure raised after the update left a learner no row describes, which the emergency
-        # save must refuse. Before the update, the learner on hand is still the last row's.
-        rollout_stats = self.inference.drain_stats()
+        overlap = self.config.rollout.overlap
+        prefetched, self._prefetched = self._prefetched, None
+        if prefetched is None:
+            plan = self.matchmaker.plan(self.iteration, self.pool, self.ratings, self.geometry)
+            self.collect_buffer.begin_iteration(plan, self.geometry.cycles)
+            self.source.begin_iteration(plan, self.collect_buffer, self.iteration)
+            self.inference.begin_iteration(plan)
+            collection = self._collect(plan, sched, self.update.record_final_observations)
+            # Drained here, before anything learns from the batch: the drain checks, row by row,
+            # that the rollout's statistics were taken over the decoded masks' choice rows, and a
+            # failure raised after the update left a learner no row describes, which the
+            # emergency save must refuse. Before the update, the learner is still the last row's.
+            rollout_stats = self.inference.drain_stats()
+            if overlap:
+                self.buffer.copy_from(self.collect_buffer)
+            lag = 0
+            behaviour = None
+        else:
+            # Collected beside the last update, from the actor as it stood before it, and copied
+            # into the rectangle the update trains on when that iteration ended.
+            collection, rollout_stats = prefetched["collection"], prefetched["stats"]
+            for cycle, slots, rows in prefetched["finals"]:
+                self.update.record_final_observations(cycle, slots, rows)
+            lag = 1
+            behaviour = prefetched["behaviour"]
         episodes = collection["episodes"]
         self.recent_episodes = (self.recent_episodes + episodes)[-200:]
 
         trainable = self.buffer.trainable()
         self._check_iteration(collection, trainable, episodes)
         probe = self.probe.measure(
-            self.buffer, self.inference.gather, self.buffer.action[: self.buffer.cycles], trainable
+            self.buffer, self._train_gather, self.buffer.action[: self.buffer.cycles], trainable
         )
 
+        overlapped = 0.0
+        if (
+            overlap
+            and self._limit is not None
+            and self.cumulative_timesteps + int(trainable.sum()) < self._limit
+            and collection["command"] != "q"
+        ):
+            self._start_prefetch(trainable)
         self._learner_ahead_of_rows = True
-        result = self.update.step(self.buffer, sched)
+        # Named only when there is one, so an update written before overlap existed still runs.
+        extra = {"behaviour": behaviour} if behaviour is not None else {}
+        result = self.update.step(self.buffer, sched, **extra)
+        if self._prefetch is not None:
+            waited = time.perf_counter()
+            self._prefetch.join()
+            self._prefetch = None
+            outcome, self._prefetched = self._prefetched, None
+            if isinstance(outcome, BaseException):
+                raise outcome
+            overlapped = max(
+                0.0, float(outcome["collection"]["seconds"]) - (time.perf_counter() - waited)
+            )
+            later = outcome["collection"]["command"]
+            if later == "q":
+                # Stopping: the batch collected beside this update is not trained.
+                collection["command"] = "q"
+            else:
+                if later == "c" and not collection["command"]:
+                    collection["command"] = "c"
+                outcome["collection"]["command"] = ""
+                self._prefetched = outcome
         # "The values the last iteration actually ran at": set once it has run, so a checkpoint
         # taken before then does not report the schedule of an iteration that never finished.
         self.schedule_component.last = sched
@@ -1691,6 +1769,11 @@ class LearningCoordinator:
             rung_seconds=rung_seconds,
             wall=time.perf_counter() - run_started,
         )
+        if overlap:
+            # How many updates behind the learner this batch was sampled, and the seconds its
+            # collection spent beside an update rather than holding the iteration up.
+            row["ppo/behaviour_lag_iterations"] = lag
+            row["time/overlap_saved"] = overlapped
         self.rows.append(row)
         # Written before the alarms read it. A halt raises out of that read after checkpointing
         # the learner this row describes, and the row has to be in the metric file by then: the
@@ -1711,7 +1794,66 @@ class LearningCoordinator:
         command = collection["command"]
         if command in ("c", "q") or self._checkpoint_due():
             self._checkpoint()
+        if self._prefetched is not None:
+            # The update is done with this iteration's copy; the next one takes its place.
+            self.buffer.copy_from(self.collect_buffer)
         return command
+
+    def _start_prefetch(self, trainable: np.ndarray) -> None:
+        """Collect the next iteration on a second thread while the update trains on this one.
+
+        Its learner seats sample from a snapshot of the actor taken now, before the update, so the
+        batch is exactly one update behind the learner that trains on it and its stored
+        log-probabilities are the snapshot's. Its plan is drawn now, from the pool and ratings as
+        they stand; anything the gate changes this iteration reaches the iteration after.
+        """
+        import torch
+
+        from .learn.actor_critic import BehaviourSnapshot
+
+        geo = self.geometry
+        iteration = self.iteration + 1
+        sched = self.schedules.state(
+            iteration=iteration,
+            cumulative_env_steps=self.cumulative_env_steps + geo.cycles * geo.n_battles,
+            cumulative_timesteps=self.cumulative_timesteps + int(trainable.sum()),
+        )
+        plan = self.matchmaker.plan(iteration, self.pool, self.ratings, self.geometry)
+        behaviour = BehaviourSnapshot.of(self.model)
+        stream = None
+        if self.device.type == "cuda":  # pragma: no cover - the suite runs on the CPU
+            stream = torch.cuda.Stream(device=self.device)
+            stream.wait_stream(torch.cuda.current_stream(self.device))
+
+        def collect() -> None:
+            finals: list[tuple[int, np.ndarray, np.ndarray]] = []
+            try:
+                with contextlib.ExitStack() as scope:
+                    if stream is not None:  # pragma: no cover
+                        scope.enter_context(torch.cuda.stream(stream))
+                    self.collect_buffer.begin_iteration(plan, geo.cycles)
+                    self.source.begin_iteration(plan, self.collect_buffer, iteration)
+                    self.inference.begin_iteration(plan, behaviour=behaviour)
+                    collection = self._collect(
+                        plan,
+                        sched,
+                        lambda cycle, slots, rows: finals.append((cycle, slots, rows)),
+                        overlapped=True,
+                    )
+                    stats = self.inference.drain_stats()
+                    if stream is not None:  # pragma: no cover
+                        stream.synchronize()
+                self._prefetched = {
+                    "collection": collection,
+                    "stats": stats,
+                    "finals": finals,
+                    "behaviour": behaviour,
+                }
+            except BaseException as exc:  # handed to the main thread, which raises it
+                self._prefetched = exc
+
+        self._prefetch = threading.Thread(target=collect, name="royalelearn-collect", daemon=True)
+        self._prefetch.start()
 
     def _say_collected(self, started: float) -> None:
         """Say that collection is done and the update has it, before the long quiet part.
@@ -1731,16 +1873,24 @@ class LearningCoordinator:
             f"updating"
         )
 
-    def _collect(self, plan: SlotPlan, sched: ScheduleState) -> dict[str, Any]:
+    def _collect(
+        self,
+        plan: SlotPlan,
+        sched: ScheduleState,
+        record_final: Callable[[int, np.ndarray, np.ndarray], None],
+        *,
+        overlapped: bool = False,
+    ) -> dict[str, Any]:
         """The rectangle, one shard-round at a time.
 
         The assignment step comes before routing in the same round, so the first observation of
         a new episode is already routed by that episode's own assignment and no transition is
-        ever produced under a stale one.
+        ever produced under a stale one. ``record_final`` takes each truncated episode's final
+        observation: the update's own, or, beside the update, a list handed to it afterwards.
         """
         geo = self.geometry
         source = self.source
-        buffer = self.buffer
+        buffer = self.collect_buffer
         timeout = self.config.rollout.round_timeout_s
         group = np.full(geo.n_slots, GROUP_LEARNER, dtype=np.int8)
         opponent = np.full(geo.n_slots, -1, dtype=np.int8)
@@ -1779,7 +1929,7 @@ class LearningCoordinator:
                     )
                 )
                 buffer.record_round(round_, answer.actions, answer.log_probs)
-                self._record_finals(source, round_)
+                self._record_finals(source, round_, record_final)
                 rounds += 1
                 command = self.control.poll() or command
                 if command == "p":
@@ -1790,12 +1940,13 @@ class LearningCoordinator:
             # counted as a round -- nothing was acted on it -- so the arithmetic that sizes the
             # iteration still describes the cycles that were.
             buffer.record_round(round_, None, None)
-            self._record_finals(source, round_)
+            self._record_finals(source, round_, record_final)
             for record in round_.episodes:
                 self.matchmaker.on_episode(record)
             episodes.extend(round_.episodes)
         self._handle_failures()
-        self._say_collected(started)
+        if not overlapped:
+            self._say_collected(started)
         return {
             "episodes": episodes,
             "rounds": rounds,
@@ -1804,7 +1955,12 @@ class LearningCoordinator:
             "command": command,
         }
 
-    def _record_finals(self, source: Any, round_: RolloutRound) -> None:
+    def _record_finals(
+        self,
+        source: Any,
+        round_: RolloutRound,
+        record: Callable[[int, np.ndarray, np.ndarray], None],
+    ) -> None:
         """Hand the update the observation each truncation of this round was cut off in.
 
         Against the row that was truncated, which is one below the round that reported it: the
@@ -1814,7 +1970,7 @@ class LearningCoordinator:
         if round_.cycle <= 0:
             return
         final_slots, final_rows = source.final_rows(round_)
-        self.update.record_final_observations(round_.cycle - 1, final_slots, final_rows)
+        record(round_.cycle - 1, final_slots, final_rows)
 
     def _assign(
         self,
@@ -2122,9 +2278,8 @@ class LearningCoordinator:
             "time/checkpoint": self._take_checkpoint_seconds(),
             "time/gate": gate_seconds,
             "time/probe": rung_seconds,
-            # No "time/overlap_saved": it was a hardcoded 0.0, which reads as "overlap saved
-            # nothing this iteration" rather than "there is no overlap". rollout.overlap is
-            # refused until spec 14.1's driver exists, so nothing can fill it.
+            # "time/overlap_saved" is added by _iterate, and only with rollout.overlap on: a
+            # 0.0 written without it would read as "overlap saved nothing" rather than "none".
         }
         # The probe is in the attributed sum rather than in the residual. It plays battles one
         # at a time in the parent, so at the cadences worth running it is minutes, and a

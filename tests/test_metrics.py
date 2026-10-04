@@ -67,6 +67,8 @@ PRODUCED_ELSEWHERE: dict[str, str] = {
     "ppo/entropy_candidate": "PPO update with stages",
     "ppo/entropy_tile": "PPO update with stages",
     "ppo/p_act": "PPO update with stages",
+    # only with rollout.overlap on (tests/test_overlap.py)
+    "ppo/behaviour_lag_iterations": "coordinator",
     # per-step counters, reduced in the worker where they are produced
     "policy/noop_rate": "rollout worker",
     # only from an environment with ability buttons (tests/test_ability_buttons.py)

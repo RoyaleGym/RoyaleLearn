@@ -172,6 +172,11 @@ METRICS: dict[str, MetricSpec] = {
     ),
     # -- ppo ---------------------------------------------------------------
     "ppo/policy_loss": _m("loss", "The clipped surrogate, averaged over samples."),
+    "ppo/behaviour_lag_iterations": _m(
+        "count",
+        "Updates between the actor that sampled this batch and the one it trains.",
+        dtype="int",
+    ),
     "ppo/policy_loss_choice": _m(
         "loss",
         "The clipped surrogate over the rows whose mask offered more than the no-op. The "
@@ -944,6 +949,7 @@ CONDITIONAL: dict[str, str] = {
         "zero, which it always is on a run that does not schedule one",
     ),
     "ppo/actor_lr_scale": "the run schedules the actor's learning-rate scale",
+    "ppo/behaviour_lag_iterations": "rollout.overlap is on",
     "policy/button_press_rate": "the environment has ability buttons",
     **dict.fromkeys(
         ("ppo/entropy_gate", "ppo/entropy_candidate", "ppo/entropy_tile", "ppo/p_act"),
@@ -1004,7 +1010,7 @@ CONDITIONAL: dict[str, str] = {
     # An iteration whose every decision was forced measured nothing about the policy. A lift of
     # 1.0 would read as "exactly uniform", a hold rate of 1.0 as "it never plays", and both are
     # statements about the elixir bar.
-    "time/overlap_saved": "rollout.overlap is honoured, which it is not yet (spec 14.1)",
+    "time/overlap_saved": "rollout.overlap is on",
     "ppo/adam_eps_floor_frac_actor": "the actor's optimizer has taken a step",
     "ppo/adam_eps_floor_frac_critic": "the critic's optimizer has taken a step",
     "policy/rollout_hold_gap": "a rollout decision this iteration had more than one legal action",

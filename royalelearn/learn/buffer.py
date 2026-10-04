@@ -461,6 +461,47 @@ class RectBuffer(ExperienceBuffer):
         self._episode_end[self.history_rows :].fill(EPISODE_END_NONE)
         self._carry_ready = True
 
+    def copy_from(self, other: RectBuffer) -> None:
+        """Take ``other``'s collected iteration: its rows, its scalar columns and its plan.
+
+        Overlapped collection (``rollout.overlap``) trains on this copy while the workers write
+        the next iteration into ``other``, the rectangle they are attached to. The copy never
+        carries history down itself: ``other`` does that when it opens the next iteration.
+        """
+        if (
+            other.layout.row_bytes != self.layout.row_bytes
+            or other.n_slots != self.n_slots
+            or other.capacity != self.capacity
+            or other.history_rows != self.history_rows
+        ):
+            raise ValueError("a rectangle copies only a rectangle of its own shape")
+        used = self.layout.row_index(other.cycles, 0) + self.n_slots
+        np.copyto(self.obs_view[:used], other.obs_view[:used])
+        for name in (
+            "action",
+            "log_prob",
+            "reward",
+            "advantage",
+            "ret",
+            "final_value",
+            "value",
+            "n_legal",
+            "terminated",
+            "truncated",
+            "valid",
+            "group",
+            "deploy_status",
+            "tick",
+            "_episode_end",
+            "_history_valid",
+        ):
+            np.copyto(getattr(self, name), getattr(other, name))
+        self.cycles = other.cycles
+        self.plan = other.plan
+        self.iteration = other.iteration
+        self._rounds_recorded = other._rounds_recorded
+        self._carry_ready = False
+
     def _carry_history(self) -> None:
         """Copy the last ``k - 1`` collected cycles into the rows below cycle zero.
 

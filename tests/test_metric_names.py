@@ -113,6 +113,7 @@ PUBLISHED_KEYS = (
     "ppo/advantage_mean_choice",
     "ppo/advantage_std_choice_pre_norm",
     "ppo/advantage_std_pre_norm",
+    "ppo/behaviour_lag_iterations",
     "ppo/clip_fraction",
     "ppo/dual_clip_fraction",
     "ppo/entropy",
