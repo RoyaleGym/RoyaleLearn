@@ -332,8 +332,9 @@ the one before it. Stage 6 is torch, and you only need it if you are going to tr
 These are Windows PowerShell commands. Paste one stage at a time rather than the whole section.
 If something goes wrong you will know which stage it was, which is most of the work of fixing it.
 
-Before you start you need three things already installed: Git, Python 3.12 to 3.14, and Rust
-1.80 or newer with cargo. The Rust one surprises people. Stage 4 compiles the battle engine, and
+Before you start you need three things already installed: Git, Python 3.12, and Rust
+1.80 or newer with cargo. On Windows and macOS, 3.12.10 is the last Python 3.12 with a
+python.org installer. The Rust one surprises people. Stage 4 compiles the battle engine, and
 without cargo it stops there.
 
 The 1.80 is a promise this repo makes and cannot keep on its own: RoyaleLearn has no `Cargo.toml`,
@@ -356,8 +357,8 @@ You now have four folders inside `Royale`. Every stage below starts from `Royale
 there.
 
 Stage 2 makes the virtual environment the four repos share and puts the build tools in it. The
-venv must be Python 3.12 to 3.14, so the first line picks that Python by name. The second line
-checks it: it must print 3.12, 3.13 or 3.14 before you go on. Every command after that names the venv's
+venv must be Python 3.12, so the first line picks that Python by name. The second line
+checks it: it must print 3.12 before you go on. Every command after that names the venv's
 Python. pip prints a wall of text as it downloads. That is normal.
 
 ```
@@ -367,7 +368,7 @@ py -3.12 -m venv .venv
 ```
 
 On macOS and Linux the first line is `python3.12 -m venv .venv`, and the check is
-`.venv/bin/python --version`. If plain `python --version` already prints 3.12, 3.13 or 3.14,
+`.venv/bin/python --version`. If plain `python --version` already prints 3.12,
 `python -m venv .venv` works too. An older Python compiles the engine for several minutes and is
 only refused at the install step.
 
