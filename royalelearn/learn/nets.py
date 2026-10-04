@@ -180,6 +180,12 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
     if arch.blocks < 0:
         raise PreflightError(f"net.blocks is {arch.blocks}")
     tiles_y, tiles_x = spec.tiles
+    if arch.trunk_stride not in (1, 2):
+        raise PreflightError(f"net.trunk_stride is {arch.trunk_stride}; it is 1 or 2")
+    if arch.trunk_stride == 2 and (tiles_y % 2 or tiles_x % 2):
+        raise PreflightError(
+            f"net.trunk_stride 2 halves the board, and {tiles_y}x{tiles_x} tiles do not halve"
+        )
     expected = spec.n_grid_actions + spec.n_buttons
     if expected != spec.n_actions:
         raise PreflightError(
@@ -206,17 +212,20 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
 
 
 def _arch_for_digest(arch: ArchSpec) -> Any:
-    """The architecture as ``arch_digest`` reads it: every field but ``factored_act_init``.
+    """The architecture as ``arch_digest`` reads it: every field but ``factored_act_init``, and
+    ``trunk_stride`` only when it is not 1.
 
-    That one is where the factored head's gate starts, not a shape or a function of the weights,
-    so a clone made with another value still loads. Leaving it out also keeps the digest of every
-    network built before the field existed exactly what it was. The struct keeps the config's own
-    field order, which is the order the canonical encoding writes a struct in.
+    ``factored_act_init`` is where the factored head's gate starts, not a shape or a function of
+    the weights, so a clone made with another value still loads. ``trunk_stride`` is a shape, but
+    at 1 it is the network that existed before the field did. Leaving both out keeps the digest of
+    every network built before them exactly what it was. The struct keeps the config's own field
+    order, which is the order the canonical encoding writes a struct in.
     """
     fields = [
         (f.name, f.type, f.default)
         for f in msgspec.structs.fields(arch)
         if f.name != "factored_act_init"
+        and not (f.name == "trunk_stride" and getattr(arch, f.name) == 1)
     ]
     shape = msgspec.defstruct(type(arch).__name__, fields, frozen=True)
     return shape(**{name: getattr(arch, name) for name, _, _ in fields})
@@ -301,6 +310,16 @@ class ClashTrunk(nn.Module):
         self.body = nn.ModuleList(
             ResBlock(arch.channels, arch.norm_groups) for _ in range(arch.blocks)
         )
+        # ``net.trunk_stride`` 2: the body runs on a quarter of the positions, and its output is
+        # brought back to one feature per tile and added to the stem's, which kept full resolution.
+        self.stride = int(arch.trunk_stride)
+        self.down: nn.Conv2d | None = None
+        self.down_norm: nn.GroupNorm | None = None
+        if self.stride > 1:
+            self.down = nn.Conv2d(
+                arch.channels, arch.channels, 3, stride=self.stride, padding=1
+            )
+            self.down_norm = nn.GroupNorm(arch.norm_groups, arch.channels)
         # Not persistent: the coordinates are a constant of the arena's geometry rather than
         # something learnt, and a snapshot should carry weights only.
         self.register_buffer("coords", _coord_planes(spec.tiles), persistent=False)
@@ -330,9 +349,15 @@ class ClashTrunk(nn.Module):
                 f"vector embedding -- and this batch assembles {x.shape[1]}"
             )
         x = torch.relu(self.stem_norm(self.stem(x)))
+        if self.down is None:
+            for block in self.body:
+                x = block(x)
+            return x
+        assert self.down_norm is not None
+        h = torch.relu(self.down_norm(self.down(x)))
         for block in self.body:
-            x = block(x)
-        return x
+            h = block(h)
+        return x + nn.functional.interpolate(h, size=self.tiles, mode="nearest")
 
     def initialise(self, generator: torch.Generator) -> None:
         _orthogonal(self.vector_embed.weight, HIDDEN_GAIN, generator)
@@ -346,6 +371,10 @@ class ClashTrunk(nn.Module):
             with torch.no_grad():
                 self.card_ids_embed.weight.normal_(0.0, EMBED_STD, generator=generator)
                 self.card_ids_embed.weight[0].zero_()
+        if self.down is not None:
+            # Drawn last, so a network at stride 1 draws exactly what it always drew.
+            _orthogonal(self.down.weight, HIDDEN_GAIN, generator)
+            _zero_bias(self.down)
 
 
 class PointerPolicyHead(nn.Module):

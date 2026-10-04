@@ -192,6 +192,11 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
     channels: int = 64
     blocks: int = 4
+    #: 1, or 2 to run the residual blocks at half the board's resolution (16 x 9 positions for
+    #: 32 x 18): a strided convolution after the stem, and the body's output upsampled and added
+    #: to the stem's, so the heads still read one feature per tile. Left out of ``arch_digest`` at
+    #: 1, so every network built before it existed keeps its digest.
+    trunk_stride: int = 1
     #: GroupNorm, never BatchNorm: BatchNorm computes a different function at rollout than at
     #: update, which breaks the stored-log-prob contract.
     norm_groups: int = 8
