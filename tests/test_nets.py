@@ -8,6 +8,7 @@ so an assertion that happened to contain a width from either would fail on the o
 
 from __future__ import annotations
 
+import functools
 import math
 from typing import Any
 
@@ -126,9 +127,30 @@ def test_coord_conv_can_be_turned_off(torch: Any, env_spec: Any) -> None:
     assert model.logits(fake_obs(torch, env_spec, 4, seed=3)).shape[0] == 4
 
 
+_BF16_PROBE = """
+import torch
+with torch.autocast("cpu", dtype=torch.bfloat16):
+    torch.nn.Conv2d(4, 4, 3, padding=1)(torch.zeros(1, 4, 8, 8))
+    torch.nn.Linear(4, 4)(torch.zeros(2, 4))
+"""
+
+
+@functools.cache
+def _cpu_runs_bf16() -> bool:
+    """Whether this CPU's torch can run a bf16 convolution and matmul at all. Asked in a child
+    process: on a CPU whose oneDNN refuses bf16 ("could not create a primitive"), the refusal
+    leaves the process's oneDNN unable to build the float32 ones that follow."""
+    import subprocess
+    import sys
+
+    return subprocess.run([sys.executable, "-c", _BF16_PROBE], capture_output=True).returncode == 0
+
+
 def test_logits_are_float32_under_autocast(torch: Any, env_spec: Any) -> None:
     """The trunk really does run in bf16 -- otherwise this asserts nothing -- and the logits
     still arrive as float32, which is what makes the masking and the log_softmax exact."""
+    if not _cpu_runs_bf16():
+        pytest.skip("SKIPPED, NOT PASSED: this CPU's torch cannot run a bf16 convolution")
     model = _build(env_spec, arch(autocast_dtype="bfloat16"))
     obs = fake_obs(torch, env_spec, 4, seed=4)
     with torch.no_grad():
