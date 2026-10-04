@@ -1,20 +1,23 @@
 name: pypi
 
 # Publish royalelearn to PyPI with trusted publishing: no API token anywhere. A `v*` tag starts it,
-# or a run by hand for a tag that already exists (the first upload is one of those).
+# or a run by hand from main for a tag that already exists.
 #
-# Two gates, both outside this file's control on purpose:
-#   1. The `pypi` environment must already exist WITH required reviewers. The `guard` step below
-#      refuses to build otherwise, because a job that names an environment GitHub does not know
-#      makes GitHub create it with no protection, and then nothing would stop the upload.
-#   2. The upload job waits in that environment until the owner approves it.
+# It publishes on its own, and only after the release's gates pass:
+#   1. The `pypi` environment must exist, and may deploy only from main and `v*` tags. The first
+#      step refuses otherwise: a job naming an environment GitHub does not know makes GitHub
+#      create it with no rules at all, and then nothing would hold the upload to a release.
+#   2. This repository's CI (suite, cross-repo, imitate) must have passed on the tag's own commit. The
+#      build waits for those runs to finish and refuses if the newest of any one did not succeed.
+#   3. The tag must name the version in pyproject.toml.
+# The repository variable PYPI_PUBLISH switches the upload off when it is not true.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'An existing version tag to publish, e.g. v0.4.3'
+        description: 'An existing version tag to publish, e.g. v0.5.7'
         required: true
 
 permissions:
@@ -23,29 +26,69 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     permissions:
       contents: read
       actions: read
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      REQUIRED: "suite.yml cross-repo.yml imitate.yml"
     steps:
-      - name: guard - the pypi environment exists and needs a reviewer
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: guard - the pypi environment exists and deploys only from main and v* tags
         run: |
-          rules=$(gh api "repos/${GITHUB_REPOSITORY}/environments/pypi" \
-            --jq '[.protection_rules[] | select(.type == "required_reviewers")] | length') || {
-            echo "::error::the pypi environment does not exist yet; create it with required reviewers first"
+          set -f  # "tag:v*" is a policy's name, never a file pattern
+          custom=$(gh api "repos/${GITHUB_REPOSITORY}/environments/pypi" \
+            --jq '.deployment_branch_policy.custom_branch_policies // false') || {
+            echo "::error::the pypi environment does not exist; create it, limited to main and v* tags"
             exit 1
           }
-          if [ "$rules" -lt 1 ]; then
-            echo "::error::the pypi environment has no required reviewers; add them before publishing"
+          if [ "$custom" != "true" ]; then
+            echo "::error::the pypi environment deploys from any branch; limit it to main and v* tags"
             exit 1
           fi
+          policies=$(gh api "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment-branch-policies" \
+            --jq '[.branch_policies[] | "\(.type):\(.name)"] | sort | join(" ")') || {
+            echo "::error::could not read the pypi environment's deployment policies"
+            exit 1
+          }
+          echo "deployment policies: $policies"
+          case " $policies " in *" tag:v* "*) ;; *)
+            echo "::error::the pypi environment does not allow v* tags"
+            exit 1;;
+          esac
+          for policy in $policies; do
+            case "$policy" in "tag:v*"|"branch:main") ;; *)
+              echo "::error::the pypi environment also deploys from $policy; allow only main and v* tags"
+              exit 1;;
+            esac
+          done
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+
+      - name: guard - this repository's CI passed on the tag's commit
+        run: |
+          sha=$(git rev-parse HEAD)
+          echo "commit $sha"
+          for workflow in $REQUIRED; do
+            verdict=""
+            for attempt in $(seq 1 130); do
+              newest=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${sha}&per_page=1" \
+                --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)
+              case "$newest" in
+                "completed success") verdict=pass; break;;
+                completed*) verdict="failed: $newest"; break;;
+                *) sleep 60;;
+              esac
+            done
+            if [ "$verdict" != "pass" ]; then
+              echo "::error::$workflow on $sha has not passed (${verdict:-no finished run within the wait})"
+              exit 1
+            fi
+            echo "$workflow passed on $sha"
+          done
 
       - uses: actions/setup-python@v5
         with:
@@ -71,9 +114,6 @@ jobs:
 
   publish:
     needs: build
-    # Off until the owner sets the repository variable PYPI_PUBLISH to true (Settings > Secrets and
-    # variables > Actions > Variables), once the PyPI side is ready. Until then a tag builds and
-    # stops, instead of waiting in the environment for an approval nobody should give yet.
     if: vars.PYPI_PUBLISH == 'true'
     runs-on: ubuntu-latest
     environment:
