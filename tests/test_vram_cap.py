@@ -44,10 +44,15 @@ def build_env() -> Any:
 class _Torch:
     def __init__(self) -> None:
         self.calls: list[tuple[float, Any]] = []
-        self.cuda = SimpleNamespace(set_per_process_memory_fraction=self._set)
+        self.cuda = SimpleNamespace(
+            set_per_process_memory_fraction=self._set, current_device=lambda: 0
+        )
 
     def _set(self, fraction: float, device: Any) -> None:
-        self.calls.append((fraction, device))
+        # What torch does with the device first, so an index-less "cuda" is refused here too.
+        from torch._utils import _get_device_index
+
+        self.calls.append((fraction, _get_device_index(device)))
 
 
 def _run(fraction: float | None, device: str) -> tuple[_Torch, list[str]]:
@@ -62,11 +67,12 @@ def _run(fraction: float | None, device: str) -> tuple[_Torch, list[str]]:
     return fake, lines
 
 
-def test_a_cuda_run_caps_its_own_device_and_says_so() -> None:
-    fake, lines = _run(0.8, "cuda:0")
-    assert len(fake.calls) == 1
-    fraction, device = fake.calls[0]
-    assert fraction == 0.8 and str(device) == "cuda:0"
+@pytest.mark.parametrize(("device", "index"), [("cuda", 0), ("cuda:1", 1)])
+def test_a_cuda_run_caps_its_own_device_and_says_so(device: str, index: int) -> None:
+    """``torch.device("cuda")``, the device a run asking for "cuda" gets, has no index, and
+    torch refuses to set a fraction for it: the current device is named instead."""
+    fake, lines = _run(0.8, device)
+    assert fake.calls == [(0.8, index)]
     assert "80% of the card" in lines[0]
 
 

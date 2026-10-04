@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8
+
+- A CUDA run on Windows starts again: the memory cap named the device as `cuda` with no index,
+  which torch refuses, so every such run stopped at start-up since 0.5.5. It now names the
+  device's index, or the current device's.
+
 ## 0.5.7
 
 - `rollout.overlap` runs: the next iteration is collected on a second thread while the update

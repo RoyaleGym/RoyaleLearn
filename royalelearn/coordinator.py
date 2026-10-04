@@ -1195,7 +1195,9 @@ class LearningCoordinator:
         """
         if self.vram_fraction is None or self.device.type != "cuda":
             return
-        torch.cuda.set_per_process_memory_fraction(self.vram_fraction, self.device)
+        # The call takes an index: "cuda" alone means the current device, and torch refuses it.
+        index = self.device.index if self.device.index is not None else torch.cuda.current_device()
+        torch.cuda.set_per_process_memory_fraction(self.vram_fraction, index)
         self.printer(
             f"vram cap      {self.vram_fraction:.0%} of the card (vram_fraction; None for none)"
         )
