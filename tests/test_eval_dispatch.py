@@ -107,9 +107,18 @@ def test_the_two_dispatches_write_the_same_log(tmp_path: Path) -> None:
     serial.compare("snap:v0", "scripted:noop", games=GAMES)
     scrambled.compare("snap:v0", "scripted:noop", games=GAMES)
 
-    left = (tmp_path / "serial.jsonl").read_text(encoding="utf-8").splitlines()
-    right = (tmp_path / "scrambled.jsonl").read_text(encoding="utf-8").splitlines()
+    left, right = (_without_wall(tmp_path / f"{name}.jsonl") for name in ("serial", "scrambled"))
     assert left == right
+
+
+def _without_wall(path: Path) -> list[dict]:
+    """The log's rows without ``wall``, the clock time each comparison was written at: the two
+    comparisons run one after the other and can fall either side of a second."""
+    import json
+
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert rows and all("wall" in row for row in rows)
+    return [{k: v for k, v in row.items() if k != "wall"} for row in rows]
 
 
 def test_the_scrambled_player_really_did_scramble(tmp_path: Path) -> None:
