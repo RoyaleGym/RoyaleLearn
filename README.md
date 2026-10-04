@@ -7,7 +7,7 @@ It is the trainer for the battles RoyaleGym runs, and it uses your NVIDIA graphi
 
 ## Install
 
-    pip install "royalegym[all]" --find-links https://github.com/RoyaleGym/RoyaleGym/releases/expanded_assets/v0.1.11
+    pip install "royalegym[all]" --find-links https://github.com/RoyaleGym/RoyaleGym/releases/expanded_assets/v0.1.12
 
 This is the `[learn]` part, for Python 3.12 to 3.14. On Windows with an NVIDIA card, install PyTorch
 first: [Install](https://royalegym.github.io/RoyaleGym/install/), step 4.
