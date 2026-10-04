@@ -2,11 +2,11 @@
 
 ## 0.5.6
 
-- `net.trunk_stride` (1 or 2, default 1): at 2 a strided convolution after the stem runs the
-  residual blocks at half the board's resolution in each direction, and their output is
-  upsampled and added to the stem's, so the heads still read one feature per tile. The blocks
-  then cost about a quarter as much. At 1 the network, its weights and its architecture digest
-  are as before.
+- `net.trunk_stride`, an opt-in stride for the residual trunk (1 or 2, default 1). At 2 a
+  strided convolution after the stem runs the residual blocks at half the board's resolution in
+  each direction, and their output is upsampled and added to the stem's, so the heads still read
+  one feature per tile. At 1 nothing changes: the network, its weights and its architecture
+  digest are as before.
 
 ## 0.5.5
 
