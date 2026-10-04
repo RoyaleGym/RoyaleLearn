@@ -39,6 +39,7 @@ from torch import Tensor, nn
 from royalegym.action import NOOP
 
 from ..api.policy import NetworkFactory
+from ..config import trunk_stride_of
 from ..errors import PreflightError
 from ..obs_layout import hand_fields, id_planes
 from ..rollout.envspec import digest_of
@@ -180,9 +181,10 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
     if arch.blocks < 0:
         raise PreflightError(f"net.blocks is {arch.blocks}")
     tiles_y, tiles_x = spec.tiles
-    if arch.trunk_stride not in (1, 2):
+    stride = trunk_stride_of(arch)
+    if stride not in (1, 2):
         raise PreflightError(f"net.trunk_stride is {arch.trunk_stride}; it is 1 or 2")
-    if arch.trunk_stride == 2 and (tiles_y % 2 or tiles_x % 2):
+    if stride == 2 and (tiles_y % 2 or tiles_x % 2):
         raise PreflightError(
             f"net.trunk_stride 2 halves the board, and {tiles_y}x{tiles_x} tiles do not halve"
         )
@@ -225,7 +227,7 @@ def _arch_for_digest(arch: ArchSpec) -> Any:
         (f.name, f.type, f.default)
         for f in msgspec.structs.fields(arch)
         if f.name != "factored_act_init"
-        and not (f.name == "trunk_stride" and getattr(arch, f.name) == 1)
+        and not (f.name == "trunk_stride" and trunk_stride_of(arch) == 1)
     ]
     shape = msgspec.defstruct(type(arch).__name__, fields, frozen=True)
     return shape(**{name: getattr(arch, name) for name, _, _ in fields})
@@ -312,7 +314,7 @@ class ClashTrunk(nn.Module):
         )
         # ``net.trunk_stride`` 2: the body runs on a quarter of the positions, and its output is
         # brought back to one feature per tile and added to the stem's, which kept full resolution.
-        self.stride = int(arch.trunk_stride)
+        self.stride = trunk_stride_of(arch)
         self.down: nn.Conv2d | None = None
         self.down_norm: nn.GroupNorm | None = None
         if self.stride > 1:

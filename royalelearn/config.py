@@ -194,9 +194,10 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     blocks: int = 4
     #: 1, or 2 to run the residual blocks at half the board's resolution (16 x 9 positions for
     #: 32 x 18): a strided convolution after the stem, and the body's output upsampled and added
-    #: to the stem's, so the heads still read one feature per tile. Left out of ``arch_digest`` at
-    #: 1, so every network built before it existed keeps its digest.
-    trunk_stride: int = 1
+    #: to the stem's, so the heads still read one feature per tile. Unset means 1, and an unset
+    #: field is left out of the encoding, so every config and ``arch_digest`` from before it
+    #: existed keeps its hash; ``trunk_stride_of`` reads it.
+    trunk_stride: int | msgspec.UnsetType = msgspec.UNSET
     #: GroupNorm, never BatchNorm: BatchNorm computes a different function at rollout than at
     #: update, which breaks the stored-log-prob contract.
     norm_groups: int = 8
@@ -226,6 +227,11 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: is needed.
     autocast_dtype: str = "bfloat16"
     device: str = "cuda"
+
+
+def trunk_stride_of(net: NetConfig) -> int:
+    """``net.trunk_stride``, with an unset one read as 1."""
+    return 1 if net.trunk_stride is msgspec.UNSET else int(net.trunk_stride)
 
 
 #: The spec's name for the same struct, used where it is the network's description rather than a

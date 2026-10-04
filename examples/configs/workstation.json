@@ -67,7 +67,6 @@
   "net": {
     "channels": 96,
     "blocks": 8,
-    "trunk_stride": 1,
     "norm_groups": 8,
     "vector_embed": 32,
     "value_hidden": 256,
