@@ -97,6 +97,32 @@ PRECISION_NAMES: dict[torch.dtype, str] = {
     torch.float16: "float16",
 }
 
+#: The ratio tolerance for float32 on a GPU allowed TF32, unless ``ppo.ratio_atol`` names a
+#: "tf32" entry. Outside run_exact torch lets cuDNN's convolutions run in TF32, ten mantissa bits,
+#: and the rollout's forward and the update's differ in batch shape, so they pick different
+#: kernels: their log-probabilities differ by about 1e-4 to 1e-3, which is precision, not a defect.
+TF32_RATIO_ATOL: float = 5e-3
+
+
+def ratio_tolerance(config: PPOConfig, dtype: torch.dtype, device: Any) -> float:
+    """The tolerance the ratio invariant is asserted at for ``dtype`` on ``device``.
+
+    One function for the update's assertion and the run's alarm, so the two are always about the
+    same number. Float32 on CUDA with TF32 allowed is its own precision ("tf32"); everything else
+    is looked up by the name ``PRECISION_NAMES`` gives it.
+    """
+    name = PRECISION_NAMES.get(dtype, str(dtype))
+    tf32 = torch.backends.cudnn.allow_tf32 or torch.backends.cuda.matmul.allow_tf32
+    if name == "float32" and torch.device(device).type == "cuda" and tf32:
+        return float(config.ratio_atol.get("tf32", TF32_RATIO_ATOL))
+    try:
+        return float(config.ratio_atol[name])
+    except KeyError:
+        raise KeyError(
+            f"ppo.ratio_atol has no tolerance for {name}; it lists "
+            f"{', '.join(sorted(config.ratio_atol))}"
+        ) from None
+
 #: The three causes a ratio deviation has, in the order they are worth checking. Every one of
 #: them moves a log-probability by a quantity of order one, which is why a tolerance of a
 #: percent still detects all three.
@@ -1247,14 +1273,7 @@ class PPOUpdate(Update):
 
     def _ratio_atol(self) -> float:
         dtype = getattr(self.model, "autocast_dtype", torch.float32)
-        name = PRECISION_NAMES.get(dtype, str(dtype))
-        try:
-            return float(self.config.ratio_atol[name])
-        except KeyError:
-            raise KeyError(
-                f"ppo.ratio_atol has no tolerance for {name}; it lists "
-                f"{', '.join(sorted(self.config.ratio_atol))}"
-            ) from None
+        return ratio_tolerance(self.config, dtype, self.device)
 
     def _apply_learning_rates(self, sched: ScheduleState) -> None:
         """Take this iteration's rates. They move only under the backoff, which is why they

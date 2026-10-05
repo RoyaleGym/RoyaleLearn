@@ -4,6 +4,11 @@
 
 - `doctor.vram_fraction` sets the GPU memory cap from a config: a share of the card in (0, 1],
   or null for no cap. Unset, the constructor's `vram_fraction` decides, as before.
+- The ratio check's tolerance follows the precision the forwards ran at: float32 on a GPU allowed
+  TF32 (the default outside `determinism.tier` run_exact) is checked at 5e-3, or at
+  `ppo.ratio_atol["tf32"]` when a config names it, instead of float32's 1e-4.
+- When the start-up memory probe runs out of memory under the cap, the message says so and names
+  what to change.
 
 ## 0.5.8
 

@@ -1167,12 +1167,14 @@ class LearningCoordinator:
         number, and two ways of naming float32 is how they would stop being.
         """
         from .learn.nets import resolve_dtype
-        from .learn.ppo import PRECISION_NAMES
+        from .learn.ppo import ratio_tolerance
         from .metrics.alarms import DEFAULT_RATIO_ATOL
 
         dtype = resolve_dtype(self.config.net.autocast_dtype)
-        name = PRECISION_NAMES.get(dtype, str(self.config.net.autocast_dtype))
-        return float(self.config.ppo.ratio_atol.get(name, DEFAULT_RATIO_ATOL))
+        try:
+            return ratio_tolerance(self.config.ppo, dtype, self.device)
+        except KeyError:
+            return float(DEFAULT_RATIO_ATOL)
 
     def _resolve_device(self, torch: Any) -> torch.device:
         """The device this run trains on.
@@ -1502,10 +1504,17 @@ class LearningCoordinator:
             # start that one minibatch fits the card, and health/vram_needed_mb is never set.
             # The vram_spilling alarm does not read that key (it watches time/update and the
             # driver's free memory, since 6feaa23), so it still watches this run.
+            capped = (
+                f" The allocator is capped at {self.vram_fraction:.0%} of the card "
+                "(doctor.vram_fraction), and one minibatch did not fit under it: the update may "
+                "fail the same way. Lower ppo.minibatch_size or raise the cap."
+                if self.vram_fraction is not None and "out of memory" in str(exc).lower()
+                else ""
+            )
             self.printer(
                 f"the VRAM gate did not run: the probe raised {type(exc).__name__}: {exc}. "
                 "Nothing checked that one minibatch fits the card, and health/vram_needed_mb "
-                "will be absent; the vram_spilling alarm still watches the update's time"
+                f"will be absent; the vram_spilling alarm still watches the update's time.{capped}"
             )
             return
         peak = torch.cuda.max_memory_reserved()  # pragma: no cover
