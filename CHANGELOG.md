@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.10
 
 - The start-up memory projection counts a process worker's fixed cost as 200 MB, measured on
   Windows; it counted 40. A run whose rollout workers came up with torch imported is warned at
