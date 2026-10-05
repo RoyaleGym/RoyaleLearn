@@ -44,3 +44,31 @@ def test_a_precision_the_config_does_not_list_is_refused_by_name(tf32: Any) -> N
     tf32(False)
     with pytest.raises(KeyError, match="float16"):
         ratio_tolerance(PPOConfig(), torch.float16, "cuda")
+
+
+@pytest.mark.parametrize(("drift", "trips"), [(2e-2, True), (2e-3, False)])
+def test_a_real_drift_still_trips_the_check_under_tf32(
+    tf32: Any, tmp_path: Any, drift: float, trips: bool
+) -> None:
+    """The looser tolerance hides the precision and nothing else: a ratio 2e-2 off one -- a mask,
+    codec or weight-version mismatch moves it by far more -- is still a refusal on a TF32 GPU,
+    and 2e-3, which TF32 can produce, is not."""
+    from royalelearn.learn.ppo import _Diagnostics
+    from royalelearn.testing import coordinator, tiny_config
+
+    tf32(True)
+    with coordinator(tiny_config(tmp_path)) as run:
+        update = run.update
+        update.device = torch.device("cuda")  # the tolerance is asked about a GPU run
+        assert update._ratio_atol() == TF32_RATIO_ATOL
+        ratio = torch.ones(4)
+        ratio[2] += drift
+        cells = torch.arange(4, dtype=torch.int64)
+        actions = torch.zeros(4, dtype=torch.int64)
+        diagnostics = _Diagnostics(1, torch.device("cpu"))
+        update._n_slots = 4
+        if trips:
+            with pytest.raises(AssertionError, match="importance ratio deviates"):
+                update._ratio_invariant(ratio, cells, actions, diagnostics, 0)
+        else:
+            update._ratio_invariant(ratio, cells, actions, diagnostics, 0)
