@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.9
 
 - `doctor.vram_fraction` sets the GPU memory cap from a config: a share of the card in (0, 1],
   or null for no cap. Unset, the constructor's `vram_fraction` decides, as before.
