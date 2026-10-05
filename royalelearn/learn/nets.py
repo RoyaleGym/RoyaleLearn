@@ -41,7 +41,7 @@ from royalegym.action import NOOP
 from ..api.policy import NetworkFactory
 from ..config import hand_slot_features_of, trunk_stride_of
 from ..errors import PreflightError
-from ..obs_layout import field_slice, hand_fields, id_planes
+from ..obs_layout import UNIT_IDS, field_slice, hand_fields, id_planes
 from ..rollout.envspec import digest_of
 from ..seeding import TORCH_INIT, derive_int
 from .actor_critic import ClashActor, ClashCritic, SeparateActorCritic, SharedTrunkActorCritic
@@ -79,6 +79,9 @@ EMBED_STD: float = 0.02
 #: architecture digest of every run, and so refuse every checkpoint and snapshot on disk, for a
 #: feature most of them never switched on. It enters the digest only when ``card_ids`` exists.
 CARD_ID_EMBED: int = 8
+#: The same for each tile's unit type (``unit_ids``), in a table of its own: unit types are
+#: another vocabulary from the card ids. It enters the digest only when ``unit_ids`` exists.
+UNIT_ID_EMBED: int = 8
 
 #: What ``NetConfig.policy_head`` may name.
 POLICY_HEADS: tuple[str, ...] = ("pointer", "factored")
@@ -307,6 +310,12 @@ class ClashTrunk(nn.Module):
             self.card_ids_embed = nn.Embedding(vocabulary, CARD_ID_EMBED, padding_idx=0)
             # The spells' planes (``spell_ids``) hold the same ids and go through this table too.
             self.in_channels += spec.frame_stack * id_planes(spec.obs_space) * CARD_ID_EMBED
+        self.unit_ids_embed: nn.Embedding | None = None
+        if UNIT_IDS in spec.obs_space:
+            units = spec.obs_space[UNIT_IDS]
+            vocabulary = int(max(float(h) for h in _flat(units.high))) + 1
+            self.unit_ids_embed = nn.Embedding(vocabulary, UNIT_ID_EMBED, padding_idx=0)
+            self.in_channels += spec.frame_stack * units.shape[0] * UNIT_ID_EMBED
         self.stem = nn.Conv2d(self.in_channels, arch.channels, 3, padding=1)
         self.stem_norm = nn.GroupNorm(arch.norm_groups, arch.channels)
         self.body = nn.ModuleList(
@@ -343,6 +352,14 @@ class ClashTrunk(nn.Module):
                 )
             ids = self.card_ids_embed(obs.card_ids.long())  # (B, k*2, H, W, E)
             parts.append(ids.permute(0, 1, 4, 2, 3).flatten(1, 2).to(spatial.dtype))
+        if self.unit_ids_embed is not None:
+            if obs.unit_ids is None:
+                raise ValueError(
+                    "this network reads unit_ids and the batch carries none; it was built for an "
+                    "observation with unit identity switched on"
+                )
+            units = self.unit_ids_embed(obs.unit_ids.long())
+            parts.append(units.permute(0, 1, 4, 2, 3).flatten(1, 2).to(spatial.dtype))
         x = torch.cat(parts, dim=1)
         if x.shape[1] != self.in_channels:
             raise ValueError(
@@ -373,6 +390,11 @@ class ClashTrunk(nn.Module):
             with torch.no_grad():
                 self.card_ids_embed.weight.normal_(0.0, EMBED_STD, generator=generator)
                 self.card_ids_embed.weight[0].zero_()
+        if self.unit_ids_embed is not None:
+            # Drawn after everything that existed before it, so no other network's draws move.
+            with torch.no_grad():
+                self.unit_ids_embed.weight.normal_(0.0, EMBED_STD, generator=generator)
+                self.unit_ids_embed.weight[0].zero_()
         if self.down is not None:
             # Drawn last, so a network at stride 1 draws exactly what it always drew.
             _orthogonal(self.down.weight, HIDDEN_GAIN, generator)
@@ -718,6 +740,7 @@ class DefaultNetworkFactory(NetworkFactory):
                 ),
                 # Only when there are card ids to embed, so every digest before D2 is unchanged.
                 **({"card_id_embed": CARD_ID_EMBED} if "card_ids" in spec.obs_space else {}),
+                **({"unit_id_embed": UNIT_ID_EMBED} if UNIT_IDS in spec.obs_space else {}),
                 # Only when the spells' ids are on, so every digest before them is unchanged.
                 **(
                     {"spell_id_planes": int(spec.obs_space["spell_ids"].shape[0])}

@@ -8,6 +8,10 @@
 - `net.hand_slot_features`: observation vector fields with one value per hand slot (for example
   `own_hand_evolved`) join that slot's card embedding where the policy head builds the slot's
   query. Unset, the network, its weights and its architecture digest are as before.
+- `unit_ids`, each tile's own unit type (RoyaleGym's `SpatialObsBuilder(unit_identity=True)`),
+  is stored exactly in a codec region of its own (one byte a value, two once the unit list passes
+  255 types), carried in `ObsBatch.unit_ids` and embedded in a table of its own beside the card
+  ids. Without it, every row, table and digest is as before.
 
 ## 0.5.9
 

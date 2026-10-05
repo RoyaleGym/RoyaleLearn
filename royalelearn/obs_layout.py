@@ -27,6 +27,7 @@ __all__ = [
     "ID_KEYS",
     "REQUIRED_FIELDS",
     "SPELL_IDS",
+    "UNIT_IDS",
     "HandFields",
     "field_slice",
     "hand_fields",
@@ -50,6 +51,9 @@ REQUIRED_FIELDS: tuple[str, ...] = (HAND_CARD_ONEHOT, HAND_COST, HAND_AFFORDABLE
 CARD_IDS = "card_ids"
 SPELL_IDS = "spell_ids"
 ID_KEYS: tuple[str, ...] = (CARD_IDS, SPELL_IDS)
+#: Each unit's own type per tile (``SpatialObsBuilder(unit_identity=True)``): another vocabulary
+#: from the card ids', so it is carried and embedded on its own, never in the card id block.
+UNIT_IDS = "unit_ids"
 
 
 def id_planes(obs_space: Mapping[str, object]) -> int:

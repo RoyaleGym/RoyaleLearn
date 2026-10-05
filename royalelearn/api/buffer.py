@@ -52,6 +52,9 @@ class CodecTable(msgspec.Struct, frozen=True, omit_defaults=True):
     #: omitted from the encoding when None (``omit_defaults``), so every table decided before
     #: card identity existed hashes exactly as it did and no saved run's digest moves.
     ids: str | None = None
+    #: How ``unit_ids`` is stored: "uint8", exact, or None without it; omitted when None, so no
+    #: table decided before it existed moves.
+    unit_ids: str | None = None
 
     def digest(self) -> str:
         """sha256 of the canonical JSON of this table."""

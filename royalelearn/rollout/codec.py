@@ -57,7 +57,7 @@ import numpy as np
 
 from ..api.buffer import MIN_TABLE_STATES, CodecTable, ObsCodec
 from ..errors import PreflightError
-from ..obs_layout import CARD_IDS, SPELL_IDS, id_planes, id_stack
+from ..obs_layout import CARD_IDS, SPELL_IDS, UNIT_IDS, id_planes, id_stack
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from torch import Tensor
@@ -82,6 +82,10 @@ CODEC_VERSION = 1
 
 #: A plane stored as a whole number in one byte, exactly, with the divisor the table records.
 STORAGE_UINT8 = "uint8"
+#: Two bytes, little-endian, exact: the unit-type region when its vocabulary passes a byte.
+STORAGE_UINT16 = "uint16"
+#: The largest unit-type vocabulary two bytes hold here: the unpack reads them as int16.
+_UNIT16_MAX_VOCAB = 1 << 15
 #: A plane stored as half precision.
 STORAGE_FLOAT16 = "float16"
 #: A plane the layout declares static: held once per seat, never per row.
@@ -100,7 +104,16 @@ _UINT8_MAX = 255
 #: Derived like ``mask_planes``: the last ``n_buttons`` bits of the mask, never stored.
 ABILITY_READY = "ability_ready"
 KNOWN_KEYS: frozenset[str] = frozenset(
-    {"spatial", "vector", "action_mask", "mask_planes", CARD_IDS, SPELL_IDS, ABILITY_READY}
+    {
+        "spatial",
+        "vector",
+        "action_mask",
+        "mask_planes",
+        CARD_IDS,
+        SPELL_IDS,
+        UNIT_IDS,
+        ABILITY_READY,
+    }
 )
 _BITS_PER_BYTE = 8
 
@@ -212,6 +225,24 @@ class RowLayout(NamedTuple):
     ids_planes: int = 0
     ids_start: int = 0
     ids_stop: int = 0
+    #: The unit-type region, after the card id region: ``unit_planes`` values per cell, each
+    #: ``unit_bytes`` wide (one, or two once the unit vocabulary passes a byte).
+    unit_planes: int = 0
+    unit_start: int = 0
+    unit_stop: int = 0
+    unit_bytes: int = 1
+
+
+def _unit_vocabulary(spec: EnvSpec) -> int:
+    """How many values ``unit_ids`` declares: its space's high, plus one for zero."""
+    return int(np.max(np.asarray(spec.obs_space[UNIT_IDS].high))) + 1
+
+
+def _unit_storage(spec: EnvSpec) -> str | None:
+    """One byte per unit type while the vocabulary fits one, two once it does not."""
+    if UNIT_IDS not in spec.obs_space:
+        return None
+    return STORAGE_UINT8 if _unit_vocabulary(spec) <= _UINT8_MAX + 1 else STORAGE_UINT16
 
 
 class SpatialObsCodec(ObsCodec):
@@ -280,6 +311,7 @@ class SpatialObsCodec(ObsCodec):
             vector=STORAGE_FLOAT16,
             mask="bitpack",
             ids=STORAGE_UINT8 if CARD_IDS in spec.obs_space else None,
+            unit_ids=_unit_storage(spec),
         )
         self.bind(spec, table)
         return table
@@ -348,6 +380,22 @@ class SpatialObsCodec(ObsCodec):
                     f"{CARD_IDS} has a vocabulary of {vocabulary}, which does not fit one byte. "
                     "A wider id would wrap silently into another card; widen the region first."
                 )
+        has_units = UNIT_IDS in spec.obs_space
+        if has_units != (bound.unit_ids is not None):
+            raise PreflightError(
+                f"the observation {'carries' if has_units else 'has no'} {UNIT_IDS} and the codec "
+                f"table says {bound.unit_ids!r}; a worker and the learner handed these would "
+                "disagree about every row"
+            )
+        if has_units:
+            vocabulary = _unit_vocabulary(spec)
+            fits = {STORAGE_UINT8: _UINT8_MAX + 1, STORAGE_UINT16: _UNIT16_MAX_VOCAB}
+            if vocabulary > fits.get(str(bound.unit_ids), 0):
+                raise PreflightError(
+                    f"{UNIT_IDS} has a vocabulary of {vocabulary} stored as {bound.unit_ids!r}; "
+                    f"'uint8' holds up to {_UINT8_MAX + 1} values and 'uint16' up to "
+                    f"{_UNIT16_MAX_VOCAB} here"
+                )
         if len(bound.plane) != spec.n_planes:
             raise PreflightError(
                 f"the codec table describes {len(bound.plane)} planes and the observation space "
@@ -404,6 +452,10 @@ class SpatialObsCodec(ObsCodec):
         ids_planes = id_planes(spec.obs_space)
         ids_start = mask_stop
         ids_stop = ids_start + ids_planes * cells
+        unit_planes = spec.obs_space[UNIT_IDS].shape[0] if UNIT_IDS in spec.obs_space else 0
+        unit_bytes = 2 if table.unit_ids == STORAGE_UINT16 else 1
+        unit_start = _align2(ids_stop) if unit_bytes == 2 else ids_stop
+        unit_stop = unit_start + unit_planes * cells * unit_bytes
         return RowLayout(
             u8_planes=u8,
             f16_planes=f16,
@@ -418,7 +470,7 @@ class SpatialObsCodec(ObsCodec):
             vector_stop=vector_stop,
             mask_start=mask_start,
             mask_stop=mask_stop,
-            row_bytes=ids_stop,
+            row_bytes=unit_stop,
             mask_bytes=mask_bytes,
             n_actions=spec.n_actions,
             planes=spec.n_planes,
@@ -429,6 +481,10 @@ class SpatialObsCodec(ObsCodec):
             ids_planes=ids_planes,
             ids_start=ids_start,
             ids_stop=ids_stop,
+            unit_planes=unit_planes,
+            unit_start=unit_start,
+            unit_stop=unit_stop,
+            unit_bytes=unit_bytes,
         )
 
     @property
@@ -530,6 +586,19 @@ class SpatialObsCodec(ObsCodec):
                 ids = np.clip(ids, 0, _UINT8_MAX).astype(np.uint8)
             target[layout.ids_start : layout.ids_stop] = ids.reshape(-1)
 
+        if layout.unit_planes:
+            units = np.asarray(obs[UNIT_IDS])
+            if layout.unit_bytes == 2:
+                packed = units.astype("<u2").reshape(-1).view(np.uint8)
+            else:
+                if units.dtype != np.uint8:
+                    over = int(np.count_nonzero((units < 0) | (units > _UINT8_MAX)))
+                    if over:
+                        self._clipped += over
+                    units = np.clip(units, 0, _UINT8_MAX).astype(np.uint8)
+                packed = units.reshape(-1)
+            target[layout.unit_start : layout.unit_stop] = packed
+
     def static_planes(self, obs: dict[str, np.ndarray]) -> np.ndarray:
         """The declared-static planes of one observation, as ``float32``.
 
@@ -619,6 +688,22 @@ class SpatialObsCodec(ObsCodec):
                 raw[:, :, layout.ids_start : layout.ids_stop].reshape(
                     batch, frames, layout.ids_planes, tiles_y, tiles_x
                 )
+            )
+
+        if layout.unit_planes:
+            if out.unit_ids is None:
+                raise ValueError(
+                    f"this batch was allocated without {UNIT_IDS} and its rows carry them; the "
+                    "planes would be read and thrown away"
+                )
+            region = raw[:, :, layout.unit_start : layout.unit_stop]
+            if layout.unit_bytes == 2:
+                # Little-endian pairs; the vocabulary bind() admitted fits int16.
+                import torch
+
+                region = region.contiguous().view(torch.int16)
+            out.unit_ids.view(batch, frames, layout.unit_planes, tiles_y, tiles_x).copy_(
+                region.reshape(batch, frames, layout.unit_planes, tiles_y, tiles_x)
             )
 
         live = (raw != 0).any(dim=-1).view(batch, frames, 1, 1, 1)

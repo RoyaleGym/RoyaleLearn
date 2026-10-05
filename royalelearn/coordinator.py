@@ -86,7 +86,7 @@ from .metrics.records import (
 )
 from .metrics.schema import for_run
 from .metrics.sinks import METRICS_NAME, build_sinks
-from .obs_layout import id_planes
+from .obs_layout import UNIT_IDS, id_planes
 from .rollout.inline import (
     InlineRolloutSource,
     assignments_constant_within_episodes,
@@ -1571,6 +1571,15 @@ class LearningCoordinator:
                     device=self.device,
                 )
                 if id_planes(spec.obs_space)
+                else None
+            ),
+            unit_ids=(
+                torch.zeros(
+                    (rows, spec.obs_space[UNIT_IDS].shape[0], *spec.tiles),
+                    dtype=torch.int64,
+                    device=self.device,
+                )
+                if UNIT_IDS in spec.obs_space
                 else None
             ),
         )

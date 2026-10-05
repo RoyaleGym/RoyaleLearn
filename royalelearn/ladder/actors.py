@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..obs_layout import id_stack
+from ..obs_layout import UNIT_IDS, id_stack
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from ..api.rollout import EnvSpec
@@ -160,6 +160,8 @@ class EvalActors:
         ids = id_stack(obs)
         if ids is not None:
             frame["ids"] = np.asarray(ids).astype(np.int64)
+        if UNIT_IDS in obs:
+            frame["units"] = np.asarray(obs[UNIT_IDS]).astype(np.int64)
         frames = self.spec.frame_stack
         stack = [frame]
         if frames > 1 and history is not None:
@@ -174,6 +176,7 @@ class EvalActors:
         spatial_stack = np.concatenate([f["spatial"] for f in stack], axis=0)
         plane_stack = np.concatenate([f["planes"] for f in stack], axis=0)
         ids_stack = np.concatenate([f["ids"] for f in stack], axis=0) if "ids" in frame else None
+        units = np.concatenate([f["units"] for f in stack], axis=0) if "units" in frame else None
 
         def tensor(array: np.ndarray, dtype: Any) -> Any:
             return torch.from_numpy(np.ascontiguousarray(array)).to(
@@ -186,4 +189,5 @@ class EvalActors:
             vector=tensor(np.asarray(obs["vector"], dtype=np.float32), torch.float32),
             mask=tensor(mask, torch.bool),
             card_ids=None if ids_stack is None else tensor(ids_stack, torch.int64),
+            unit_ids=None if units is None else tensor(units, torch.int64),
         )

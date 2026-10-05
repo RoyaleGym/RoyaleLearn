@@ -52,6 +52,9 @@ class ObsBatch(NamedTuple):
     #: ``(B, k*2, H, W)`` int64 card ids per tile, own then enemy, per frame: 0 empty, 1 crown
     #: tower, 2 + card id. None unless the observation builder was asked for card identity.
     card_ids: Tensor | None = None
+    #: ``(B, k*2, H, W)`` int64 unit types per tile, own then enemy, per frame: 0 empty, 1 + the
+    #: type's index in the engine's unit list. None unless the builder was asked for unit identity.
+    unit_ids: Tensor | None = None
 
 
 class ActionDistribution(ABC):

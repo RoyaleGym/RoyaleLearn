@@ -53,7 +53,7 @@ from ..api.buffer import ExperienceBuffer
 from ..api.policy import ObsBatch
 from ..api.rollout import EPISODE_END_NONE, GROUP_DEAD, GROUP_LEARNER
 from ..errors import CheckpointFormatError
-from ..obs_layout import id_planes
+from ..obs_layout import UNIT_IDS, id_planes
 from ..rollout.layout import (
     BufferHandle,
     BufferLayout,
@@ -288,6 +288,15 @@ def empty_obs(spec: EnvSpec, count: int, *, frames: int, device: Any) -> ObsBatc
                 device=device,
             )
             if id_planes(spec.obs_space)
+            else None
+        ),
+        unit_ids=(
+            torch.empty(
+                (count, frames * spec.obs_space[UNIT_IDS].shape[0], tiles_y, tiles_x),
+                dtype=torch.int64,
+                device=device,
+            )
+            if UNIT_IDS in spec.obs_space
             else None
         ),
     )
