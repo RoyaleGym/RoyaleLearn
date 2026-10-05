@@ -5,6 +5,9 @@
 - The start-up memory projection counts a process worker's fixed cost as 200 MB, measured on
   Windows; it counted 40. A run whose rollout workers came up with torch imported is warned at
   start-up, since that costs some 850 MB a worker the projection cannot see.
+- `net.hand_slot_features`: observation vector fields with one value per hand slot (for example
+  `own_hand_evolved`) join that slot's card embedding where the policy head builds the slot's
+  query. Unset, the network, its weights and its architecture digest are as before.
 
 ## 0.5.9
 

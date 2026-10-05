@@ -197,6 +197,10 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: field is left out of the encoding, so every config and ``arch_digest`` from before it
     #: existed keeps its hash; ``trunk_stride_of`` reads it.
     trunk_stride: int | msgspec.UnsetType = msgspec.UNSET
+    #: Observation vector fields, each one value per hand slot (``own_hand_evolved``, say), added
+    #: to that slot's card embedding where the policy head builds the slot's query, beside its
+    #: cost and whether it is affordable. Unset means none, and is left out of the encoding.
+    hand_slot_features: tuple[str, ...] | msgspec.UnsetType = msgspec.UNSET
     #: GroupNorm, never BatchNorm: BatchNorm computes a different function at rollout than at
     #: update, which breaks the stored-log-prob contract.
     norm_groups: int = 8
@@ -226,6 +230,11 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: is needed.
     autocast_dtype: str = "bfloat16"
     device: str = "cuda"
+
+
+def hand_slot_features_of(net: NetConfig) -> tuple[str, ...]:
+    """``net.hand_slot_features``, with an unset one read as none."""
+    return () if net.hand_slot_features is msgspec.UNSET else tuple(net.hand_slot_features)
 
 
 def trunk_stride_of(net: NetConfig) -> int:

@@ -39,9 +39,9 @@ from torch import Tensor, nn
 from royalegym.action import NOOP
 
 from ..api.policy import NetworkFactory
-from ..config import trunk_stride_of
+from ..config import hand_slot_features_of, trunk_stride_of
 from ..errors import PreflightError
-from ..obs_layout import hand_fields, id_planes
+from ..obs_layout import field_slice, hand_fields, id_planes
 from ..rollout.envspec import digest_of
 from ..seeding import TORCH_INIT, derive_int
 from .actor_critic import ClashActor, ClashCritic, SeparateActorCritic, SharedTrunkActorCritic
@@ -379,6 +379,21 @@ class ClashTrunk(nn.Module):
             _zero_bias(self.down)
 
 
+def _slot_feature_slices(spec: EnvSpec, arch: ArchSpec, hand_size: int) -> list[slice]:
+    """Where each of ``net.hand_slot_features`` sits in the vector, refused unless it exists and
+    holds exactly one value per hand slot."""
+    slices = []
+    for name in hand_slot_features_of(arch):
+        part = field_slice(spec, name)
+        if part.stop - part.start != hand_size:
+            raise PreflightError(
+                f"net.hand_slot_features names {name!r}, which is {part.stop - part.start} wide; "
+                f"a hand slot feature has one value per slot, {hand_size}"
+            )
+        slices.append(part)
+    return slices
+
+
 class PointerPolicyHead(nn.Module):
     """One logit per (hand slot, tile), as the inner product of that tile's feature with a query
     built from the card in that slot, plus one logit for the no-op.
@@ -402,9 +417,12 @@ class PointerPolicyHead(nn.Module):
         self.card_embed = nn.Embedding(self.hand.onehot_width, arch.card_embed)
         # The two scalars are the card's cost and whether it is affordable right now. They ride
         # beside the embedding rather than being folded into it because they are properties of
-        # the state, not of the card.
-        self.query = nn.Linear(arch.card_embed + 2, arch.channels)
-        self.query_bias = nn.Linear(arch.card_embed + 2, 1)
+        # the state, not of the card. ``net.hand_slot_features`` adds more of the same kind, one
+        # value per slot each: what form the card in the slot would be played in, say.
+        self.slot_features = _slot_feature_slices(spec, arch, self.hand.hand_size)
+        width = arch.card_embed + 2 + len(self.slot_features)
+        self.query = nn.Linear(width, arch.channels)
+        self.query_bias = nn.Linear(width, 1)
         self.noop = nn.Linear(2 * arch.channels, 1)
         # One logit per ability button, from the same pooled summary as the no-op's: a press,
         # like a wait, is a decision about the whole board rather than about a tile. None when
@@ -428,7 +446,8 @@ class PointerPolicyHead(nn.Module):
         embedded = self.card_embed(card_id)
         cost = vector[:, hand.cost][..., None].to(embedded.dtype)
         affordable = vector[:, hand.affordable][..., None].to(embedded.dtype)
-        q_in = torch.cat([embedded, cost, affordable], dim=-1)
+        extra = [vector[:, part][..., None].to(embedded.dtype) for part in self.slot_features]
+        q_in = torch.cat([embedded, cost, affordable, *extra], dim=-1)
         return self.query(q_in), self.query_bias(q_in)
 
     def _tiles(self, mapped: Tensor, obs: ObsBatch) -> Tensor:
