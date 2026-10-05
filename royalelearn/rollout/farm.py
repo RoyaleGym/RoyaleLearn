@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import queue
 import time
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -71,6 +72,16 @@ STARTUP_TIMEOUT_S = 120.0
 #: How long the parent sleeps on a semaphore before re-reading the control word it is really
 #: waiting on. The word is the truth; the semaphore only keeps the wait from being a spin.
 POLL_S = 0.002
+
+
+def torch_in_workers_message(workers: list[int]) -> str:
+    """What a run is told when rollout workers came up with torch imported."""
+    return (
+        f"rollout workers {workers} imported torch, which a worker never needs: some 850 MB "
+        "each that the start-up memory projection does not count. It usually comes from a "
+        "module the workers import -- the build_env module or extra_component_modules -- "
+        "importing torch at module level; import it inside the function that needs it"
+    )
 
 
 class _Worker:
@@ -166,6 +177,9 @@ class ProcessRolloutSource(RolloutSourceBase):
         for worker in self.workers:
             worker.report = self._await_report(worker)
         check_worker_binaries(self.expected_engine_binary, [w.report for w in self.workers])
+        with_torch = [w.index for w in self.workers if w.report and w.report.torch_loaded]
+        if with_torch:
+            warnings.warn(torch_in_workers_message(with_torch), RuntimeWarning, stacklevel=2)
         self._started = True
 
     def _build_worker(self, index: int) -> _Worker:

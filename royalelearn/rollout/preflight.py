@@ -59,7 +59,12 @@ DEFAULT_CODEC = "royalelearn.rollout.codec.SpatialObsCodec"
 #: that scales, is computed from the codec's own row size rather than taken from here.
 PARENT_MB = 1400.0
 WORKER_ENGINE_MB_PER_BATTLE = 7.8
-WORKER_OVERHEAD_MB = 40.0
+#: A process worker's fixed cost before its first battle: the interpreter, numpy, the engine
+#: module and the environment's code. Measured 2026-10-05 on Windows process workers as about
+#: 200 MB private each; it was 40, which undercounted every worker by about 160 MB. A worker that
+#: imports torch costs some 850 MB more, which no projection here can see in advance: the farm
+#: warns at start-up when a worker reports it.
+WORKER_OVERHEAD_MB = 200.0
 INTERPRETER_MB = 400.0
 
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The start-up memory projection counts a process worker's fixed cost as 200 MB, measured on
+  Windows; it counted 40. A run whose rollout workers came up with torch imported is warned at
+  start-up, since that costs some 850 MB a worker the projection cannot see.
+
 ## 0.5.9
 
 - `doctor.vram_fraction` sets the GPU memory cap from a config: a share of the card in (0, 1],
