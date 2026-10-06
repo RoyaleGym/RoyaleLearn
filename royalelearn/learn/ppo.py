@@ -111,9 +111,13 @@ def ratio_tolerance(config: PPOConfig, dtype: torch.dtype, device: Any) -> float
     same number. Float32 on CUDA with TF32 allowed is its own precision ("tf32"); everything else
     is looked up by the name ``PRECISION_NAMES`` gives it.
     """
+    from ..gpu import tf32_capable
+
     name = PRECISION_NAMES.get(dtype, str(dtype))
     tf32 = torch.backends.cudnn.allow_tf32 or torch.backends.cuda.matmul.allow_tf32
-    if name == "float32" and torch.device(device).type == "cuda" and tf32:
+    # Allowed is not used: a card without TF32 (NVIDIA before Ampere, AMD's Radeon cards) runs
+    # float32 as float32, and the looser tolerance would only hide a real drift there.
+    if name == "float32" and tf32 and tf32_capable(device):
         return float(config.ratio_atol.get("tf32", TF32_RATIO_ATOL))
     try:
         return float(config.ratio_atol[name])

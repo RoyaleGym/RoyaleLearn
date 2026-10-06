@@ -141,6 +141,10 @@ def apply(
         )
     else:
         torch.use_deterministic_algorithms(False)
-        torch.backends.cudnn.benchmark = True
-        applied.update(deterministic_algorithms=False, cudnn_benchmark=True)
+        # On torch's ROCm build the benchmark flag asks MIOpen for an exhaustive search of every
+        # new convolution shape, and the rollout's batch size changes round to round: left off
+        # there, until a measurement on an AMD card says otherwise.
+        benchmark = not getattr(torch.version, "hip", None)
+        torch.backends.cudnn.benchmark = benchmark
+        applied.update(deterministic_algorithms=False, cudnn_benchmark=benchmark)
     return applied

@@ -963,6 +963,7 @@ class LearningCoordinator:
             torch.cuda.manual_seed_all(derive_int(config.master_seed, stream_path(TORCH_CUDA)))
 
         self.device = self._resolve_device(torch)
+        self._check_gpu_stack(torch)
         self._cap_vram(torch)
         # Before preflight, which takes a minute against the real engine: a stale digest is a
         # refusal that needs nothing built to be found, and it holds on a resume as on a fresh
@@ -1188,6 +1189,30 @@ class LearningCoordinator:
             self.printer(f"device        {wanted} is not available; this run uses the CPU")
             wanted = "cpu"
         return torch.device(wanted)
+
+    def _check_gpu_stack(self, torch: Any) -> None:
+        """Say so when the GPU is an AMD card reached through ZLUDA, and refuse run_exact there.
+
+        ZLUDA runs torch's CUDA build on an AMD card by translating CUDA calls. Training can run
+        on it, but torch believes it is on NVIDIA hardware, and nobody has shown that it keeps
+        the bit-for-bit repeatability run_exact promises. AMD's own ROCm build of torch is the
+        other way to train on an AMD card.
+        """
+        if self.device.type != "cuda":
+            return
+        from .gpu import ZLUDA, gpu_backend
+
+        if gpu_backend(self.device.index or 0) != ZLUDA:
+            return
+        self.printer(
+            "device        an AMD card through ZLUDA, a CUDA translation layer: training on it "
+            "is not validated here; AMD's ROCm build of torch is the other way to use the card"
+        )
+        if self.config.determinism.tier == "run_exact":
+            raise PreflightError(
+                "determinism.tier run_exact on an AMD card through ZLUDA: nothing shows the "
+                "translation keeps runs bit-for-bit repeatable. Use determinism.tier throughput"
+            )
 
     def _cap_vram(self, torch: Any) -> None:
         """Hold this process's allocator to ``vram_fraction`` of the card, on a CUDA run.
@@ -1492,7 +1517,18 @@ class LearningCoordinator:
         # else's process. `cuda.is_available()` answers a question about the machine.
         if not headroom or not str(self.device).startswith("cuda"):
             return
-        free_before, total = torch.cuda.mem_get_info()  # pragma: no cover - no GPU in the suite
+        try:  # pragma: no cover - no GPU in the suite
+            free_before, total = torch.cuda.mem_get_info()
+        except RuntimeError as exc:  # pragma: no cover
+            # Some drivers cannot say what is free (reported for AMD's ROCm build on Windows).
+            # The card's size stands in for it: the gate still sees a minibatch larger than the
+            # card, and cannot see one that only overflows what other programs left.
+            total = int(torch.cuda.get_device_properties(self.device).total_memory)
+            free_before = total
+            self.printer(
+                f"the VRAM gate cannot read free device memory ({type(exc).__name__}: {exc}); "
+                "it checks one minibatch against the card's size instead"
+            )
         if self.vram_fraction is not None:  # pragma: no cover
             # Past the cap the run fails, so the cap is room the minibatch must fit in too.
             free_before = min(free_before, int(self.vram_fraction * total))
@@ -2953,7 +2989,19 @@ def _gpu_util(device: str | None = None) -> float | None:
         global _GPU_UTIL_COMPLAINED
         if not _GPU_UTIL_COMPLAINED:
             _GPU_UTIL_COMPLAINED = True
-            print(f"throughput/gpu_util_frac is not being recorded: {type(exc).__name__}: {exc}")
+            from .gpu import is_rocm
+
+            # torch reads utilisation through NVIDIA's NVML bindings, and on its ROCm build
+            # through AMD's SMI library, which AMD ships for Linux.
+            fix = (
+                "on an AMD card it needs AMD's amdsmi package (Linux only)"
+                if is_rocm()
+                else "on an NVIDIA card it needs the nvidia-ml-py package"
+            )
+            print(
+                f"throughput/gpu_util_frac is not being recorded: {type(exc).__name__}: {exc}; "
+                f"{fix}"
+            )
         return None
 
 
@@ -2980,24 +3028,30 @@ def _vram_regime(
 
         if not torch.cuda.is_available():
             return {}
-        stats = torch.cuda.memory_stats()  # pragma: no cover - no GPU in the suite
-        free, _total = torch.cuda.mem_get_info()  # pragma: no cover
-        reserved = float(stats.get("reserved_bytes.all.current", 0))  # pragma: no cover
-        fields = {  # pragma: no cover
+        stats = torch.cuda.memory_stats()
+        reserved = float(stats.get("reserved_bytes.all.current", 0))
+        fields: dict[str, MetricValue] = {
             "health/vram_reserved_mb": reserved / 1e6,
             "health/vram_inactive_split_mb": (
                 float(stats.get("inactive_split_bytes.all.current", 0)) / 1e6
             ),
-            "health/vram_driver_free_mb": float(free) / 1e6,
+            "health/vram_alloc_retries": int(stats.get("num_alloc_retries", 0)),
+        }
+        # Read on its own: a driver that cannot say what is free (reported for AMD's ROCm build
+        # on Windows) loses these two keys and keeps the allocator's own three.
+        try:
+            free, _total = torch.cuda.mem_get_info()
+        except RuntimeError:
+            free = None
+        if free is not None:
+            fields["health/vram_driver_free_mb"] = float(free) / 1e6
             # What COULD be mine: free space plus what I am already holding. This is the
             # quantity the run's health turns on, and the raw free figure is not -- a caching
             # allocator that has finished growing sits at or near zero free as its normal steady
             # state, so a threshold on that alone fires on healthy runs and stays quiet on sick
             # ones. Measured 2026-09-22: driver free read 0 on every iteration of a run that was
             # entirely well.
-            "health/vram_available_mb": (float(free) + reserved) / 1e6,
-            "health/vram_alloc_retries": int(stats.get("num_alloc_retries", 0)),
-        }
+            fields["health/vram_available_mb"] = (float(free) + reserved) / 1e6
         if needed_mb is not None:  # pragma: no cover
             fields["health/vram_needed_mb"] = float(needed_mb)
         return fields  # pragma: no cover

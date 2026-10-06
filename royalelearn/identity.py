@@ -713,10 +713,13 @@ def torch_version() -> str:
 
 
 def describe_device(device: str = "cuda") -> str:
-    """``"cuda:<name>:sm_86"`` or ``"cpu:<machine>"``.
+    """``"cuda:<name>:sm_86"``, ``"rocm:<name>:gfx1100"``, ``"zluda:<name>:sm_86"`` or
+    ``"cpu:<machine>"``.
 
     The device is in the identity because a different GPU is a different set of kernels, and
-    run-exactness is promised within a device class rather than across all of them.
+    run-exactness is promised within a device class rather than across all of them. An AMD card
+    on torch's ROCm build is named by its architecture, the part of ``gcnArchName`` before any
+    feature flags; on ZLUDA, which reports a made-up NVIDIA capability, it is marked as such.
     """
     if not device.startswith("cuda"):
         return f"cpu:{platform.machine()}"
@@ -730,7 +733,14 @@ def describe_device(device: str = "cuda") -> str:
     if ":" in device:
         index = int(device.split(":", 1)[1])
     props = torch.cuda.get_device_properties(index)
-    return f"cuda:{props.name}:sm_{props.major}{props.minor}"
+    from .gpu import ROCM, ZLUDA, gpu_backend
+
+    backend = gpu_backend(index)
+    if backend == ROCM:
+        arch = str(getattr(props, "gcnArchName", "")).split(":", 1)[0] or "gfx"
+        return f"rocm:{props.name}:{arch}"
+    kind = "zluda" if backend == ZLUDA else "cuda"
+    return f"{kind}:{props.name}:sm_{props.major}{props.minor}"
 
 
 def compute_identity(

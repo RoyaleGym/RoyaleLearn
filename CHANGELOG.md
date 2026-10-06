@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- AMD cards on torch's ROCm build, which shows them as "cuda" devices: a run's identity names
+  the card by its AMD architecture (`rocm:<name>:gfx1100`); the throughput tier leaves cuDNN's
+  benchmark search off there; the start-up memory check and the memory health fields carry on
+  when the driver cannot say how much memory is free; and the GPU utilisation hint names AMD's
+  package. A card reached through ZLUDA is named as such, noted at start-up, and refused under
+  `determinism.tier` run_exact.
+- The looser float32 ratio tolerance applies only on cards that have TF32 (NVIDIA Ampere and
+  newer); elsewhere float32 is checked at float32's tolerance.
 - `net.button_head = "card"`: each ability button is scored from its card's embedding (the
   hand slots' table), its own status and its ready bit beside the pooled board, by one scorer
   shared by every button, so which position a card's button sits in does not change its logit.
