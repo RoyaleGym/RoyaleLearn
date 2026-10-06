@@ -4,7 +4,7 @@
   <img alt="License" src="https://img.shields.io/github/license/RoyaleGym/RoyaleLearn?style=flat-square&color=555">
   <img alt="Python" src="https://img.shields.io/badge/python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white">
   <a href="."><img alt="Docs" src="https://img.shields.io/badge/docs-in--repo-8957e5?style=flat-square&logo=readthedocs&logoColor=white"></a>
-  <a href="https://discord.gg/cvRu4nEGXY"><img alt="Discord" src="https://img.shields.io/discord/1551699576304705647?style=flat-square&logo=discord&logoColor=white&label=discord&color=5865F2"></a>
+  <a href="https://discord.gg/8BxaHHVT2u"><img alt="Discord" src="https://img.shields.io/discord/1534663823204552886?style=flat-square&logo=discord&logoColor=white&label=discord&color=5865F2"></a>
   <img alt="Last commit" src="https://img.shields.io/github/last-commit/RoyaleGym/RoyaleLearn?style=flat-square&color=555">
 </p>
 
@@ -533,7 +533,7 @@ Then the [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) README for the envi
 ## Community
 
 Training runs, ladder results and harness design are discussed in the project's Discord:
-[**https://discord.gg/cvRu4nEGXY**](https://discord.gg/cvRu4nEGXY)
+[**https://discord.gg/8BxaHHVT2u**](https://discord.gg/8BxaHHVT2u)
 
 Issues and pull requests on this repo are welcome too.
 
