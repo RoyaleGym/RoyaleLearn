@@ -201,6 +201,13 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: to that slot's card embedding where the policy head builds the slot's query, beside its
     #: cost and whether it is affordable. Unset means none, and is left out of the encoding.
     hand_slot_features: tuple[str, ...] | msgspec.UnsetType = msgspec.UNSET
+    #: How the policy head scores the ability buttons. "index" (the default, and what unset
+    #: means): one weight per button position, from the pooled board. "card": each button from
+    #: its card's embedding (the hand slots' table), its own status and the pooled board, with
+    #: one set of weights for every button, so which position a card's button sits in does not
+    #: matter. "card" reads the observation's per-button fields
+    #: (``SpatialObsBuilder(button_index=True)``).
+    button_head: str | msgspec.UnsetType = msgspec.UNSET
     #: GroupNorm, never BatchNorm: BatchNorm computes a different function at rollout than at
     #: update, which breaks the stored-log-prob contract.
     norm_groups: int = 8
@@ -235,6 +242,11 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 def hand_slot_features_of(net: NetConfig) -> tuple[str, ...]:
     """``net.hand_slot_features``, with an unset one read as none."""
     return () if net.hand_slot_features is msgspec.UNSET else tuple(net.hand_slot_features)
+
+
+def button_head_of(net: NetConfig) -> str:
+    """``net.button_head``, with an unset one read as "index"."""
+    return "index" if net.button_head is msgspec.UNSET else str(net.button_head)
 
 
 def trunk_stride_of(net: NetConfig) -> int:

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `net.button_head = "card"`: each ability button is scored from its card's embedding (the
+  hand slots' table), its own status and its ready bit beside the pooled board, by one scorer
+  shared by every button, so which position a card's button sits in does not change its logit.
+  It reads RoyaleGym's per-button fields (`SpatialObsBuilder(button_index=True)`), which then
+  reach only the button scorer. Unset, the head and every digest are as before.
+
 ## 0.5.10
 
 - The start-up memory projection counts a process worker's fixed cost as 200 MB, measured on

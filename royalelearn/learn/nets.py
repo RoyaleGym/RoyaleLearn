@@ -39,7 +39,7 @@ from torch import Tensor, nn
 from royalegym.action import NOOP
 
 from ..api.policy import NetworkFactory
-from ..config import hand_slot_features_of, trunk_stride_of
+from ..config import button_head_of, hand_slot_features_of, trunk_stride_of
 from ..errors import PreflightError
 from ..obs_layout import UNIT_IDS, field_slice, hand_fields, id_planes
 from ..rollout.envspec import digest_of
@@ -184,6 +184,14 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
     if arch.blocks < 0:
         raise PreflightError(f"net.blocks is {arch.blocks}")
     tiles_y, tiles_x = spec.tiles
+    if button_head_of(arch) not in BUTTON_HEADS:
+        raise PreflightError(
+            f"net.button_head {arch.button_head!r} is not one of {', '.join(BUTTON_HEADS)}"
+        )
+    if button_head_of(arch) == "card" and not spec.n_buttons:
+        raise PreflightError(
+            'net.button_head "card" scores ability buttons, and this action space has none'
+        )
     stride = trunk_stride_of(arch)
     if stride not in (1, 2):
         raise PreflightError(f"net.trunk_stride is {arch.trunk_stride}; it is 1 or 2")
@@ -231,6 +239,7 @@ def _arch_for_digest(arch: ArchSpec) -> Any:
         for f in msgspec.structs.fields(arch)
         if f.name != "factored_act_init"
         and not (f.name == "trunk_stride" and trunk_stride_of(arch) == 1)
+        and not (f.name == "button_head" and button_head_of(arch) == "index")
     ]
     shape = msgspec.defstruct(type(arch).__name__, fields, frozen=True)
     return shape(**{name: getattr(arch, name) for name, _, _ in fields})
@@ -241,6 +250,32 @@ def _flat(value: Any) -> list[Any]:
     if isinstance(value, list | tuple):
         return [leaf for item in value for leaf in _flat(item)]
     return [value]
+
+
+def _board_columns(spec: EnvSpec, arch: ArchSpec) -> tuple[Tensor | None, int]:
+    """What of the scalar vector the trunk and the critic read, and how wide it is.
+
+    Everything, plus the buttons' ready bits, unless ``net.button_head`` is "card". Then the
+    per-button fields -- each button's card and status, and its ready bit -- go to the button
+    scorer alone: they are laid out by button position, and read anywhere else they would make the
+    whole network's answer depend on which position a card's button sits in, which is what the
+    card head exists to remove. Returned as the column indices to keep, or None for all of them.
+    """
+    if button_head_of(arch) != "card" or not spec.n_buttons:
+        return None, spec.vector_size + spec.n_buttons
+    dropped: set[int] = set()
+    for name in (BUTTON_CARDS, *BUTTON_STATUS):
+        part = field_slice(spec, name)
+        dropped.update(range(part.start, part.stop))
+    keep = [i for i in range(spec.vector_size) if i not in dropped]
+    return torch.tensor(keep, dtype=torch.int64), len(keep)
+
+
+def _board_vector(obs: ObsBatch, grid: int, n_buttons: int, keep: Tensor | None) -> Tensor:
+    """The scalar input of the trunk and the critic: see ``_board_columns``."""
+    if keep is None:
+        return _with_buttons(obs, grid, n_buttons)
+    return obs.vector.index_select(1, keep.to(obs.vector.device))
 
 
 def _with_buttons(obs: ObsBatch, grid: int, n_buttons: int) -> Tensor:
@@ -299,7 +334,9 @@ class ClashTrunk(nn.Module):
         # mask's tail, which is the same bits as the observation's ability_ready.
         self.grid = spec.n_grid_actions
         self.n_buttons = spec.n_buttons
-        self.vector_embed = nn.Linear(spec.vector_size + spec.n_buttons, arch.vector_embed)
+        keep, width = _board_columns(spec, arch)
+        self.register_buffer("board_keep", keep, persistent=False)
+        self.vector_embed = nn.Linear(width, arch.vector_embed)
         # D2: the card on each tile, embedded before the stem, as the hand slots are. Sized from
         # the space's own bound so the table follows the catalogue, and index 0 -- an empty tile
         # -- is fixed at zero: no card there, and nothing to learn about it.
@@ -342,7 +379,8 @@ class ClashTrunk(nn.Module):
         parts = [spatial, obs.mask_planes.to(spatial.dtype)]
         if self.coord_conv:
             parts.append(self.coords.expand(batch, -1, -1, -1).to(spatial.dtype))
-        embedded = self.vector_embed(_with_buttons(obs, self.grid, self.n_buttons))
+        board = _board_vector(obs, self.grid, self.n_buttons, self.board_keep)
+        embedded = self.vector_embed(board)
         parts.append(embedded.to(spatial.dtype)[:, :, None, None].expand(-1, -1, *self.tiles))
         if self.card_ids_embed is not None:
             if obs.card_ids is None:
@@ -401,6 +439,39 @@ class ClashTrunk(nn.Module):
             _zero_bias(self.down)
 
 
+#: What ``net.button_head`` may name.
+BUTTON_HEADS: tuple[str, ...] = ("index", "card")
+#: The per-button fields the "card" button head reads (``SpatialObsBuilder(button_index=True)``).
+BUTTON_CARDS = "own_button_cards"
+BUTTON_STATUS: tuple[str, ...] = (
+    "own_button_available_by_index",
+    "own_button_spent_by_index",
+    "own_button_cooldown_by_index",
+)
+
+
+def _button_fields(spec: EnvSpec, hand: Any) -> tuple[slice, list[slice]]:
+    """Where the per-button card one-hot and status fields sit, refused unless each is there and
+    holds one card one-hot, or one value, per button."""
+    k = spec.n_buttons
+    cards = field_slice(spec, BUTTON_CARDS)
+    if cards.stop - cards.start != k * hand.onehot_width:
+        raise PreflightError(
+            f"{BUTTON_CARDS} is {cards.stop - cards.start} wide; the card button head needs one "
+            f"card one-hot of {hand.onehot_width} per button, {k} buttons"
+        )
+    status = []
+    for name in BUTTON_STATUS:
+        part = field_slice(spec, name)
+        if part.stop - part.start != k:
+            raise PreflightError(
+                f"{name} is {part.stop - part.start} wide; the card button head needs one value "
+                f"per button, {k}"
+            )
+        status.append(part)
+    return cards, status
+
+
 def _slot_feature_slices(spec: EnvSpec, arch: ArchSpec, hand_size: int) -> list[slice]:
     """Where each of ``net.hand_slot_features`` sits in the vector, refused unless it exists and
     holds exactly one value per hand slot."""
@@ -450,7 +521,19 @@ class PointerPolicyHead(nn.Module):
         # like a wait, is a decision about the whole board rather than about a tile. None when
         # the environment has no buttons, so such a network holds exactly what it always held.
         self.n_buttons = spec.n_buttons
-        self.buttons = nn.Linear(2 * arch.channels, spec.n_buttons) if spec.n_buttons else None
+        self.grid = spec.n_grid_actions
+        self.button_head = button_head_of(arch)
+        self.buttons: nn.Linear | None = None
+        self.button_score: nn.Linear | None = None
+        if spec.n_buttons and self.button_head == "card":
+            # One scorer for every button: the card's embedding, the button's own status and its
+            # ready bit, beside the pooled board. The card comes from the same table as the hand
+            # slots', so a hero is one token wherever it sits.
+            self.button_card, self.button_status = _button_fields(spec, self.hand)
+            width = arch.card_embed + len(self.button_status) + 1 + 2 * arch.channels
+            self.button_score = nn.Linear(width, 1)
+        elif spec.n_buttons:
+            self.buttons = nn.Linear(2 * arch.channels, spec.n_buttons)
 
     def _mapped(self, features: Tensor) -> Tensor:
         return torch.relu(self.feature_norm(self.feature(features)))
@@ -495,9 +578,26 @@ class PointerPolicyHead(nn.Module):
         pooled = _pool(mapped)
         noop = self.noop(pooled) + self.noop_bias
         parts = [noop.to(tiles.dtype), tiles.reshape(tiles.shape[0], -1)]
-        if self.buttons is not None:
-            parts.append(self.buttons(pooled).to(tiles.dtype))
+        if self.n_buttons:
+            parts.append(self.button_logits(pooled, obs).to(tiles.dtype))
         return torch.cat(parts, dim=-1).float()
+
+    def button_logits(self, pooled: Tensor, obs: ObsBatch) -> Tensor:
+        """``(B, K)``: one logit per ability button, by position or by the button's card."""
+        if self.button_score is None:
+            assert self.buttons is not None
+            return self.buttons(pooled)
+        vector = obs.vector
+        k = self.n_buttons
+        onehot = vector[:, self.button_card].view(-1, k, self.hand.onehot_width)
+        embedded = self.card_embed(onehot.argmax(dim=-1))
+        status = torch.stack([vector[:, part] for part in self.button_status], dim=-1)
+        ready = obs.mask[:, self.grid : self.grid + k][..., None]
+        board = pooled[:, None, :].expand(-1, k, -1)
+        x = torch.cat(
+            [embedded, *(t.to(embedded.dtype) for t in (status, ready, board))], dim=-1
+        )
+        return self.button_score(x).squeeze(-1)
 
     def initialise(self, generator: torch.Generator) -> None:
         _orthogonal(self.feature.weight, HIDDEN_GAIN, generator)
@@ -511,6 +611,9 @@ class PointerPolicyHead(nn.Module):
             # Drawn last, so a network without buttons draws exactly what it always drew.
             _orthogonal(self.buttons.weight, HEAD_GAIN, generator)
             _zero_bias(self.buttons)
+        if self.button_score is not None:
+            _orthogonal(self.button_score.weight, HEAD_GAIN, generator)
+            _zero_bias(self.button_score)
 
 
 class FactoredStages(NamedTuple):
@@ -568,8 +671,8 @@ class FactoredPolicyHead(PointerPolicyHead):
         board = pooled[:, None, :].expand(-1, hand, -1)
         slot = self.slot(torch.cat([query.to(pooled.dtype), board], dim=-1)).squeeze(-1)
         parts = [slot.float()]
-        if self.buttons is not None:
-            parts.append(self.buttons(pooled).float())
+        if self.n_buttons:
+            parts.append(self.button_logits(pooled, obs).float())
         legal = torch.cat([legal_tiles.any(-1), obs.mask[:, self.grid :]], dim=-1)
         candidate = torch.log_softmax(
             torch.cat(parts, dim=-1).masked_fill(~legal, _STAGE_FILL), dim=-1
@@ -587,7 +690,7 @@ class FactoredPolicyHead(PointerPolicyHead):
         hand = self.hand.hand_size
         grid = act[:, None, None] + candidate[:, :hand, None] + tile
         parts = [wait[:, None], grid.reshape(grid.shape[0], -1)]
-        if self.buttons is not None:
+        if self.n_buttons:
             parts.append(act[:, None] + candidate[:, hand:])
         return torch.cat(parts, dim=-1)
 
@@ -602,6 +705,9 @@ class FactoredPolicyHead(PointerPolicyHead):
         if self.buttons is not None:
             _orthogonal(self.buttons.weight, HEAD_GAIN, generator)
             _zero_bias(self.buttons)
+        if self.button_score is not None:
+            _orthogonal(self.button_score.weight, HEAD_GAIN, generator)
+            _zero_bias(self.button_score)
         with torch.no_grad():
             self.gate.bias.fill_(math.log(self.act_init / (1.0 - self.act_init)))
 
@@ -643,7 +749,9 @@ class ValueHead(nn.Module):
         self.hand_size = spec.hand_size
         self.grid = spec.n_grid_actions
         self.n_buttons = spec.n_buttons
-        self.vector_embed = nn.Linear(spec.vector_size + spec.n_buttons, arch.vector_embed)
+        keep, board_width = _board_columns(spec, arch)
+        self.register_buffer("board_keep", keep, persistent=False)
+        self.vector_embed = nn.Linear(board_width, arch.vector_embed)
         width = 2 * arch.channels + arch.vector_embed + spec.hand_size
         self.hidden = nn.Linear(width, arch.value_hidden)
         self.out = nn.Linear(arch.value_hidden, 1)
@@ -651,7 +759,9 @@ class ValueHead(nn.Module):
     def forward(self, features: Tensor, obs: ObsBatch) -> Tensor:
         """``(B,)`` float32."""
         pooled = _pool(features)
-        embedded = self.vector_embed(_with_buttons(obs, self.grid, self.n_buttons))
+        embedded = self.vector_embed(
+            _board_vector(obs, self.grid, self.n_buttons, self.board_keep)
+        )
         embedded = embedded.to(pooled.dtype)
         legal = obs.mask[:, NOOP + 1 : self.grid].view(obs.mask.shape[0], self.hand_size, -1)
         legal_frac = legal.to(pooled.dtype).mean(dim=-1)
