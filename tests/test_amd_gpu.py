@@ -8,7 +8,9 @@ translation layer gives them, and checks what the run makes of them:
   float32's tolerance (consumer Radeon cards have no TF32), and the throughput tier does not
   switch on cuDNN's benchmark search, which MIOpen answers with an exhaustive search per shape.
 - ZLUDA (torch's CUDA build on an AMD card through a translation layer): named as such in the
-  identity, noted at start-up, and refused under run_exact, which nobody has shown it keeps.
+  identity and noted at start-up. Refused on a torch build without PTX, which is every build
+  for CUDA 12 and later, under run_exact, which nobody has shown it keeps, and with a reduced
+  precision autocast. cuDNN, which it only partly translates, is switched off.
 - NVIDIA: every answer exactly what it was, except the TF32 tolerance, which now follows whether
   the card has TF32 at all (Ampere, compute capability 8.0, and newer).
 """
@@ -34,6 +36,7 @@ def _fake_gpu(
     hip: str | None,
     capability: tuple[int, int] = (8, 6),
     arch: str = "",
+    arches: tuple[str, ...] = ("sm_75", "sm_86", "compute_75"),
 ) -> None:
     props = SimpleNamespace(
         name=name,
@@ -47,6 +50,7 @@ def _fake_gpu(
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _device=0: props)
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda _device=0: name)
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device=0: capability)
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: list(arches))
 
 
 @pytest.fixture
@@ -198,20 +202,31 @@ def test_the_utilisation_hint_names_the_amd_package(
     assert "amdsmi" in out and "pynvml" not in out
 
 
-def test_zluda_is_warned_about_and_refused_under_run_exact(
-    zluda: None, capsys: pytest.CaptureFixture[str]
-) -> None:
+def _run(lines: list[str], tier: str = "throughput", autocast: str = "float32") -> Any:
+    """What ``_check_gpu_stack`` reads of a coordinator."""
+    return SimpleNamespace(
+        device=torch.device("cuda"),
+        printer=lines.append,
+        config=SimpleNamespace(
+            determinism=SimpleNamespace(tier=tier),
+            net=SimpleNamespace(autocast_dtype=autocast),
+        ),
+    )
+
+
+@pytest.fixture
+def cudnn_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch.backends.cudnn, "enabled", True)
+
+
+def test_zluda_is_warned_about_and_refused_under_run_exact(zluda: None, cudnn_on: None) -> None:
     from royalelearn.coordinator import LearningCoordinator
     from royalelearn.errors import PreflightError
 
     lines: list[str] = []
 
     def run(tier: str) -> Any:
-        return SimpleNamespace(
-            device=torch.device("cuda"),
-            printer=lines.append,
-            config=SimpleNamespace(determinism=SimpleNamespace(tier=tier)),
-        )
+        return _run(lines, tier)
 
     LearningCoordinator._check_gpu_stack(run("throughput"), torch)  # type: ignore[arg-type]
     assert any("ZLUDA" in line for line in lines)
@@ -231,6 +246,103 @@ def test_rocm_and_nvidia_pass_the_stack_check_silently(
         config=SimpleNamespace(determinism=SimpleNamespace(tier="run_exact")),
     )
     for hip, name in (("7.2.1", "AMD Radeon RX 7900 XTX"), (None, "NVIDIA GeForce RTX 4070 Ti")):
-        _fake_gpu(monkeypatch, name=name, hip=hip)
+        _fake_gpu(monkeypatch, name=name, hip=hip, arches=("sm_86",))
         LearningCoordinator._check_gpu_stack(run, torch)  # type: ignore[arg-type]
     assert lines == []
+
+
+#: ``torch.cuda.get_arch_list()`` of torch 2.11.0+cu128 for Windows, read 2026-10-06: machine
+#: code for each architecture and no ``compute_`` entry, so no PTX.
+CU128_ARCHES = ("sm_75", "sm_80", "sm_86", "sm_90", "sm_100", "sm_120")
+
+
+def test_zluda_on_a_torch_build_without_ptx_is_refused(
+    monkeypatch: pytest.MonkeyPatch, cudnn_on: None
+) -> None:
+    """ZLUDA translates PTX and nothing else: on such a build no kernel would ever load."""
+    from royalelearn.coordinator import LearningCoordinator
+    from royalelearn.errors import PreflightError
+
+    lines: list[str] = []
+    _fake_gpu(monkeypatch, name="AMD Radeon RX 7900 XTX [ZLUDA]", hip=None, arches=CU128_ARCHES)
+    with pytest.raises(PreflightError, match=r"PTX.*ROCm build of torch"):
+        LearningCoordinator._check_gpu_stack(_run(lines), torch)  # type: ignore[arg-type]
+    # An older build that carries PTX goes on, with the notice.
+    _fake_gpu(monkeypatch, name="AMD Radeon RX 7900 XTX [ZLUDA]", hip=None)
+    LearningCoordinator._check_gpu_stack(_run(lines), torch)  # type: ignore[arg-type]
+    assert any("ZLUDA" in line for line in lines)
+
+
+def test_zluda_switches_cudnn_off_and_says_so(zluda: None, cudnn_on: None) -> None:
+    from royalelearn.coordinator import LearningCoordinator
+
+    lines: list[str] = []
+    LearningCoordinator._check_gpu_stack(_run(lines), torch)  # type: ignore[arg-type]
+    assert torch.backends.cudnn.enabled is False
+    assert any("cuDNN" in line for line in lines)
+
+
+def test_zluda_refuses_a_reduced_precision_autocast(zluda: None, cudnn_on: None) -> None:
+    from royalelearn.coordinator import LearningCoordinator
+    from royalelearn.errors import PreflightError
+
+    with pytest.raises(PreflightError, match=r"net.autocast_dtype"):
+        LearningCoordinator._check_gpu_stack(
+            _run([], autocast="bfloat16"), torch  # type: ignore[arg-type]
+        )
+
+
+def test_ptx_is_unknown_when_torch_cannot_say(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unknown is not no: only a list torch gives, without a compute_ entry, refuses."""
+    from royalelearn.gpu import carries_ptx
+
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: [])
+    assert carries_ptx() is None
+
+    def refuse() -> Any:
+        raise RuntimeError("not compiled")
+
+    monkeypatch.setattr(torch.cuda, "get_arch_list", refuse)
+    assert carries_ptx() is None
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: list(CU128_ARCHES))
+    assert carries_ptx() is False
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: ["sm_86", "compute_86"])
+    assert carries_ptx() is True
+
+
+def _cap(lines: list[str]) -> Any:
+    """What ``_cap_vram`` reads of a coordinator."""
+    return SimpleNamespace(
+        vram_fraction=0.9, device=torch.device("cuda", 0), printer=lines.append
+    )
+
+
+def test_the_vram_cap_refused_on_rocm_leaves_the_run_going(
+    rocm: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reported for AMD APUs, whose memory is the system's. Plant: no guard and this raises."""
+    from royalelearn.coordinator import LearningCoordinator
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("HIP error: invalid argument")
+
+    monkeypatch.setattr(torch.cuda, "set_per_process_memory_fraction", refuse)
+    lines: list[str] = []
+    LearningCoordinator._cap_vram(_cap(lines), torch)  # type: ignore[arg-type]
+    assert any("not set" in line for line in lines)
+
+
+def test_the_vram_cap_refused_on_nvidia_still_stops_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plant: guard every backend and an NVIDIA error, a bug of ours so far, prints and passes."""
+    from royalelearn.coordinator import LearningCoordinator
+
+    _fake_gpu(monkeypatch, name="NVIDIA GeForce RTX 4070 Ti", hip=None)
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("Invalid device argument")
+
+    monkeypatch.setattr(torch.cuda, "set_per_process_memory_fraction", refuse)
+    with pytest.raises(RuntimeError, match="Invalid device"):
+        LearningCoordinator._cap_vram(_cap([]), torch)  # type: ignore[arg-type]

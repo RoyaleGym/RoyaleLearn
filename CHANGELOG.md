@@ -6,8 +6,11 @@
   the card by its AMD architecture (`rocm:<name>:gfx1100`); the throughput tier leaves cuDNN's
   benchmark search off there; the start-up memory check and the memory health fields carry on
   when the driver cannot say how much memory is free; and the GPU utilisation hint names AMD's
-  package. A card reached through ZLUDA is named as such, noted at start-up, and refused under
-  `determinism.tier` run_exact.
+  package. When the card refuses the GPU memory cap (reported for AMD's APUs), the run goes on
+  without one.
+- A card reached through ZLUDA is named as such and noted at start-up, and cuDNN is switched off
+  there. It is refused on a torch build without PTX, as torch's builds for CUDA 12 and later are,
+  with a `net.autocast_dtype` other than float32, and under `determinism.tier` run_exact.
 - The looser float32 ratio tolerance applies only on cards that have TF32 (NVIDIA Ampere and
   newer); elsewhere float32 is checked at float32's tolerance.
 - `net.button_head = "card"`: each ability button is scored from its card's embedding (the

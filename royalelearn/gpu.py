@@ -15,7 +15,16 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["CUDA", "ROCM", "ZLUDA", "ZLUDA_SUFFIX", "gpu_backend", "is_rocm", "tf32_capable"]
+__all__ = [
+    "CUDA",
+    "ROCM",
+    "ZLUDA",
+    "ZLUDA_SUFFIX",
+    "carries_ptx",
+    "gpu_backend",
+    "is_rocm",
+    "tf32_capable",
+]
 
 CUDA = "cuda"
 ROCM = "rocm"
@@ -49,6 +58,24 @@ def gpu_backend(index: int = 0) -> str | None:
     if str(torch.cuda.get_device_name(index)).endswith(ZLUDA_SUFFIX):
         return ZLUDA
     return CUDA
+
+
+def carries_ptx() -> bool | None:
+    """Whether this torch build carries PTX, the portable form of its kernels; None if unknown.
+
+    ZLUDA translates PTX and nothing else. torch's builds for CUDA 12 and later carry machine
+    code for each NVIDIA architecture and no PTX, so on ZLUDA no kernel of theirs would load.
+    ``torch.cuda.get_arch_list()`` names a build's PTX as a ``compute_`` entry.
+    """
+    try:
+        import torch
+
+        arches = torch.cuda.get_arch_list()
+    except Exception:
+        return None
+    if not arches:
+        return None
+    return any(str(arch).startswith("compute_") for arch in arches)
 
 
 def tf32_capable(device: Any) -> bool:

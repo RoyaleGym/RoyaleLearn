@@ -1191,23 +1191,41 @@ class LearningCoordinator:
         return torch.device(wanted)
 
     def _check_gpu_stack(self, torch: Any) -> None:
-        """Say so when the GPU is an AMD card reached through ZLUDA, and refuse run_exact there.
+        """Say so when the GPU is an AMD card reached through ZLUDA, and refuse what it cannot do.
 
         ZLUDA runs torch's CUDA build on an AMD card by translating CUDA calls. Training can run
-        on it, but torch believes it is on NVIDIA hardware, and nobody has shown that it keeps
-        the bit-for-bit repeatability run_exact promises. AMD's own ROCm build of torch is the
-        other way to train on an AMD card.
+        on it, but torch believes it is on NVIDIA hardware. It translates PTX only, so a torch
+        build without PTX is refused. It translates cuDNN only in part, so cuDNN is switched off.
+        Nobody has shown that it keeps reduced precision right or runs bit-for-bit repeatable,
+        so a reduced precision autocast and run_exact are refused. AMD's own ROCm build of torch
+        is the other way to train on an AMD card.
         """
         if self.device.type != "cuda":
             return
-        from .gpu import ZLUDA, gpu_backend
+        from .gpu import ZLUDA, carries_ptx, gpu_backend
+        from .learn.nets import resolve_dtype
 
         if gpu_backend(self.device.index or 0) != ZLUDA:
             return
+        if carries_ptx() is False:
+            raise PreflightError(
+                f"an AMD card through ZLUDA, with torch {torch.__version__}: this build carries "
+                "no PTX (torch.cuda.get_arch_list() has no compute_ entry), the only form ZLUDA "
+                "translates, so none of its kernels would load. Install AMD's ROCm build of "
+                "torch for the card"
+            )
         self.printer(
             "device        an AMD card through ZLUDA, a CUDA translation layer: training on it "
             "is not validated here; AMD's ROCm build of torch is the other way to use the card"
         )
+        torch.backends.cudnn.enabled = False
+        self.printer("device        cuDNN off: ZLUDA translates it only in part")
+        if resolve_dtype(self.config.net.autocast_dtype) != torch.float32:
+            raise PreflightError(
+                f"net.autocast_dtype {self.config.net.autocast_dtype} on an AMD card through "
+                "ZLUDA: nothing shows the translation keeps reduced precision right. Set "
+                "net.autocast_dtype to float32"
+            )
         if self.config.determinism.tier == "run_exact":
             raise PreflightError(
                 "determinism.tier run_exact on an AMD card through ZLUDA: nothing shows the "
@@ -1223,9 +1241,21 @@ class LearningCoordinator:
         """
         if self.vram_fraction is None or self.device.type != "cuda":
             return
+        from .gpu import is_rocm
+
         # The call takes an index: "cuda" alone means the current device, and torch refuses it.
         index = self.device.index if self.device.index is not None else torch.cuda.current_device()
-        torch.cuda.set_per_process_memory_fraction(self.vram_fraction, index)
+        try:
+            torch.cuda.set_per_process_memory_fraction(self.vram_fraction, index)
+        except RuntimeError as exc:
+            # Reported on AMD's ROCm build for APUs, whose memory is the system's. On an NVIDIA
+            # card a refusal has so far been a bug of ours, and it stops the run.
+            if not is_rocm():
+                raise
+            self.printer(
+                f"vram cap      not set ({type(exc).__name__}: {exc}); the run goes on without one"
+            )
+            return
         self.printer(
             f"vram cap      {self.vram_fraction:.0%} of the card (vram_fraction; None for none)"
         )
