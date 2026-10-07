@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.12
 
 - `environment.json` holds the whole of `env.config()` for the env `build_env` returns, and
   `Learner.save` writes it beside the bot as well as into the run's folder. An add-on that saves
