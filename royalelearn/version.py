@@ -12,7 +12,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-__version__ = "0.5.10"
+__version__ = "0.5.11"
 
 UNKNOWN = "unknown"
 

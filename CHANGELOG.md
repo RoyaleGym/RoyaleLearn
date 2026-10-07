@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.11
 
 - AMD cards on torch's ROCm build, which shows them as "cuda" devices: a run's identity names
   the card by its AMD architecture (`rocm:<name>:gfx1100`); the throughput tier leaves cuDNN's
