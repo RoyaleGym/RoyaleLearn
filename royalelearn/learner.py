@@ -60,8 +60,10 @@ def _dotted(env_fn: Any) -> str:
     return f"{module}.{name}"
 
 
-#: The file in ``save_dir`` that records what ``build_env`` built, and what each part a user
-#: edits is called when it changes. The engine's own build is checked by the run identity.
+#: The file that records what ``build_env`` built: ``env.config()`` of the env it returns. A run
+#: writes it into ``save_dir``, and ``save`` beside a bot, so that the environment rebuilds from
+#: the folder alone (``Learner.load_env``). ``ENVIRONMENT_PARTS`` are the parts a user edits, by
+#: what a line calls them when one changes. The engine's own build is checked by the run identity.
 ENVIRONMENT_FILE = "environment.json"
 ENVIRONMENT_PARTS = {
     "reward_fn": "the reward",
@@ -77,7 +79,7 @@ ENVIRONMENT_PARTS = {
 
 def _env_spec(env_fn: Any, path: str) -> tuple[cfg.EnvFactorySpec, dict[str, Any]]:
     """The env spec of a run whose environments ``env_fn`` builds, describing what it built, and
-    the parts of the env's own ``config()`` a user edits in ``build_env``."""
+    the env's own ``config()``, as it reads back from JSON."""
     env = env_fn()
     try:
         engine = type(env.engine)
@@ -86,14 +88,12 @@ def _env_spec(env_fn: Any, path: str) -> tuple[cfg.EnvFactorySpec, dict[str, Any
         truncation = _truncation(env.truncation)
     finally:
         env.close()
-    parts = msgspec.json.decode(
-        msgspec.json.encode({key: config.get(key) for key in ENVIRONMENT_PARTS})
-    )
+    record = msgspec.json.decode(msgspec.json.encode(config))
     spec = cfg.default_env_spec(f"{engine.__module__}.{engine.__qualname__}")
     spec = msgspec.structs.replace(
         spec, env_fn=path, decision_ms=decision_ms, truncation=truncation
     )
-    return spec, parts
+    return spec, record
 
 
 def _truncation(condition: Any) -> list[Any]:
@@ -417,8 +417,7 @@ class Learner:
         config = self.config
         if latest is not None:
             self._say_what_changed()
-        (self.save_dir / ENVIRONMENT_FILE).parent.mkdir(parents=True, exist_ok=True)
-        (self.save_dir / ENVIRONMENT_FILE).write_bytes(msgspec.json.encode(self._environment))
+        write_environment_record(self.save_dir, self._environment)
         print(
             f"training in {self.save_dir} on {config.env.engine.cls.rsplit('.', 1)[-1]}: "
             f"{config.rollout.games_per_worker} battles at once, a line every "
@@ -507,9 +506,17 @@ class Learner:
         ):
             setattr(main, name, self.build_env)
 
+    @property
+    def environment(self) -> dict[str, Any]:
+        """What ``build_env`` builds: the env's own ``config()``, as ``environment.json`` holds
+        it (the env is built once to read it)."""
+        _ = self.config
+        return msgspec.json.decode(msgspec.json.encode(self._environment))
+
     def save(self, path: str | os.PathLike[str]) -> Path:
-        """Write the trained bot to the folder ``path``: weights and what they play. Load it with
-        ``Learner.load_policy``. Call ``learn`` first."""
+        """Write the trained bot to the folder ``path``: weights, what they play, and what
+        ``build_env`` built. Load it with ``Learner.load_policy``, and its environment with
+        ``Learner.load_env``. Call ``learn`` first."""
         from .ladder.snapshots import _encode_tensors
 
         if self._model is None:
@@ -518,6 +525,7 @@ class Learner:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / WEIGHTS_FILE).write_bytes(_encode_tensors(self._model.actor.state_dict()))
         self._write_record(folder, self._spec)
+        write_environment_record(folder, self._environment)
         return folder
 
     def _write_record(self, folder: Path, spec: Any) -> None:
@@ -527,6 +535,19 @@ class Learner:
     def load_policy(path: str | os.PathLike[str], *, greedy: bool = False) -> Bot:
         """A bot saved by ``save``: call it on one seat's observation to get its action."""
         return Bot.load(path, greedy=greedy)
+
+    @staticmethod
+    def load_env(path: str | os.PathLike[str], **parts: Any) -> Any:
+        """The environment a bot saved by ``save`` was trained in, rebuilt from its folder alone.
+
+        ``path`` is what ``load_policy`` takes. The env is built from the folder's
+        ``environment.json``, with no ``build_env`` and no script run. Only RoyaleGym's and
+        RoyaleLearn's own classes are built, each of the kind its place takes, and the env is
+        returned only if it describes itself as the record does. A part it cannot rebuild (a
+        reward of your own, say) is named; hand that part in, built, by its name in
+        ``env.config()``: ``Learner.load_env(folder, reward_fn=MyReward())``.
+        """
+        return load_environment(path, **parts)
 
 
 def write_policy_record(folder: str | os.PathLike[str], env_spec: Any, net: Any) -> Path:
@@ -538,6 +559,209 @@ def write_policy_record(folder: str | os.PathLike[str], env_spec: Any, net: Any)
     record = {"format": 1, "env_spec": env_spec, "net": net}
     (target / POLICY_FILE).write_bytes(msgspec.json.encode(record))
     return target / POLICY_FILE
+
+
+def write_environment_record(
+    folder: str | os.PathLike[str], environment: Mapping[str, Any]
+) -> Path:
+    """Write ``environment.json`` into ``folder``: what ``build_env`` built, as
+    ``Learner.environment`` gives it. Beside a bot's weights and ``policy.json``, it lets
+    ``Learner.load_env`` rebuild the env the bot plays in from the folder alone."""
+    target = Path(folder)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / ENVIRONMENT_FILE).write_bytes(msgspec.json.encode(dict(environment)))
+    return target / ENVIRONMENT_FILE
+
+
+#: The env's parts, by their names in ``env.config()``: the classes each must be one of, what a
+#: line calls the part, and what a class of its kind is called. RoyaleGym's engines share a
+#: protocol and no base class, so they are named.
+_ENV_PARTS: dict[str, tuple[tuple[str, ...], str, str]] = {
+    "engine": (
+        ("royalegym.rust_engine.RustEngine", "royalegym.mock_engine.MockEngine"),
+        "the engine",
+        "an engine",
+    ),
+    "obs_builder": (("royalegym.obs.ObsBuilder",), "the observation", "an observation builder"),
+    "action_parser": (("royalegym.action.ActionParser",), "the actions", "an action parser"),
+    "reward_fn": (("royalegym.reward.RewardFunction",), "the reward", "a reward"),
+    "termination_cond": (
+        ("royalegym.done_condition.DoneCondition",),
+        "when a battle ends",
+        "a done condition",
+    ),
+    "truncation_cond": (
+        ("royalegym.done_condition.DoneCondition",),
+        "when a battle is cut off",
+        "a done condition",
+    ),
+    "state_mutator": (("royalegym.state_mutator.StateMutator",), "the decks", "a state mutator"),
+}
+_ENV_CLASS = (("royalegym.env.ClashParallelEnv",), "the environment", "an environment")
+#: What the installed engine reads from its data, not what a saved env chose: another build here
+#: than the saver's is said, and the env is still built.
+_INSTALL_STAMPS = frozenset({"calibration_digest", "build_digest"})
+
+
+def _environment_file(folder: Path) -> Path:
+    """``environment.json`` of a saved bot, a run's folder or one checkpoint of a run."""
+    if (folder / CHECKPOINT_ACTOR).is_file():
+        return folder.parent.parent / ENVIRONMENT_FILE
+    return folder / ENVIRONMENT_FILE
+
+
+def _part_class(key: str, path: str) -> Any:
+    """The class a record names for ``key``, refused unless it is RoyaleGym's or RoyaleLearn's
+    own and of the kind ``key`` takes. Where it is from is checked before anything is imported:
+    the record is data, and a class path in it is not code to run."""
+    import inspect
+
+    from .rollout.envspec import resolve_component
+
+    kinds, name, what = _ENV_PARTS.get(key, _ENV_CLASS)
+    hand_in = ""
+    if key in _ENV_PARTS:
+        hand_in = f" Hand it in, built: Learner.load_env(folder, {key}=...)"
+    try:
+        cls = resolve_component(path)
+    except PreflightError as exc:
+        raise PreflightError(
+            f"{name} is {path}, which is not one of RoyaleGym's or RoyaleLearn's classes, so it "
+            f"is not rebuilt from a record.{hand_in}"
+        ) from exc
+    bases = tuple(resolve_component(kind) for kind in kinds)
+    if not (inspect.isclass(cls) and issubclass(cls, bases)):
+        raise PreflightError(
+            f"{name} is {path}, which is not {what} ({', '.join(kinds)}), so it is not "
+            f"built.{hand_in}"
+        )
+    return cls
+
+
+def _rebuild_part(key: str, part: Mapping[str, Any]) -> Any:
+    """One part from its ``{class, params}``: ``from_config`` where the class has one, else its
+    constructor with the settings it takes (an engine's ``cards`` are its ``card_names``)."""
+    import inspect
+
+    from .rollout.envspec import resolve_component
+
+    path = str(part.get("class"))
+    cls = _part_class(key, path)
+    params = dict(part.get("params") or {})
+    if key == "reward_fn" and issubclass(cls, resolve_component("royalegym.reward.CombinedReward")):
+        # Its record lists each term as {class, weight, params}, the class by its bare name in
+        # royalegym.reward: each is rebuilt, and checked, as a reward of its own.
+        terms = []
+        for term in params.get("terms") or []:
+            name = str(term.get("class"))
+            term_path = name if "." in name else f"royalegym.reward.{name}"
+            built = _rebuild_part(key, {"class": term_path, "params": term.get("params")})
+            terms.append((built, float(term.get("weight", 1.0))))
+        return cls(terms)
+    try:
+        from_config = getattr(cls, "from_config", None)
+        if callable(from_config):
+            return from_config(params)
+        accepted = inspect.signature(cls).parameters
+        if "cards" in params and "card_names" in accepted:
+            params["card_names"] = params.pop("cards")
+        if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()):
+            params = {k: v for k, v in params.items() if k in accepted}
+        return cls(**params)
+    except Exception as exc:
+        name = _ENV_PARTS[key][1]
+        raise PreflightError(
+            f"{name} ({path}) does not rebuild from its record: {type(exc).__name__}: {exc}. "
+            f"Hand it in, built: Learner.load_env(folder, {key}=...)"
+        ) from exc
+
+
+def load_environment(path: str | os.PathLike[str], **given: Any) -> Any:
+    """``Learner.load_env``: the env a saved bot was trained in, from its folder alone."""
+    import inspect
+
+    folder = Path(path)
+    file = _environment_file(folder)
+    if not file.is_file():
+        raise PreflightError(
+            f"{folder} has no {ENVIRONMENT_FILE}, the record of what build_env built. A run's "
+            "save_dir holds one, and so does a bot written by learner.save from royalelearn "
+            "0.5.12 on, or by royaleimitate's clone or save_actor from 0.2.10 on: save it again"
+        )
+    unknown = sorted(set(given) - set(_ENV_PARTS))
+    if unknown:
+        raise PreflightError(
+            f"load_env takes the env's parts by their names in env.config(), "
+            f"{', '.join(_ENV_PARTS)}; not {', '.join(unknown)}"
+        )
+    record = msgspec.json.decode(file.read_bytes())
+    if "engine" not in record and "engine" not in given:
+        # Written before the engine was in the record: policy.json names the engine's class.
+        policy = file.parent / POLICY_FILE
+        if not policy.is_file():
+            raise PreflightError(
+                f"{file} does not name the engine, and there is no {POLICY_FILE} beside it "
+                "that does. Hand one in, built: Learner.load_env(folder, engine=...)"
+            )
+        engine = msgspec.json.decode(policy.read_bytes())["env_spec"]["env_factory"]["engine"]
+        record["engine"] = {"class": engine["cls"], "params": engine.get("kwargs", {})}
+        print(
+            f"{file} was written before it named the engine: the engine is {engine['cls']}, as "
+            f"{POLICY_FILE} says, with its own default cards"
+        )
+        record_has_engine = False
+    else:
+        record_has_engine = True
+    built = {
+        key: given[key]
+        if key in given
+        else (None if record.get(key) is None else _rebuild_part(key, record[key]))
+        for key in _ENV_PARTS
+        if key in record or key in given
+    }
+    env_cls = _part_class("env", str(record.get("env", "royalegym.env.ClashParallelEnv")))
+    env = env_cls(
+        built.pop("engine"),
+        decision_ms=int(record.get("decision_ms", 500)),
+        log_reward_terms=bool(record.get("log_reward_terms", False)),
+        **built,
+    )
+    now = msgspec.json.decode(msgspec.json.encode(env.config()))
+    # Derived from what was handed in, so not the record's to check.
+    skip = set(given) | ({"reveal"} if "obs_builder" in given else set())
+    skip |= {"decision_ticks"} if "engine" in given else set()
+    if not record_has_engine:
+        skip.add("engine")
+    differs, noted = [], []
+    for key, value in record.items():
+        if key in skip or now.get(key) == value:
+            continue
+        if key in _INSTALL_STAMPS:
+            noted.append(key)
+        elif key == "engine" and (now.get(key) or {}).get("class") == value.get("class"):
+            # What the engine's constructor takes, and its cards, are what the saved env chose;
+            # anything else it reports is what this install read from its data.
+            accepted = set(inspect.signature(type(env.engine)).parameters) | {"cards"}
+            theirs, ours = value.get("params", {}), now[key].get("params", {})
+            for name in sorted(set(theirs) | set(ours)):
+                if theirs.get(name) != ours.get(name):
+                    (differs if name in accepted else noted).append(f"engine {name}")
+        else:
+            differs.append(key)
+    if differs:
+        env.close()
+        names = [_ENV_PARTS.get(key.split(" ")[0], (None, key))[1] for key in differs]
+        raise PreflightError(
+            f"the environment rebuilt from {file} differs from its record in "
+            f"{', '.join(dict.fromkeys(names))} ({', '.join(differs)}). Hand those parts in, "
+            "built: Learner.load_env(folder, <name>=...)"
+        )
+    if noted:
+        print(
+            f"the engine here is not the build {folder} was saved with "
+            f"({', '.join(sorted(set(noted)))} differ): the env is built on this one"
+        )
+    return env
 
 
 #: Where a checkpoint keeps the actor's weights.

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- `environment.json` holds the whole of `env.config()` for the env `build_env` returns, and
+  `Learner.save` writes it beside the bot as well as into the run's folder. An add-on that saves
+  a bot writes it with `royalelearn.extensions.write_environment_record`, and
+  `Learner.environment` is what it holds.
+- `Learner.load_env(folder)` rebuilds the environment a saved bot, a run's folder or one of its
+  checkpoints was trained in from that record alone, with no `build_env` run. It builds only
+  RoyaleGym's and RoyaleLearn's own classes, each of the kind its place takes, and refuses an env
+  that does not describe itself as the record does. A part it cannot rebuild is named and can be
+  handed in, built: `Learner.load_env(folder, reward_fn=MyReward())`. A record written before it
+  named the engine takes the engine `policy.json` names.
+
 ## 0.5.11
 
 - AMD cards on torch's ROCm build, which shows them as "cuda" devices: a run's identity names
