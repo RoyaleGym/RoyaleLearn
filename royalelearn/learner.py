@@ -601,6 +601,10 @@ _ENV_CLASS = (("royalegym.env.ClashParallelEnv",), "the environment", "an enviro
 #: What the installed engine reads from its data, not what a saved env chose: another build here
 #: than the saver's is said, and the env is still built.
 _INSTALL_STAMPS = frozenset({"calibration_digest", "build_digest"})
+#: The classes whose own ``from_config`` rebuilds them, each read to import nothing by a name it
+#: is given. Any other is built by its constructor: a ``from_config`` may import what its record
+#: names (RoyaleGym's ``CombinedReward`` does), and a record here is someone else's data.
+_FROM_CONFIG = frozenset({"royalegym.state_mutator.DeckCurriculumStateMutator"})
 
 
 def _environment_file(folder: Path) -> Path:
@@ -639,8 +643,9 @@ def _part_class(key: str, path: str) -> Any:
 
 
 def _rebuild_part(key: str, part: Mapping[str, Any]) -> Any:
-    """One part from its ``{class, params}``: ``from_config`` where the class has one, else its
-    constructor with the settings it takes (an engine's ``cards`` are its ``card_names``)."""
+    """One part from its ``{class, params}``: ``from_config`` for the classes in ``_FROM_CONFIG``,
+    else its constructor with the settings it takes (an engine's ``cards`` are its
+    ``card_names``)."""
     import inspect
 
     from .rollout.envspec import resolve_component
@@ -650,7 +655,8 @@ def _rebuild_part(key: str, part: Mapping[str, Any]) -> Any:
     params = dict(part.get("params") or {})
     if key == "reward_fn" and issubclass(cls, resolve_component("royalegym.reward.CombinedReward")):
         # Its record lists each term as {class, weight, params}, the class by its bare name in
-        # royalegym.reward: each is rebuilt, and checked, as a reward of its own.
+        # royalegym.reward or by its dotted path: each is rebuilt, and checked, as a reward of its
+        # own. Never by its own from_config, which imports the names it is given.
         terms = []
         for term in params.get("terms") or []:
             name = str(term.get("class"))
@@ -659,9 +665,8 @@ def _rebuild_part(key: str, part: Mapping[str, Any]) -> Any:
             terms.append((built, float(term.get("weight", 1.0))))
         return cls(terms)
     try:
-        from_config = getattr(cls, "from_config", None)
-        if callable(from_config):
-            return from_config(params)
+        if f"{cls.__module__}.{cls.__qualname__}" in _FROM_CONFIG:
+            return cls.from_config(params)
         accepted = inspect.signature(cls).parameters
         if "cards" in params and "card_names" in accepted:
             params["card_names"] = params.pop("cards")

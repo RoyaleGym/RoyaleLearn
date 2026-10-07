@@ -309,3 +309,24 @@ def test_a_record_written_before_the_engine_was_in_it_still_rebuilds(tmp_path: P
         assert type(env.engine).__name__ == "MockEngine"
     finally:
         env.close()
+
+
+def test_from_config_is_called_only_for_the_classes_named_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A class's own ``from_config`` may import what its record names (RoyaleGym's
+    ``CombinedReward`` gains one that does), so load_env calls it only for the classes it names.
+    Plant: call any class's ``from_config`` and the one below runs."""
+    from royalegym.reward import WinLossReward
+
+    folder = _saved(tmp_path / "bot", build_env)
+    record = msgspec.json.decode((folder / "environment.json").read_bytes())
+    terms = record["reward_fn"]["params"]["terms"]
+    assert "WinLossReward" in [term["class"] for term in terms]
+
+    def refuse(cls: Any, config: Any) -> Any:
+        raise AssertionError("load_env called a from_config it does not name")
+
+    monkeypatch.setattr(WinLossReward, "from_config", classmethod(refuse), raising=False)
+    env = Learner.load_env(folder)
+    env.close()
