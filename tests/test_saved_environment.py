@@ -127,16 +127,35 @@ def _rewrite(folder: Path, change: Any) -> None:
     path.write_bytes(msgspec.json.encode(record))
 
 
-def test_a_class_from_outside_royalegym_is_never_imported(tmp_path: Path) -> None:
+@pytest.fixture
+def imports(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every import of ``tabnanny`` or ``royalegym_extra`` this test tries, imported or not.
+
+    ``tabnanny`` is a real module that nothing here imports: a path to a module that does not
+    exist could never be imported, and a check on ``sys.modules`` alone would hold whatever
+    load_env did. It is taken out of ``sys.modules`` first, so that an import of it is seen in
+    every test and not only the first.
+    """
+    tried: list[str] = []
+
+    class Watch:
+        def find_spec(self, name: str, path: Any = None, target: Any = None) -> None:
+            if name.split(".")[0] in ("tabnanny", "royalegym_extra"):
+                tried.append(name)
+
+    monkeypatch.delitem(sys.modules, "tabnanny", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [Watch(), *sys.meta_path])
+    return tried
+
+
+def test_a_class_from_outside_royalegym_is_never_imported(
+    tmp_path: Path, imports: list[str]
+) -> None:
     """The record is a member's data: a class path in it is not code to run. Plant: resolve the
     path before checking where it is from and the module below is imported."""
     from royalegym import CrownReward
 
     folder = _saved(tmp_path / "bot", build_env)
-    # A real module that nothing here imports: a path to one that did not exist could never be
-    # imported, and the check below would hold whatever load_env did.
-    if "tabnanny" in sys.modules:
-        pytest.skip("tabnanny is already imported in this process")
 
     def theirs(record: dict[str, Any]) -> None:
         record["reward_fn"] = {"class": "tabnanny.NannyNag", "params": {}}
@@ -144,7 +163,7 @@ def test_a_class_from_outside_royalegym_is_never_imported(tmp_path: Path) -> Non
     _rewrite(folder, theirs)
     with pytest.raises(PreflightError, match=r"reward_fn=") as refused:
         Learner.load_env(folder)
-    assert "tabnanny" not in sys.modules
+    assert imports == []
     assert "the reward" in str(refused.value)
     # Handed in, it is used as it is, and the rest is still rebuilt and checked.
     env = Learner.load_env(folder, reward_fn=CrownReward())
@@ -152,6 +171,64 @@ def test_a_class_from_outside_royalegym_is_never_imported(tmp_path: Path) -> Non
         assert type(env.reward_fn) is CrownReward
     finally:
         env.close()
+
+
+#: A real module nothing here imports, and a name that only looks like RoyaleGym's.
+OUTSIDE = "tabnanny.NannyNag"
+LOOKALIKE = "royalegym_extra.obs.Builder"
+
+
+def _part(key: str, path: str) -> Any:
+    def change(record: dict[str, Any]) -> None:
+        record[key] = {"class": path, "params": {}}
+
+    return change
+
+
+def _env_class(record: dict[str, Any]) -> None:
+    record["env"] = OUTSIDE
+
+
+def _reward_term(record: dict[str, Any]) -> None:
+    term = {"class": OUTSIDE, "weight": 1.0, "params": {}}
+    record["reward_fn"] = {"class": "royalegym.reward.CombinedReward", "params": {"terms": [term]}}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        _part("engine", OUTSIDE),
+        _part("obs_builder", OUTSIDE),
+        _part("action_parser", OUTSIDE),
+        _part("termination_cond", OUTSIDE),
+        _part("truncation_cond", OUTSIDE),
+        _part("state_mutator", OUTSIDE),
+        _part("obs_builder", LOOKALIKE),
+        _env_class,
+        _reward_term,
+    ],
+    ids=[
+        "engine",
+        "obs_builder",
+        "action_parser",
+        "termination_cond",
+        "truncation_cond",
+        "state_mutator",
+        "lookalike",
+        "env",
+        "reward-term",
+    ],
+)
+def test_no_class_a_crafted_record_names_is_imported(
+    tmp_path: Path, change: Any, imports: list[str]
+) -> None:
+    """Every place the record names a class, the env's own included and a reward's terms: a
+    class from outside RoyaleGym and RoyaleLearn is refused by name and never imported."""
+    folder = _saved(tmp_path / "bot", build_env)
+    _rewrite(folder, change)
+    with pytest.raises(PreflightError, match="not one of RoyaleGym's or RoyaleLearn's classes"):
+        Learner.load_env(folder)
+    assert imports == []
 
 
 def test_only_a_class_of_the_kind_its_place_takes_is_built(tmp_path: Path) -> None:
