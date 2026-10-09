@@ -41,6 +41,10 @@ GOLDEN_CONTROL = {
     "n_slots": (20, 4),
     "err_code": (24, 4),
     "err_len": (28, 4),
+    # In the reserve, after every field that was already there: nothing above moved, so
+    # LAYOUT_VERSION did not change.
+    "t_busy_ns": (32, 8),
+    "t_idle_ns": (40, 8),
 }
 
 GOLDEN_SCALARS = {

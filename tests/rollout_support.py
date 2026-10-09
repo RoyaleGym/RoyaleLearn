@@ -300,6 +300,27 @@ class HangingReward:
         return 0.0
 
 
+class SleepyReward:
+    """A reward function that takes ``seconds`` on every call: an environment slower than the
+    parent, so that the parent's wait for the workers has something to measure."""
+
+    def __init__(self, seconds: float = 0.002) -> None:
+        self.seconds = seconds
+
+    def bind(self, engine: Any) -> None:
+        return None
+
+    def reset(self, state: Any) -> None:
+        return None
+
+    def config(self) -> dict[str, Any]:
+        return {"seconds": self.seconds}
+
+    def get_reward(self, team: int, prev: Any, state: Any, results: Any) -> float:
+        time.sleep(self.seconds)
+        return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Driving a source
 # ---------------------------------------------------------------------------

@@ -414,6 +414,8 @@ class ProcessRolloutSource(RolloutSourceBase):
                     "n_slots": self.geometry.slots_per_shard,
                     "err_code": ERR_NONE,
                     "err_len": 0,
+                    "t_busy_ns": 0,
+                    "t_idle_ns": 0,
                 },
             )
             child.actions_ready[shard].release()
@@ -564,6 +566,8 @@ class ProcessRolloutSource(RolloutSourceBase):
                 "n_slots": self.geometry.slots_per_shard,
                 "err_code": ERR_NONE,
                 "err_len": 0,
+                "t_busy_ns": 0,
+                "t_idle_ns": 0,
             },
         )
         child.actions_ready[shard].release()

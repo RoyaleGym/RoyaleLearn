@@ -143,6 +143,11 @@ METRICS: dict[str, MetricSpec] = {
         high=0.3,
     ),
     "throughput/inference_ms_per_round": _m("ms", "Parent time per shard-round, all policies."),
+    "throughput/worker_busy_frac": _m(
+        "fraction",
+        "time/worker_busy over busy plus idle. Near 1 the workers are what collection waits on; "
+        "near 0 they wait on the parent. 1 for an inline source, whose runner never waits.",
+    ),
     "throughput/discarded_rows_frac": _m(
         "fraction", "Collected rows not trained on: the frozen seats, by design."
     ),
@@ -151,9 +156,43 @@ METRICS: dict[str, MetricSpec] = {
     "time/iteration": _m("s", "Seconds for the whole iteration."),
     "time/collection": _m("s", "Seconds collecting, inference included."),
     "time/inference": _m("s", "Seconds in the rollout forwards."),
-    "time/env": _m("s", "Seconds inside the environments, as the workers report them."),
+    "time/env": _m(
+        "s",
+        "Seconds inside the environments, summed over the workers: processor time, not wall "
+        "clock. time/worker_env is one worker's.",
+    ),
     "time/codec": _m("s", "Seconds packing observations in the workers."),
-    "time/ipc": _m("s", "Seconds waiting on round events and reading scalars."),
+    "time/ipc": _m(
+        "s",
+        "Collection seconds less time/inference and time/env. time/env sums the workers, so with "
+        "more than one this reads 0: time/parent_wait and time/parent_other split collection.",
+    ),
+    "time/parent_wait": _m(
+        "s", "Seconds the parent waited for every worker to publish a round, over all rounds."
+    ),
+    "time/parent_other": _m(
+        "s",
+        "Collection seconds outside time/inference and time/parent_wait: the parent reading, "
+        "recording and answering rounds (with an inline source, the stepping too).",
+    ),
+    "time/worker_env": _m(
+        "s", "Seconds one worker spent inside its environments, the mean over workers."
+    ),
+    "time/worker_busy": _m(
+        "s",
+        "Seconds one worker spent on the parent's commands (stepping, packing rows, publishing), "
+        "the mean over workers.",
+    ),
+    "time/worker_idle": _m(
+        "s",
+        "Seconds one worker spent waiting for the parent's commands during collection, the mean "
+        "over workers. A worker's first round of an iteration only sets where it stands.",
+    ),
+    "time/worker_straggle": _m(
+        "s",
+        "Seconds, summed over rounds, by which the slowest worker's busy time passed the mean: "
+        "what the others waited out.",
+    ),
     "time/critic_pass": _m("s", "Seconds in the whole-iteration critic pass."),
     "time/gae": _m("s", "Seconds computing advantages and returns."),
     "time/update": _m("s", "Seconds in the PPO update."),

@@ -133,9 +133,15 @@ Every iteration writes a row of metrics. The timing keys are defined in
 | `time/iteration` | The whole thing. |
 | `time/collection` | Playing the battles, including the learner choosing actions. |
 | `time/inference` | The part of collection that is the learner choosing actions. |
-| `time/env` | Seconds inside the battle engine, as the workers report them. |
+| `time/env` | Seconds inside the battle engine, added up over all the workers: processor time, not time on the clock. |
 | `time/codec` | Packing observations in the workers. |
-| `time/ipc` | Waiting on round signals and reading scalars. |
+| `time/ipc` | Collection less inference and `time/env`. With more than one worker it reads 0, because `time/env` is a sum. |
+| `time/parent_wait` | The learner waiting for every worker to hand in a round. |
+| `time/parent_other` | The rest of the learner's collection: reading, recording and answering rounds. With `parent_wait` and `inference` it adds up to `time/collection`. |
+| `time/worker_env` | One worker's seconds inside the battle engine (the average over workers). |
+| `time/worker_busy` | One worker's seconds working on rounds: stepping, packing, handing in. |
+| `time/worker_idle` | One worker's seconds waiting for the learner during collection. |
+| `time/worker_straggle` | How much longer the slowest worker took than the average, added up over rounds. Every other worker waits that out. |
 | `time/update` | The PPO update. |
 | `time/checkpoint`, `time/gate` | Saving, and judging a candidate against the frozen pool. |
 | `time/residual` | Iteration seconds not attributed to any phase above. |
@@ -282,8 +288,11 @@ applied to, minutes before it is applied.
   workers that had not published yet. The schema expects it under 0.3. Rising means the workers
   cannot keep up, which on a laptop usually means too many workers for the cores you have, or
   something else on the machine.
-- `time/env` against `time/collection` says how much of collection was really inside the battle
-  engine rather than waiting, packing or choosing actions.
+- `throughput/worker_busy_frac` says who waits on whom. Near 1, the workers are the limit: more
+  workers or a cheaper environment help. Near 0, they sit waiting for the learner to choose
+  actions, and `time/inference` is the limit: more battles per worker or a cheaper network help.
+- `time/worker_straggle` is the cost of one slow worker. A worker that also records replays, or
+  shares its core with something else, makes every round wait for it.
 
 ### Something else on the machine
 

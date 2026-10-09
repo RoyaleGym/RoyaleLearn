@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Where collection's time goes, per iteration: `time/worker_env`, `time/worker_busy` and
+  `time/worker_idle` (one worker's seconds in the environments, working on rounds, and waiting
+  for the learner), `time/worker_straggle` (how much longer the slowest worker took than the
+  average, over all rounds), `time/parent_wait` and `time/parent_other` (with `time/inference`
+  they add up to `time/collection`), and `throughput/worker_busy_frac`. Each worker states its
+  busy and idle time in the control word it publishes, in the record's reserve, so no offset moved.
+  `royalelearn bench` prints the new figures.
+- A worker's publication after a command that runs no step carries no environment time; it
+  carried the previous step's, which `time/env` then counted twice at each iteration's start.
+  The schema says plainly that `time/env` is summed over the workers.
+
 ## 0.5.12
 
 - `environment.json` holds the whole of `env.config()` for the env `build_env` returns, and

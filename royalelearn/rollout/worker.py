@@ -186,6 +186,10 @@ def worker_main(
     # a run is in order -- the plans of an iteration go out shard by shard, and so do the steps
     # -- so this is the one worth sleeping on.
     turn = 0
+    # Every nanosecond this process spends waiting for a command, on any shard: published with
+    # each round as a running total, so the parent can tell a worker that waits on it from one
+    # it waits on.
+    idle_ns = 0
     running = True
     parent = multiprocessing.parent_process()
     next_parent_check = time.monotonic() + PARENT_CHECK_S
@@ -207,7 +211,8 @@ def worker_main(
             # Sleeping on a shard whose turn it is not would leave the command that is due on
             # the other one waiting out the sleep; a glance costs one read.
             due = shard == turn
-            if not _wait_command(
+            waited = time.perf_counter_ns()
+            ready = _wait_command(
                 runner,
                 parity,
                 actions_ready[shard],
@@ -215,7 +220,9 @@ def worker_main(
                 STATE_OBS_READY,
                 STATE_IDLE,
                 sleep_s=SLEEP_S if due else 0.0,
-            ):
+            )
+            idle_ns += time.perf_counter_ns() - waited
+            if not ready:
                 continue
             turn = (shard + 1) % len(shards)
             command, gamma = runner.read_command(parity)
@@ -227,6 +234,7 @@ def worker_main(
                     runner.pending_snapshots = msgspec.msgpack.decode(
                         _take(inbox, shard, pending), type=tuple[bytes | None, ...]
                     )
+                runner.t_idle_ns = idle_ns
                 running = runner.handle(command, gamma, parity, message)
             except BaseException as exc:  # the parent is told, and then the child stops
                 runner.publish_error(_failure_text(exc))

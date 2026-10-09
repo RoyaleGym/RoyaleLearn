@@ -184,7 +184,10 @@ HEADER = Record(
     size=128,
 )
 
-#: One shard's control word, per parity.
+#: One shard's control word, per parity. ``t_busy_ns`` is how long the worker worked on the
+#: command this publication answers, and ``t_idle_ns`` how long it has waited for commands in all,
+#: a running total; the parent writes zeros into both with a command. They sit in what was the
+#: record's reserve, so no offset before them moved.
 CONTROL = Record(
     "control",
     [
@@ -194,6 +197,8 @@ CONTROL = Record(
         ("n_slots", "I"),
         ("err_code", "I"),
         ("err_len", "I"),
+        ("t_busy_ns", "Q"),
+        ("t_idle_ns", "Q"),
     ],
     size=64,
 )

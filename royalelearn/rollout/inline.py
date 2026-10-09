@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import struct
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import msgspec
@@ -408,6 +408,10 @@ class ShardRunner:
         self.publications = 0
         self.gamma: float | None = None
         self.t_env_ns = 0
+        #: The worker's running total of time spent waiting for commands, set by the loop that
+        #: drives this runner before each command; zero where nothing waits (the inline source).
+        self.t_idle_ns = 0
+        self._handle_started_ns: int | None = None
         self.closed = False
 
     # -- start-up -----------------------------------------------------------
@@ -816,6 +820,12 @@ class ShardRunner:
                 "n_slots": self.n_slots,
                 "err_code": err_code,
                 "err_len": err_len,
+                "t_busy_ns": (
+                    0
+                    if self._handle_started_ns is None
+                    else time.perf_counter_ns() - self._handle_started_ns
+                ),
+                "t_idle_ns": self.t_idle_ns,
             },
         )
 
@@ -836,6 +846,10 @@ class ShardRunner:
         Every command but ``CLOSE`` ends in a publication, so the parent's wait is answered
         exactly once per command whatever the command was.
         """
+        self._handle_started_ns = time.perf_counter_ns()
+        # Only a step runs the environments; any other command's publication carries none of
+        # their time, rather than the last step's a second time.
+        self.t_env_ns = 0
         if command == COMMAND_CLOSE:
             self._write_control(parity, STATE_CLOSED, self.cycle, ERR_NONE, 0)
             self.close()
@@ -865,6 +879,45 @@ class ShardRunner:
             self.publish(self.cycle + 1)
             return True
         raise ValueError(f"command word {command} is not one this worker knows")
+
+
+def round_timings(words: Mapping[int, Mapping[str, Any]], idle_seen: dict[int, int]) -> dict[
+    str, float
+]:
+    """Where one round's time went, from each live worker's control word, in milliseconds.
+
+    ``env_ms`` is the workers' environment time summed, as ``time/env`` has always read it. The
+    rest are per worker: the mean environment and busy times, the slowest worker's busy time,
+    whose excess over the mean every other worker waits out, and the mean time spent waiting
+    for commands since that worker's last publication. ``idle_seen`` carries each worker's idle
+    total from round to round. A worker seen for the first time, or whose total went down
+    because its process was restarted, only sets where it stands, and counts no idle time.
+    """
+    if not words:
+        return {
+            "env_ms": 0.0,
+            "env_mean_ms": 0.0,
+            "busy_mean_ms": 0.0,
+            "busy_max_ms": 0.0,
+            "idle_ms": 0.0,
+        }
+    env = [int(word["t_env_ns"]) for word in words.values()]
+    busy = [int(word.get("t_busy_ns", 0)) for word in words.values()]
+    idle = 0
+    for worker, word in words.items():
+        total = int(word.get("t_idle_ns", 0))
+        before = idle_seen.get(worker)
+        if before is not None and total >= before:
+            idle += total - before
+        idle_seen[worker] = total
+    count = len(words)
+    return {
+        "env_ms": sum(env) / 1e6,
+        "env_mean_ms": sum(env) / count / 1e6,
+        "busy_mean_ms": sum(busy) / count / 1e6,
+        "busy_max_ms": max(busy) / 1e6,
+        "idle_ms": idle / count / 1e6,
+    }
 
 
 def _gamma_to_word(gamma: float) -> int:
@@ -992,6 +1045,9 @@ class RolloutSourceBase(RolloutSource):
         self._wait_ns = 0
         self._env_ns = 0
         self._rounds_read = 0
+        #: Each worker's idle total as its last publication stated it; cleared at the start of
+        #: every iteration, so the update a worker waited out is not counted as collection.
+        self._idle_seen: dict[int, int] = {}
         self.closed = False
 
     # -- the ABC ------------------------------------------------------------
@@ -1032,6 +1088,7 @@ class RolloutSourceBase(RolloutSource):
         self._cycle = 0
         self._next_shard = 0
         self._open_shard = None
+        self._idle_seen = {}
         self._start(handle)
         for worker in range(self.geometry.workers):
             self._write_plan(worker, plan)
@@ -1068,8 +1125,10 @@ class RolloutSourceBase(RolloutSource):
                 "submit; the protocol is exactly one submit per round"
             )
         shard = self._next_shard
+        waited_ns = self._wait_ns
         self._await_publication(shard, timeout_s)
         round_ = self._assemble(shard)
+        round_.timings["parent_wait_ms"] = (self._wait_ns - waited_ns) / 1e6
         self._open_shard = shard
         return round_
 
@@ -1124,6 +1183,7 @@ class RolloutSourceBase(RolloutSource):
         finals_rows: list[np.ndarray] = []
         episodes: list[EpisodeRecord] = []
         env_ns = 0
+        words: dict[int, Mapping[str, Any]] = {}
         for worker in range(self.geometry.workers):
             lo = worker * per_worker
             hi = lo + per_worker
@@ -1138,6 +1198,7 @@ class RolloutSourceBase(RolloutSource):
                 continue
             word, scalars = self._read_publication(worker, shard)
             env_ns += int(word["t_env_ns"])
+            words[worker] = word
             if int(word["err_code"]) != ERR_NONE:
                 self._fail_worker(worker, shard, word)
                 buffers.valid[lo:hi] = False
@@ -1183,7 +1244,7 @@ class RolloutSourceBase(RolloutSource):
         round_ = self._round[shard]
         round_.cycle = cycle
         round_.episodes = episodes
-        round_.timings = {"env_ms": env_ns / 1e6}
+        round_.timings = round_timings(words, self._idle_seen)
         self._env_ns += env_ns
         self._rounds_read += 1
         return round_
@@ -1550,6 +1611,8 @@ class InlineRolloutSource(RolloutSourceBase):
                     "n_slots": runner.n_slots,
                     "err_code": ERR_NONE,
                     "err_len": 0,
+                    "t_busy_ns": 0,
+                    "t_idle_ns": 0,
                 },
             )
             word, round_gamma = runner.read_command(parity)

@@ -1993,11 +1993,26 @@ class LearningCoordinator:
         command = ""
         started = time.perf_counter()
         env_seconds = 0.0
+        # Where the rounds' wall clock went (rollout.inline.round_timings): per worker, and the
+        # parent's wait for the slowest of them.
+        spent = dict.fromkeys(
+            ("worker_env", "worker_busy", "worker_idle", "worker_straggle", "parent_wait"), 0.0
+        )
         for cycle in range(geo.cycles):
             for _shard in range(geo.shards_per_worker):
                 round_ = source.next_round(timeout)
                 check_round(round_, cycle=cycle, slots=self.planner.round_slots(round_.shard))
-                env_seconds += float(round_.timings.get("env_ms", 0.0)) / 1000.0
+                timings = round_.timings
+                env_seconds += float(timings.get("env_ms", 0.0)) / 1000.0
+                spent["worker_env"] += float(timings.get("env_mean_ms", 0.0)) / 1000.0
+                spent["worker_busy"] += float(timings.get("busy_mean_ms", 0.0)) / 1000.0
+                spent["worker_idle"] += float(timings.get("idle_ms", 0.0)) / 1000.0
+                spent["worker_straggle"] += max(
+                    0.0,
+                    float(timings.get("busy_max_ms", 0.0))
+                    - float(timings.get("busy_mean_ms", 0.0)),
+                ) / 1000.0
+                spent["parent_wait"] += float(timings.get("parent_wait_ms", 0.0)) / 1000.0
                 assigned = self._assign(plan, round_, group, opponent, seat, episodes)
                 round_.group[:] = group[round_.slots]
                 answer = self.inference.act(round_)
@@ -2039,6 +2054,7 @@ class LearningCoordinator:
             "rounds": rounds,
             "seconds": time.perf_counter() - started,
             "env_seconds": env_seconds,
+            "spent": spent,
             "command": command,
         }
 
@@ -2352,6 +2368,10 @@ class LearningCoordinator:
         ipc_seconds = max(
             0.0, collection_seconds - inference_seconds - float(collection["env_seconds"])
         )
+        spent = dict(collection.get("spent") or {})
+        parent_wait = float(spent.get("parent_wait", 0.0))
+        worker_busy = float(spent.get("worker_busy", 0.0))
+        worker_idle = float(spent.get("worker_idle", 0.0))
         metrics.time = {
             "time/iteration": iteration_seconds,
             "time/collection": collection_seconds,
@@ -2359,6 +2379,12 @@ class LearningCoordinator:
             "time/env": float(collection["env_seconds"]),
             "time/codec": float(source_stats.get("codec_ms", 0.0)) * collection["rounds"] / 1000.0,
             "time/ipc": ipc_seconds,
+            "time/parent_wait": parent_wait,
+            "time/parent_other": max(0.0, collection_seconds - inference_seconds - parent_wait),
+            "time/worker_env": float(spent.get("worker_env", 0.0)),
+            "time/worker_busy": worker_busy,
+            "time/worker_idle": worker_idle,
+            "time/worker_straggle": float(spent.get("worker_straggle", 0.0)),
             "time/critic_pass": float(result.critic_pass_seconds),
             "time/gae": float(result.gae_seconds),
             "time/update": update_seconds,
@@ -2398,6 +2424,7 @@ class LearningCoordinator:
                 / collection_seconds
             ),
             "throughput/parent_wait_frac": float(source_stats.get("parent_wait_frac", 0.0)),
+            "throughput/worker_busy_frac": worker_busy / max(1e-9, worker_busy + worker_idle),
             "throughput/inference_ms_per_round": (
                 1000.0 * inference_seconds / max(1, collection["rounds"])
             ),
