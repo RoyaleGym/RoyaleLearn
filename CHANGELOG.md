@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.14
 
 - `royalelearn bench` times the codec on a row with every key the run's observation space
   declares. It packed a row of the spatial, vector and mask keys alone, which a run storing id
