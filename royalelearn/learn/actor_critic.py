@@ -60,6 +60,13 @@ def autocast_context(device_type: str, dtype: torch.dtype) -> Any:
     return torch.autocast(device_type, dtype=dtype)
 
 
+def _no_autocast(device_type: str) -> Any:
+    """Autocast switched off for this device, or nothing where autocast does not apply."""
+    if device_type not in ("cuda", "cpu", "xpu"):
+        return contextlib.nullcontext()
+    return torch.autocast(device_type, enabled=False)
+
+
 class _Autocasting(nn.Module):
     """A module that runs its forward under the run's autocast dtype.
 
@@ -93,12 +100,20 @@ class ClashActor(_Autocasting, Actor):
         super().__init__(autocast_dtype)
         self.trunk = trunk
         self.head = head
+        #: ``net.policy_head_float32``: the head out of the autocast, on float32 features.
+        self.head_float32 = False
 
     def forward(self, obs: ObsBatch) -> Tensor:
         """``(B, n_actions)`` float32 always, even inside autocast: the cast at the end of the
         head is what makes the masking and the ``log_softmax`` downstream exact."""
         with self.autocast():
-            return self.head(self.trunk(obs), obs)
+            features = self.trunk(obs)
+            if not self.head_float32:
+                return self.head(features, obs)
+        # Explicitly off, not merely outside this module's own: a caller's autocast would
+        # otherwise reach the head.
+        with _no_autocast(self.device_type):
+            return self.head(features.float(), obs)
 
     def logits(self, obs: ObsBatch) -> Tensor:
         return self(obs)

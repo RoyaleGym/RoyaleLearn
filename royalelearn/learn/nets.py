@@ -39,7 +39,13 @@ from torch import Tensor, nn
 from royalegym.action import NOOP
 
 from ..api.policy import NetworkFactory
-from ..config import button_head_of, critic_arch_of, hand_slot_features_of, trunk_stride_of
+from ..config import (
+    button_head_of,
+    critic_arch_of,
+    hand_slot_features_of,
+    policy_head_float32_of,
+    trunk_stride_of,
+)
 from ..errors import PreflightError
 from ..obs_layout import UNIT_IDS, field_slice, hand_fields, id_planes
 from ..rollout.envspec import digest_of
@@ -827,6 +833,7 @@ class DefaultNetworkFactory(NetworkFactory):
 
         generator = self.generator()
         actor = ClashActor(ClashTrunk(spec, arch), build_policy_head(spec, arch))
+        actor.head_float32 = policy_head_float32_of(arch)
         actor.initialise(generator)
         model: ActorCritic
         if arch.separate_trunks:

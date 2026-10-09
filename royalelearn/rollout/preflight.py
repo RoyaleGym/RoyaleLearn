@@ -337,6 +337,15 @@ def precision_name(config: RunConfig) -> str:
     return name
 
 
+def logit_precision_name(config: RunConfig) -> str:
+    """The precision the policy's logits are computed at: float32 under
+    ``net.policy_head_float32``, the autocast precision otherwise. It is the logits' spacing
+    that the importance ratio's arithmetic floor turns on."""
+    from ..config import policy_head_float32_of
+
+    return "float32" if policy_head_float32_of(config.net) else precision_name(config)
+
+
 def judge_ratio_precision(
     predicted: float, atol: float, *, trouble: str, say: Callable[[str], None]
 ) -> None:
@@ -370,25 +379,29 @@ def _ratio_precision_gate(config: RunConfig, spec: EnvSpec, say: Callable[[str],
         # weights, fresh or resumed.
         say(f"ratio guard   {name}: measured by {', '.join(starters)} on the loaded actor")
         return
+    logits = logit_precision_name(config)
     predicted = ratio_precision(
-        noop_bias=config.net.noop_bias, n_actions=spec.n_actions, dtype_name=name
+        noop_bias=config.net.noop_bias, n_actions=spec.n_actions, dtype_name=logits
     )
     atol = float(config.ppo.ratio_atol.get(name, 1e-4))
+    head = f" (policy head in {logits})" if logits != name else ""
     say(
-        f"ratio guard   {name} at noop_bias {config.net.noop_bias:g} over {spec.n_actions} "
-        f"actions predicts a deviation of {predicted:.2e} against ppo.ratio_atol {atol:g}"
+        f"ratio guard   {name}{head} at noop_bias {config.net.noop_bias:g} over "
+        f"{spec.n_actions} actions predicts a deviation of {predicted:.2e} against "
+        f"ppo.ratio_atol {atol:g}"
     )
     if predicted <= atol / 4.0:
         return
-    unbiased = ratio_precision(noop_bias=0.0, n_actions=spec.n_actions, dtype_name=name)
+    unbiased = ratio_precision(noop_bias=0.0, n_actions=spec.n_actions, dtype_name=logits)
     amplification = predicted / max(1e-30, unbiased)
     trouble = (
         f"ppo.ratio_atol[{name!r}] is {atol:g} and this run's arithmetic predicts a deviation of "
         f"{predicted:.2e}. log p = z - logsumexp(z), so an error in the largest logit is "
         f"multiplied into every other action's log-probability by the probability that logit "
         f"holds: at noop_bias {config.net.noop_bias:g} over {spec.n_actions} actions that is "
-        f"{amplification:.0f}x what an unbiased head would see. Set net.autocast_dtype to "
-        f"float32, measured at 9.5e-7 on this action space, or lower net.noop_bias"
+        f"{amplification:.0f}x what an unbiased head would see. Set "
+        f"net.policy_head_float32, which computes the logits in float32 and keeps the trunk's "
+        f"autocast, or net.autocast_dtype float32 (measured at 9.5e-7 on this action space)"
     )
     judge_ratio_precision(predicted, atol, trouble=trouble, say=say)
 

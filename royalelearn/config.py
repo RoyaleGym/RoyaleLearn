@@ -243,6 +243,13 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: bf16 keeps fp32's exponent range, so masking with ``finfo.min`` is safe and no GradScaler
     #: is needed.
     autocast_dtype: str = "bfloat16"
+    #: The policy head in float32 while the trunk runs at ``autocast_dtype``. A logit rounded to
+    #: bfloat16 is off by up to a thirty-second at a magnitude of 8, and the rollout's forward
+    #: and the update's do not always round it alike; the error in the largest logit reaches
+    #: every action's log-probability. In float32 the head computes the logits from the trunk's
+    #: features without that rounding, and the trunk, where the compute is, keeps the autocast.
+    #: Unset means the head runs at the autocast dtype too, and is left out of the encoding.
+    policy_head_float32: bool | msgspec.UnsetType = msgspec.UNSET
     device: str = "cuda"
 
 
@@ -259,6 +266,11 @@ def button_head_of(net: NetConfig) -> str:
 def trunk_stride_of(net: NetConfig) -> int:
     """``net.trunk_stride``, with an unset one read as 1."""
     return 1 if net.trunk_stride is msgspec.UNSET else int(net.trunk_stride)
+
+
+def policy_head_float32_of(net: NetConfig) -> bool:
+    """``net.policy_head_float32``, with an unset one read as False."""
+    return net.policy_head_float32 is not msgspec.UNSET and bool(net.policy_head_float32)
 
 
 def critic_arch_of(net: NetConfig) -> NetConfig:

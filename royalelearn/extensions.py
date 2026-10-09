@@ -60,7 +60,9 @@ class RunContext(NamedTuple):
     row_codec: Callable[[], Any]
     #: True when the run resumes a checkpoint, whose weights win over any starting weights.
     resuming: bool
-    #: The importance-ratio tolerance at this run's precision, and that precision's name.
+    #: The importance-ratio tolerance at this run's autocast precision, and the name of the
+    #: precision the policy's logits are computed at (float32 under net.policy_head_float32),
+    #: which is what the ratio's arithmetic floor turns on.
     ratio_atol: float
     precision: str
 

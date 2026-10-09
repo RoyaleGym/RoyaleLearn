@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `net.policy_head_float32` computes the policy's logits in float32 from the trunk's features
+  while the trunk keeps `net.autocast_dtype`. Under bfloat16 a large logit is rounded to
+  bfloat16's spacing, which the importance ratio feels through the largest action's
+  probability; the preflight ratio guard now predicts from the precision the logits are
+  computed at, and names this setting when it refuses. An extension's `RunContext.precision`
+  is that precision. Unset, nothing changes.
 - `net.critic_channels` and `net.critic_blocks` give the critic's trunk, and its value head, a
   width and depth of their own under `net.separate_trunks`. Unset, the critic is the actor's
   size and every config hash and architecture digest is as before. A critic shape that cannot

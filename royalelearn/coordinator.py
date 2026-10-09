@@ -1295,7 +1295,7 @@ class LearningCoordinator:
 
     def run_context(self) -> RunContext:
         """What an extension is handed about this run (``extensions.RunContext``)."""
-        from .rollout.preflight import precision_name
+        from .rollout.preflight import logit_precision_name
 
         return RunContext(
             config=self.config,
@@ -1308,7 +1308,7 @@ class LearningCoordinator:
             row_codec=self.row_codec,
             resuming=self.resume_from is not None,
             ratio_atol=self._ratio_atol(),
-            precision=precision_name(self.config),
+            precision=logit_precision_name(self.config),
         )
 
     def _freeze_tracker(self) -> FreezeTracker | None:
