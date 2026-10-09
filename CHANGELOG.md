@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `royalelearn bench` times the codec on a row with every key the run's observation space
+  declares. It packed a row of the spatial, vector and mask keys alone, which a run storing id
+  planes (card, spell or unit ids) refused with a TypeError before the table was printed.
+
 ## 0.5.13
 
 - Where collection's time goes, per iteration: `time/worker_env`, `time/worker_busy` and

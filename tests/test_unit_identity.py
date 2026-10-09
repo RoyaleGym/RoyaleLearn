@@ -143,6 +143,21 @@ def test_unit_ids_round_trip_exactly_beside_the_card_ids(
     assert np.array_equal(out.card_ids[0].numpy(), seat["card_ids"].astype(np.int64))
 
 
+def test_bench_times_the_codec_on_every_key_the_run_stores(
+    unit_spec: Any, unit_rollout: Any
+) -> None:
+    """``royalelearn bench`` packs a made-up row to time the codec. It made the row from the
+    spatial, vector and mask keys alone, so a run that stores id planes stopped there on a
+    TypeError (reported 2026-10-09, on a run with card, spell and unit ids) and the bench never
+    printed its table. Plant: the three keys alone, and this raises."""
+    from types import SimpleNamespace
+
+    from royalelearn.cli import _codec_microseconds
+
+    codec = _codec(unit_spec, unit_rollout)
+    assert _codec_microseconds(SimpleNamespace(spec=unit_spec, codec=codec)) > 0.0
+
+
 def test_a_table_and_a_space_that_disagree_about_unit_ids_are_refused(unit_spec: Any) -> None:
     from royalelearn.api.buffer import CodecTable
 

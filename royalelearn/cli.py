@@ -576,11 +576,14 @@ def _codec_microseconds(run: Any) -> float:
     spec = run.spec
     row_bytes = int(run.codec.row_bytes(spec))
     out = memoryview(bytearray(row_bytes))
+    # Every key the run's space declares, at its own shape and dtype: the codec stores each of
+    # them (one it does not is refused at start-up), so a row without the id planes is not one
+    # it can pack. Zeros are in every key's range; a mask is all legal.
     obs = {
-        "spatial": np.zeros(spec.spatial_shape, dtype=np.float32),
-        "vector": np.zeros(spec.vector_size, dtype=np.float32),
-        "action_mask": np.ones(spec.n_actions, dtype=np.int8),
+        key: np.zeros(space.shape, dtype=np.dtype(space.dtype))
+        for key, space in spec.obs_space.items()
     }
+    obs["action_mask"] = np.ones(spec.n_actions, dtype=np.int8)
     started = time.perf_counter()
     for _ in range(200):
         run.codec.pack(obs, out, 0)
