@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.16
 
 - `SnapshotSpec.actor_digest`: what an actor folder's weights compute, which is `arch_digest`
   less the autocast precision, the head's precision, the device, the initialisation and the
@@ -12,6 +12,8 @@
   surface carries `actor_digest_of`, `arch_digest_of` and `NetConfig`.
 
 ## 0.5.15
+
+Tagged, never published to PyPI: its CI failed on the tag. Everything below is in 0.5.16.
 
 - `net.policy_head_float32` computes the policy's logits in float32 from the trunk's features
   while the trunk keeps `net.autocast_dtype`. Under bfloat16 a large logit is rounded to
