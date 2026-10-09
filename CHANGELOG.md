@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.17
 
 - `device="auto"` trains on the CPU, and says why in one line, when the NVIDIA card torch can
   see is one this PyTorch was not built for: a GTX 970 (sm_52) under a build for sm_75 and
