@@ -105,3 +105,27 @@ def test_a_float32_head_is_another_architecture(env_spec: Any) -> None:
     assert factory.arch_digest(env_spec, plain) != factory.arch_digest(
         env_spec, msgspec.structs.replace(plain, policy_head_float32=True)
     )
+
+
+def test_every_bare_actor_comes_through_one_builder_that_reads_the_flag(env_spec: Any) -> None:
+    """A pool snapshot's actor, an evaluation farm's and a saved bot's are built bare, not by
+    the factory. They were built round it, and ran the head at the autocast dtype whatever the
+    flag said (caught before 0.5.15 was tagged). Plant: build one directly again, and the scan
+    below finds it."""
+    import re
+    from pathlib import Path
+
+    import royalelearn
+    from royalelearn.learn.nets import build_actor
+
+    arch = msgspec.structs.replace(ARCH, autocast_dtype="bfloat16", policy_head_float32=True)
+    assert build_actor(env_spec, arch).head_float32 is True
+    unset = msgspec.structs.replace(arch, policy_head_float32=msgspec.UNSET)
+    assert build_actor(env_spec, unset).head_float32 is False
+    root = Path(royalelearn.__file__).parent
+    direct = sorted(
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*.py")
+        if re.search(r"(?<!class )\bClashActor\(", path.read_text(encoding="utf-8"))
+    )
+    assert direct == ["learn/nets.py"]

@@ -754,6 +754,19 @@ def head_meta(arch: ArchSpec) -> dict[str, Any]:
     return {"policy_head": arch.policy_head, "factored_act_init": arch.factored_act_init}
 
 
+def build_actor(spec: EnvSpec, arch: ArchSpec) -> ClashActor:
+    """A bare actor of ``arch``, uninitialised, at its autocast dtype and its head's precision.
+
+    Every actor is built here -- the factory's, a pool snapshot's, an evaluation farm's, a saved
+    bot's -- so none of them can run what the weights were trained in differently.
+    """
+    actor = ClashActor(
+        ClashTrunk(spec, arch), build_policy_head(spec, arch), resolve_dtype(arch.autocast_dtype)
+    )
+    actor.head_float32 = policy_head_float32_of(arch)
+    return actor
+
+
 def build_policy_head(spec: EnvSpec, arch: ArchSpec) -> PointerPolicyHead:
     """The policy head ``net.policy_head`` names. Every place that builds an actor -- the factory,
     a snapshot's bare actor, a saved bot -- comes through here, so none of them can build the
@@ -832,8 +845,7 @@ class DefaultNetworkFactory(NetworkFactory):
         autocast_dtype = resolve_dtype(arch.autocast_dtype if dtype is None else dtype)
 
         generator = self.generator()
-        actor = ClashActor(ClashTrunk(spec, arch), build_policy_head(spec, arch))
-        actor.head_float32 = policy_head_float32_of(arch)
+        actor = build_actor(spec, arch)
         actor.initialise(generator)
         model: ActorCritic
         if arch.separate_trunks:

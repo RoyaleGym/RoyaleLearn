@@ -1497,15 +1497,9 @@ class LearningCoordinator:
 
     def build_actor(self, device: Any) -> Any:
         """A bare actor of this run's architecture, for a snapshot to load into."""
-        from .learn.actor_critic import ClashActor
-        from .learn.nets import ClashTrunk, build_policy_head, resolve_dtype
+        from .learn.nets import build_actor
 
-        actor = ClashActor(
-            ClashTrunk(self.spec, self.config.net),
-            build_policy_head(self.spec, self.config.net),
-            resolve_dtype(self.config.net.autocast_dtype),
-        )
-        return actor.to(device)
+        return build_actor(self.spec, self.config.net).to(device)
 
     def _snapshot_obs_digest(self, member: str) -> str:
         """What a member saw, for the evaluation runner's pairing check.

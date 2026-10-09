@@ -96,15 +96,9 @@ def _build_player(config: EvalWorkerConfig) -> Any:
     from .snapshots import DiskSnapshotStore
 
     def build_actor(device: Any) -> Any:
-        from ..learn.actor_critic import ClashActor
-        from ..learn.nets import ClashTrunk, build_policy_head, resolve_dtype
+        from ..learn.nets import build_actor
 
-        actor = ClashActor(
-            ClashTrunk(config.spec, config.net),
-            build_policy_head(config.spec, config.net),
-            resolve_dtype(config.net.autocast_dtype),
-        )
-        return actor.to(device)
+        return build_actor(config.spec, config.net).to(device)
 
     store = DiskSnapshotStore(
         Path(config.snapshot_root),

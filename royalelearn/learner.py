@@ -816,16 +816,13 @@ class Bot:
     def load(cls, path: str | os.PathLike[str], *, greedy: bool = False) -> Bot:
         from .api.rollout import EnvSpec
         from .ladder.snapshots import _decode_tensors
-        from .learn.actor_critic import ClashActor
-        from .learn.nets import ClashTrunk, build_policy_head, resolve_dtype
+        from .learn.nets import build_actor
 
         record_file, weights = _bot_files(Path(path))
         record = msgspec.json.decode(record_file.read_bytes())
         spec = msgspec.convert(record["env_spec"], EnvSpec)
         net = msgspec.convert(record["net"], cfg.NetConfig)
-        actor = ClashActor(
-            ClashTrunk(spec, net), build_policy_head(spec, net), resolve_dtype(net.autocast_dtype)
-        )
+        actor = build_actor(spec, net)
         state = _decode_tensors(weights.read_bytes(), "cpu")
         # A checkpoint names the actor's tensors from the actor-critic pair: "actor.trunk...".
         if state and all(name.startswith("actor.") for name in state):
