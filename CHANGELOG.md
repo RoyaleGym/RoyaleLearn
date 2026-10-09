@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `device="auto"` trains on the CPU, and says why in one line, when the NVIDIA card torch can
+  see is one this PyTorch was not built for: a GTX 970 (sm_52) under a build for sm_75 and
+  newer, say, where the first kernel failed with "no kernel image is available". A run that
+  names the GPU itself is refused with the same reason. A card runs a build with machine code
+  for its major version at or below its minor, or PTX at or below its capability
+  (`royalelearn.gpu.cuda_arch_supported`); AMD cards are not judged this way.
+
 ## 0.5.16
 
 - `SnapshotSpec.actor_digest`: what an actor folder's weights compute, which is `arch_digest`

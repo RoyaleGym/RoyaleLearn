@@ -1202,9 +1202,15 @@ class LearningCoordinator:
         """
         if self.device.type != "cuda":
             return
-        from .gpu import ZLUDA, carries_ptx, gpu_backend
+        from .gpu import ZLUDA, carries_ptx, gpu_backend, unsupported_gpu
         from .learn.nets import resolve_dtype
 
+        problem = unsupported_gpu(self.device.index or 0)
+        if problem is not None:
+            raise PreflightError(
+                f"{problem}. Train on the CPU instead (device='cpu', or net.device cpu in a "
+                "config), or install a PyTorch built for this card"
+            )
         if gpu_backend(self.device.index or 0) != ZLUDA:
             return
         if carries_ptx() is False:

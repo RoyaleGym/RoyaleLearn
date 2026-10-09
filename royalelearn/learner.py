@@ -154,14 +154,20 @@ NO_GPU_LINE = (
 
 
 def resolve_device(device: str) -> str:
-    """``device`` as torch names it: "auto" is "cuda" when torch can see a GPU, else "cpu",
-    saying so in one printed line; anything else is passed through."""
+    """``device`` as torch names it: "auto" is "cuda" when torch can see a GPU it was built to
+    run on, else "cpu", saying so in one printed line; anything else is passed through."""
     if device != "auto":
         return device
     import torch
 
     if torch.cuda.is_available():
-        return "cuda"
+        from .gpu import unsupported_gpu
+
+        problem = unsupported_gpu()
+        if problem is None:
+            return "cuda"
+        print(f"{problem}, so this trains on the CPU, which is much slower.")
+        return "cpu"
     print(NO_GPU_LINE)
     return "cpu"
 

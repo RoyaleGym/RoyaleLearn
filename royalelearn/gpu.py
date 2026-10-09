@@ -13,6 +13,7 @@ is how it is told apart.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 __all__ = [
@@ -21,9 +22,11 @@ __all__ = [
     "ZLUDA",
     "ZLUDA_SUFFIX",
     "carries_ptx",
+    "cuda_arch_supported",
     "gpu_backend",
     "is_rocm",
     "tf32_capable",
+    "unsupported_gpu",
 ]
 
 CUDA = "cuda"
@@ -76,6 +79,66 @@ def carries_ptx() -> bool | None:
     if not arches:
         return None
     return any(str(arch).startswith("compute_") for arch in arches)
+
+
+def _arch(entry: str) -> tuple[str, int, int] | None:
+    """``"sm_86"`` -> ("sm", 8, 6); ``"compute_120"`` -> ("compute", 12, 0); None otherwise."""
+    kind, _, number = str(entry).partition("_")
+    if kind not in ("sm", "compute") or len(number) < 2 or not number.isdigit():
+        return None
+    return kind, int(number[:-1]), int(number[-1])
+
+
+def cuda_arch_supported(capability: tuple[int, int], arches: Sequence[str]) -> bool | None:
+    """Whether a card of ``capability`` runs a build compiled for ``arches``; None if the
+    build does not say.
+
+    Machine code (``sm_XY``) runs on cards of the same major version at the same minor or
+    higher. PTX (``compute_XY``) is compiled by the driver for any card at that capability or
+    above.
+    """
+    parsed = [arch for arch in (_arch(entry) for entry in arches) if arch is not None]
+    if not parsed:
+        return None
+    major, minor = int(capability[0]), int(capability[1])
+    for kind, arch_major, arch_minor in parsed:
+        if kind == "sm" and arch_major == major and arch_minor <= minor:
+            return True
+        if kind == "compute" and (arch_major, arch_minor) <= (major, minor):
+            return True
+    return False
+
+
+def unsupported_gpu(index: int = 0) -> str | None:
+    """Why this torch cannot run on the NVIDIA card it sees, or None when it can or cannot tell.
+
+    ``torch.cuda.is_available()`` is true for any card the driver sees, whether or not this torch
+    was compiled for its architecture; the first kernel it launches on one it was not compiled
+    for fails with "no kernel image is available". AMD cards are not judged this way.
+    """
+    import torch
+
+    try:
+        if gpu_backend(index) != CUDA:
+            return None
+        major, minor = torch.cuda.get_device_capability(index)
+        arches = list(torch.cuda.get_arch_list())
+        name = str(torch.cuda.get_device_name(index))
+    except Exception:
+        return None
+    if cuda_arch_supported((major, minor), arches) is not False:
+        return None
+    built = sorted(
+        (arch_major, arch_minor)
+        for kind, arch_major, arch_minor in (a for a in map(_arch, arches) if a is not None)
+        if kind == "sm"
+    )
+    if built and (major, minor) < built[0]:
+        span = f"which runs on sm_{built[0][0]}{built[0][1]} and newer"
+        return f"Your graphics card ({name}, sm_{major}{minor}) is too old for this PyTorch, {span}"
+    listed = ", ".join(arches)
+    card = f"Your graphics card ({name}, sm_{major}{minor})"
+    return f"{card} is not one this PyTorch runs on ({listed})"
 
 
 def tf32_capable(device: Any) -> bool:
