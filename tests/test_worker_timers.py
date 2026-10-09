@@ -161,7 +161,8 @@ def test_a_slow_parent_shows_as_idle_workers_and_not_as_a_wait() -> None:
 
 @pytest.mark.slow
 def test_a_slow_environment_shows_as_the_parents_wait_and_busy_workers() -> None:
-    """Each step takes about 8 ms in the reward alone, and the parent answers at once: it waits.
+    """Each step takes at least 4 ms in the reward alone -- one battle a shard, two seats, 2 ms a
+    call, which a sleep never cuts short -- and the parent answers at once: it waits.
 
     Plant: a parent that stops timing its wait for the publications, and this reads none.
     """
@@ -185,7 +186,7 @@ def test_a_slow_environment_shows_as_the_parents_wait_and_busy_workers() -> None
     idle = float(np.mean([t["idle_ms"] for t in steady]))
     wait = float(np.mean([t["parent_wait_ms"] for t in steady]))
     busy = float(np.mean([t["busy_mean_ms"] for t in steady]))
-    assert busy > 5.0, (idle, busy, wait)
+    assert busy > 3.5, (idle, busy, wait)
     assert wait > 2.0, (idle, busy, wait)
     assert wait > idle, (idle, busy, wait)
 
