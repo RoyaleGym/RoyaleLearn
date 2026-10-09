@@ -119,16 +119,32 @@ def test_a_folder_whose_weights_are_not_the_pinned_ones_is_refused(tmp_path: Pat
     assert sha256 in message and wrong in message, message
 
 
-def test_a_folder_this_run_cannot_load_is_refused_by_field(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        # A folder that says what its actor computes is held to that.
+        ({"arch_digest": "another-network", "actor_digest": "another-actor"}, "actor_digest"),
+        # One written before the field is held to the whole architecture, as it always was.
+        ({"arch_digest": "another-network", "actor_digest": None}, "arch_digest"),
+    ],
+)
+def test_a_folder_this_run_cannot_load_is_refused_by_field(
+    tmp_path: Path, change: dict[str, Any], field: str
+) -> None:
     folder, sha256 = frozen_actor(tmp_path)
     other = tmp_path / "other-architecture"
     shutil.copytree(folder, other)
     spec = json.loads((other / SPEC_NAME).read_text(encoding="utf-8"))
-    spec["arch_digest"] = "another-network"
+    assert spec["actor_digest"]
+    for key, value in change.items():
+        if value is None:
+            del spec[key]
+        else:
+            spec[key] = value
     (other / SPEC_NAME).write_text(json.dumps(spec), encoding="utf-8")
     with pytest.raises(IdentityMismatch) as refused, coordinator(seeded(tmp_path, other, sha256)):
         pass
-    assert "arch_digest" in str(refused.value)
+    assert field in str(refused.value)
 
 
 def test_a_resume_keeps_the_seed_without_its_folder(tmp_path: Path) -> None:

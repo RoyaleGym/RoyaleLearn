@@ -59,6 +59,10 @@ class SnapshotSpec(msgspec.Struct, frozen=True):
 
     snapshot_id: str
     arch_digest: str = ""
+    #: What the actor's weights compute (``learn.nets.actor_digest_of``): ``arch_digest`` less
+    #: the precision, the device, the initialisation and the critic. Unset in a folder written
+    #: before it existed, and then left out of ``spec.json``, so that folder keeps its bytes.
+    actor_digest: str | msgspec.UnsetType = msgspec.UNSET
     obs_digest: str = ""
     action_digest: str = ""
     codec_version: int = 0
@@ -73,15 +77,24 @@ class SnapshotSpec(msgspec.Struct, frozen=True):
     meta: dict[str, JsonValue] = msgspec.field(default_factory=dict)
 
 
+def _stated(value: Any) -> bool:
+    return value is not msgspec.UNSET and bool(value)
+
+
 def check_compatible(stored: SnapshotSpec, current: SnapshotSpec) -> None:
     """Refuse a snapshot the current run cannot read, naming every field that differs.
 
     All of them at once: fixing an incompatibility one error message at a time is several
     minutes per field on a machine that takes a minute to build an environment.
     """
+    fields = COMPATIBILITY_FIELDS
+    # Both sides say what their actors compute: that, and not the whole architecture, is what
+    # a load needs to agree on. A folder from before the field is held to arch_digest as ever.
+    if _stated(stored.actor_digest) and _stated(current.actor_digest):
+        fields = tuple("actor_digest" if f == "arch_digest" else f for f in fields)
     differences = {
         field: (getattr(stored, field), getattr(current, field))
-        for field in COMPATIBILITY_FIELDS
+        for field in fields
         if getattr(stored, field) and getattr(stored, field) != getattr(current, field)
     }
     if differences:

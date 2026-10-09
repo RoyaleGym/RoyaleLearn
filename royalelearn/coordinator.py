@@ -1322,12 +1322,13 @@ class LearningCoordinator:
     def artifact_spec(self) -> SnapshotSpec:
         """What an actor this run can load must agree with: section 11.6's compatibility fields
         and the action layout. The pool's template is this plus where the snapshot came from."""
-        from .learn.nets import head_meta
+        from .learn.nets import actor_digest_of, head_meta
 
         assert self.report is not None
         return SnapshotSpec(
             snapshot_id="",
             arch_digest=self.arch_digest,
+            actor_digest=actor_digest_of(self.spec, self.config.net),
             obs_digest=self.spec.obs_digest,
             action_digest=self.identity.action_digest if self.identity else "",
             codec_version=self.report.codec_version,

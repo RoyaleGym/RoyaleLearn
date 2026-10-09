@@ -275,6 +275,89 @@ def _arch_for_digest(arch: ArchSpec) -> Any:
     return shape(**{name: getattr(arch, name) for name, _, _ in fields})
 
 
+#: Fields left out of ``actor_digest``: how a set of actor weights is run rather than what it
+#: computes (the precision, the head's precision, the device), where it started (overwritten by
+#: any load), and the critic, which an actor folder does not carry. ``noop_bias`` is NOT among
+#: them: it is a constant added to the no-op logit in the forward.
+ACTOR_NEUTRAL_FIELDS = frozenset(
+    {
+        "autocast_dtype",
+        "policy_head_float32",
+        "device",
+        "init",
+        "factored_act_init",
+        "separate_trunks",
+        "value_hidden",
+        "critic_channels",
+        "critic_blocks",
+    }
+)
+
+
+def _arch_for_actor(arch: ArchSpec) -> Any:
+    """``_arch_for_digest`` without ``ACTOR_NEUTRAL_FIELDS``."""
+    whole = _arch_for_digest(arch)
+    fields = [
+        (f.name, f.type, f.default)
+        for f in msgspec.structs.fields(whole)
+        if f.name not in ACTOR_NEUTRAL_FIELDS
+    ]
+    shape = msgspec.defstruct(type(arch).__name__, fields, frozen=True)
+    return shape(**{name: getattr(whole, name) for name, _, _ in fields})
+
+
+def _shape_facts(spec: EnvSpec, arch: ArchSpec) -> dict[str, Any]:
+    """What of the environment and the assembled classes decides the tensors' shapes, for both
+    digests."""
+    return {
+        "obs_space": {
+            key: {"shape": k.shape, "dtype": k.dtype, "low": k.low, "high": k.high}
+            for key, k in spec.obs_space.items()
+        },
+        "frame_stack": spec.frame_stack,
+        "num_cards": spec.num_cards,
+        "n_actions": spec.n_actions,
+        "hand_size": spec.hand_size,
+        "tiles": spec.tiles,
+        "trunk": ClashTrunk.__name__,
+        "head": (
+            FactoredPolicyHead if arch.policy_head == "factored" else PointerPolicyHead
+        ).__name__,
+        # Only when there are card ids to embed, so every digest before D2 is unchanged.
+        **({"card_id_embed": CARD_ID_EMBED} if "card_ids" in spec.obs_space else {}),
+        **({"unit_id_embed": UNIT_ID_EMBED} if UNIT_IDS in spec.obs_space else {}),
+        # Only when the spells' ids are on, so every digest before them is unchanged.
+        **(
+            {"spell_id_planes": int(spec.obs_space["spell_ids"].shape[0])}
+            if "spell_ids" in spec.obs_space
+            else {}
+        ),
+    }
+
+
+def arch_digest_of(spec: EnvSpec, arch: ArchSpec) -> str:
+    """``DefaultNetworkFactory.arch_digest``: the run's architecture whole, which its identity,
+    checkpoints and resume are held to."""
+    return digest_of(
+        {
+            "arch": _arch_for_digest(arch),
+            **_shape_facts(spec, arch),
+            "actor_critic": (
+                SeparateActorCritic.__name__
+                if arch.separate_trunks
+                else SharedTrunkActorCritic.__name__
+            ),
+        }
+    )
+
+
+def actor_digest_of(spec: EnvSpec, arch: ArchSpec) -> str:
+    """What a set of actor weights computes: ``arch_digest`` without ``ACTOR_NEUTRAL_FIELDS``
+    and without the critic. Two runs that agree on it can load each other's actor folders, at
+    any precision, on any device, whatever their critics."""
+    return digest_of({"actor": _arch_for_actor(arch), **_shape_facts(spec, arch)})
+
+
 def _flat(value: Any) -> list[Any]:
     """A bound as a flat list, whether the space recorded it as a scalar or nested lists."""
     if isinstance(value, list | tuple):
@@ -869,40 +952,7 @@ class DefaultNetworkFactory(NetworkFactory):
         of the classes that were assembled. A snapshot or a checkpoint from a different one is
         then refused by name instead of arriving as a shape error from the middle of a load.
         """
-        return digest_of(
-            {
-                "arch": _arch_for_digest(arch),
-                "obs_space": {
-                    key: {"shape": k.shape, "dtype": k.dtype, "low": k.low, "high": k.high}
-                    for key, k in spec.obs_space.items()
-                },
-                "frame_stack": spec.frame_stack,
-                "num_cards": spec.num_cards,
-                "n_actions": spec.n_actions,
-                "hand_size": spec.hand_size,
-                "tiles": spec.tiles,
-                "trunk": ClashTrunk.__name__,
-                "head": (
-                    FactoredPolicyHead
-                    if arch.policy_head == "factored"
-                    else PointerPolicyHead
-                ).__name__,
-                "actor_critic": (
-                    SeparateActorCritic.__name__
-                    if arch.separate_trunks
-                    else SharedTrunkActorCritic.__name__
-                ),
-                # Only when there are card ids to embed, so every digest before D2 is unchanged.
-                **({"card_id_embed": CARD_ID_EMBED} if "card_ids" in spec.obs_space else {}),
-                **({"unit_id_embed": UNIT_ID_EMBED} if UNIT_IDS in spec.obs_space else {}),
-                # Only when the spells' ids are on, so every digest before them is unchanged.
-                **(
-                    {"spell_id_planes": int(spec.obs_space["spell_ids"].shape[0])}
-                    if "spell_ids" in spec.obs_space
-                    else {}
-                ),
-            }
-        )
+        return arch_digest_of(spec, arch)
 
     def check_digest(
         self, spec: EnvSpec, arch: ArchSpec, digest: str, *, source: str = "the weights"

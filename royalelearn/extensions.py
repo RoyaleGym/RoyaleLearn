@@ -529,6 +529,9 @@ _SURFACE: dict[str, str] = {
     "SPEC_NAME": "royalelearn.ladder.snapshots",
     "WEIGHTS_NAME": "royalelearn.ladder.snapshots",
     "SnapshotSpec": "royalelearn.ladder.snapshots",
+    "actor_digest_of": "royalelearn.learn.nets",
+    "arch_digest_of": "royalelearn.learn.nets",
+    "NetConfig": "royalelearn.config",
     "check_compatible": "royalelearn.ladder.snapshots",
     # alarms and metrics
     "Alarm": "royalelearn.api.metrics",

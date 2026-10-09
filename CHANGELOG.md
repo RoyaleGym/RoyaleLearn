@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `SnapshotSpec.actor_digest`: what an actor folder's weights compute, which is `arch_digest`
+  less the autocast precision, the head's precision, the device, the initialisation and the
+  critic (`learn.nets.actor_digest_of`; `net.noop_bias`, added in the forward, stays in).
+  `check_compatible` compares it when both sides state it, so a warm start or a pool snapshot
+  loads into a run that differs only there, a bfloat16 run from a float32 clone, say. A folder
+  without it is held to `arch_digest` as before, and an unset one is not written, so existing
+  folders keep their bytes. A run's identity and resume keep `arch_digest`. The extensions
+  surface carries `actor_digest_of`, `arch_digest_of` and `NetConfig`.
+
 ## 0.5.15
 
 - `net.policy_head_float32` computes the policy's logits in float32 from the trunk's features
