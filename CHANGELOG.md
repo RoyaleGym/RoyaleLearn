@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.15
 
 - `net.policy_head_float32` computes the policy's logits in float32 from the trunk's features
   while the trunk keeps `net.autocast_dtype`. Under bfloat16 a large logit is rounded to
