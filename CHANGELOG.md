@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.13
 
 - Where collection's time goes, per iteration: `time/worker_env`, `time/worker_busy` and
   `time/worker_idle` (one worker's seconds in the environments, working on rounds, and waiting
