@@ -68,7 +68,7 @@ from ..api.rollout import (
     WorkerCommand,
     WorkerFailure,
 )
-from ..config import Geometry
+from ..config import Geometry, mask_only_scripted_of
 from ..errors import PreflightError
 from ..ladder.seat_decks import battle_state_mutators
 from ..seeding import ENV_EPISODE, ENV_STAGGER, derive_generator, derive_int, stream_path
@@ -239,6 +239,8 @@ class WorkerConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: One deal per battle of the rectangle, installed as that battle's state mutator
     #: (``ladder.seat_decks``, ``royalelearn/ladder/seat_decks.py``); empty keeps the env's own.
     state_mutators: tuple[ComponentSpec, ...] = ()
+    #: ``rollout.mask_only_scripted``: scripted opponents' seats skip their observation.
+    mask_only_scripted: bool = False
     #: Where each battle's episode counter stood when a checkpoint was written, empty on a
     #: fresh run. The counter names the next episode, which is what makes a resumed run play
     #: the battles the original was about to play rather than the ones it began with.
@@ -382,6 +384,11 @@ class ShardRunner:
         self.opponent_ix = np.full(self.n_slots, NO_OPPONENT, dtype=np.int8)
         self.learner_seat = np.full(self.games, -1, dtype=np.int8)
         self.resident_snapshots: tuple[str, ...] = ()
+        # Not where the viewer or the recorder is: both read the battle's state, which an
+        # environment that has stopped building a seat's observation no longer gives.
+        self.mask_only_scripted = (
+            bool(config.mask_only_scripted) and viser is None and recorder is None
+        )
         self.ordinal = np.zeros(self.games, dtype=np.int64)
         self.episode_steps = np.zeros(self.n_slots, dtype=np.int32)
         self.cards_played = np.zeros(self.n_slots, dtype=np.int32)
@@ -562,6 +569,23 @@ class ShardRunner:
         self.group[:] = rows["group"]
         self.opponent_ix[:] = rows["opponent_ix"]
         self.learner_seat[:] = rows["learner_seat"][::2]
+        if self.mask_only_scripted:
+            self._skip_scripted_observations()
+
+    def _skip_scripted_observations(self) -> None:
+        """Every scripted seat's observation, from its next one on, as masks alone.
+
+        A scripted opponent reads nothing else. The call is made on every step: asking again
+        for a seat already skipped changes nothing, a new episode's reset clears it, and the
+        assignment that names a new episode's opponent is the one this step carries.
+        """
+        scripted = self.group == GROUP_SCRIPTED
+        for game, env in enumerate(self.vec.envs):
+            seats = [
+                agent for seat, agent in enumerate(("blue", "red")) if scripted[2 * game + seat]
+            ]
+            if seats:
+                env.set_mask_only(seats)
 
     def apply_state(self, snapshots: Sequence[bytes | None]) -> None:
         """Start each battle from a recorded position. Off the hot path, by construction."""
@@ -1559,6 +1583,7 @@ class InlineRolloutSource(RolloutSourceBase):
             recorder=rollout.recorder if worker == 0 else None,
             state_mutators=battle_state_mutators(self.config, self.geometry),
             ordinals=self.ordinals,
+            mask_only_scripted=mask_only_scripted_of(rollout),
         )
 
     def _parity(self, worker: int, shard: int) -> int:

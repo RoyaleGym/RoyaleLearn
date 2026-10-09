@@ -183,6 +183,13 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: trained without. It reaches exactly one env of one shard of worker 0 -- see
     #: ``EnvFactorySpec.factory`` for why one rather than all of them.
     recorder: ComponentSpec | None = None
+    #: Skip building a scripted opponent's observation after its episode's first step
+    #: (RoyaleGym's ``ClashParallelEnv.set_mask_only``): every key stays at its shape, zero but
+    #: the masks, which is all a scripted opponent reads, so it plays the same. Its first
+    #: observation stays whole, because a battle's opponent is assigned after its episode
+    #: starts. Not on the shard that carries the viewer or the recorder, which read the
+    #: battle's state. Unset means off, and is left out of the encoding.
+    mask_only_scripted: bool | msgspec.UnsetType = msgspec.UNSET
 
 
 class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -261,6 +268,11 @@ def hand_slot_features_of(net: NetConfig) -> tuple[str, ...]:
 def button_head_of(net: NetConfig) -> str:
     """``net.button_head``, with an unset one read as "index"."""
     return "index" if net.button_head is msgspec.UNSET else str(net.button_head)
+
+
+def mask_only_scripted_of(rollout: RolloutConfig) -> bool:
+    """``rollout.mask_only_scripted``, with an unset one read as False."""
+    return rollout.mask_only_scripted is not msgspec.UNSET and bool(rollout.mask_only_scripted)
 
 
 def trunk_stride_of(net: NetConfig) -> int:

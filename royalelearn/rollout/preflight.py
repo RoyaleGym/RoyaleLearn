@@ -150,6 +150,15 @@ def run_preflight(
             seed=derive_int(config.master_seed, stream_path(PREFLIGHT_ENV)),
         )
         env = vec.envs[0]
+        from ..config import mask_only_scripted_of
+
+        if mask_only_scripted_of(config.rollout) and not callable(
+            getattr(env, "set_mask_only", None)
+        ):
+            raise PreflightError(
+                "rollout.mask_only_scripted needs RoyaleGym's ClashParallelEnv.set_mask_only, "
+                "which this royalegym does not have: upgrade royalegym, or leave the setting off"
+            )
         env_config = env.config()
         say(f"engine        {env_config['engine']['class']} on {spec.num_cards} cards")
         say(

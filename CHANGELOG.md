@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `rollout.mask_only_scripted`: a scripted opponent's seat skips building its observation after
+  its episode's first step (RoyaleGym's `ClashParallelEnv.set_mask_only`), since a scripted
+  opponent reads only the masks. The run plays exactly what it played without it: the same
+  actions, rewards and episodes, and the same learner rows. Not on the shard that carries the
+  viewer or the recorder. Refused by preflight on a royalegym without the switch. Unset, off.
+
 ## 0.5.17
 
 - `device="auto"` trains on the CPU, and says why in one line, when the NVIDIA card torch can

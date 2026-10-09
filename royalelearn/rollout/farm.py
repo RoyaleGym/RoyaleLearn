@@ -34,6 +34,7 @@ import msgspec
 import numpy as np
 
 from ..api.rollout import EpisodeRecord, WorkerFailure
+from ..config import mask_only_scripted_of
 from ..errors import PreflightError, WorkerTimeout
 from ..ladder.seat_decks import battle_state_mutators
 from .envspec import NOT_RECORDED, NOT_STATED
@@ -251,6 +252,7 @@ class ProcessRolloutSource(RolloutSourceBase):
             recorder=rollout.recorder if worker.index == 0 else None,
             state_mutators=battle_state_mutators(self.config, self.geometry),
             ordinals=self.ordinals,
+            mask_only_scripted=mask_only_scripted_of(rollout),
         )
 
     def _await_report(self, worker: _Worker) -> StartupReport:
