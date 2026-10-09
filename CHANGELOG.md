@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `net.critic_channels` and `net.critic_blocks` give the critic's trunk, and its value head, a
+  width and depth of their own under `net.separate_trunks`. Unset, the critic is the actor's
+  size and every config hash and architecture digest is as before. A critic shape that cannot
+  be built is refused by these names.
+
 ## 0.5.14
 
 - `royalelearn bench` times the codec on a row with every key the run's observation space

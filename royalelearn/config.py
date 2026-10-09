@@ -221,6 +221,13 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     coord_conv: bool = True
     #: Makes "the mask and the entropy bonus never touch the critic" structural.
     separate_trunks: bool = True
+    #: The critic trunk's own width and depth, where ``separate_trunks`` gives it one. Under
+    #: ``ppo.forced_rows`` "critic_only" the critic runs on every row and the actor only on the
+    #: rows with a choice, so most of an update can be the critic's. Its value head follows its
+    #: width. Unset means the actor's ``channels`` and ``blocks``, and is left out of the
+    #: encoding, so every config and ``arch_digest`` from before keeps its hash.
+    critic_channels: int | msgspec.UnsetType = msgspec.UNSET
+    critic_blocks: int | msgspec.UnsetType = msgspec.UNSET
     #: "pointer": one logit per action, the no-op's from a pooled summary. "factored": three
     #: stages -- wait or act, then which hand slot or ability button, then which tile -- whose
     #: product is the same flat distribution (``learn/nets.py``, ``FactoredPolicyHead``).
@@ -252,6 +259,24 @@ def button_head_of(net: NetConfig) -> str:
 def trunk_stride_of(net: NetConfig) -> int:
     """``net.trunk_stride``, with an unset one read as 1."""
     return 1 if net.trunk_stride is msgspec.UNSET else int(net.trunk_stride)
+
+
+def critic_arch_of(net: NetConfig) -> NetConfig:
+    """What the critic's trunk and value head are built from: the actor's architecture, at
+    ``critic_channels`` and ``critic_blocks`` where they are set. Its card embedding takes the
+    same width, as the actor's must."""
+    if net.critic_channels is msgspec.UNSET and net.critic_blocks is msgspec.UNSET:
+        return net
+    channels = net.channels if net.critic_channels is msgspec.UNSET else int(net.critic_channels)
+    blocks = net.blocks if net.critic_blocks is msgspec.UNSET else int(net.critic_blocks)
+    return msgspec.structs.replace(
+        net,
+        channels=channels,
+        blocks=blocks,
+        card_embed=channels,
+        critic_channels=msgspec.UNSET,
+        critic_blocks=msgspec.UNSET,
+    )
 
 
 #: The spec's name for the same struct, used where it is the network's description rather than a

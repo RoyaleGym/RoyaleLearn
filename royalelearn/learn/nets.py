@@ -39,7 +39,7 @@ from torch import Tensor, nn
 from royalegym.action import NOOP
 
 from ..api.policy import NetworkFactory
-from ..config import button_head_of, hand_slot_features_of, trunk_stride_of
+from ..config import button_head_of, critic_arch_of, hand_slot_features_of, trunk_stride_of
 from ..errors import PreflightError
 from ..obs_layout import UNIT_IDS, field_slice, hand_fields, id_planes
 from ..rollout.envspec import digest_of
@@ -171,6 +171,7 @@ def _logit_scale(arch: ArchSpec) -> float:
 
 def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
     """Everything about an architecture that can be refused before a tensor is allocated."""
+    _check_critic(arch)
     if arch.channels % arch.norm_groups:
         raise PreflightError(
             f"net.norm_groups {arch.norm_groups} does not divide net.channels {arch.channels}"
@@ -222,6 +223,29 @@ def _check_arch(spec: EnvSpec, arch: ArchSpec) -> None:
                 f"net.factored_act_init {arch.factored_act_init} is not a probability strictly "
                 "between 0 and 1"
             )
+
+
+def _check_critic(arch: ArchSpec) -> None:
+    """``net.critic_channels`` and ``net.critic_blocks``, by their own names: refused under the
+    actor's names, a bad critic width would read as a fault in a field that is fine."""
+    channels, blocks = arch.critic_channels, arch.critic_blocks
+    if channels is msgspec.UNSET and blocks is msgspec.UNSET:
+        return
+    if not arch.separate_trunks:
+        raise PreflightError(
+            "net.critic_channels and net.critic_blocks need net.separate_trunks: with one trunk "
+            "the critic has no trunk of its own to size"
+        )
+    if channels is not msgspec.UNSET:
+        if int(channels) < 1:
+            raise PreflightError(f"net.critic_channels is {channels}")
+        if int(channels) % arch.norm_groups:
+            raise PreflightError(
+                f"net.norm_groups {arch.norm_groups} does not divide net.critic_channels "
+                f"{channels}"
+            )
+    if blocks is not msgspec.UNSET and int(blocks) < 0:
+        raise PreflightError(f"net.critic_blocks is {blocks}")
 
 
 def _arch_for_digest(arch: ArchSpec) -> Any:
@@ -806,7 +830,8 @@ class DefaultNetworkFactory(NetworkFactory):
         actor.initialise(generator)
         model: ActorCritic
         if arch.separate_trunks:
-            critic = ClashCritic(ClashTrunk(spec, arch), ValueHead(spec, arch))
+            critic_arch = critic_arch_of(arch)
+            critic = ClashCritic(ClashTrunk(spec, critic_arch), ValueHead(spec, critic_arch))
             critic.initialise(generator)
             model = SeparateActorCritic(actor, critic, arch, torch_device, autocast_dtype)
         else:
