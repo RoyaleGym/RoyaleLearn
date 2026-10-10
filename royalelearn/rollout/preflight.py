@@ -157,7 +157,8 @@ def run_preflight(
         ):
             raise PreflightError(
                 "rollout.mask_only_scripted needs RoyaleGym's ClashParallelEnv.set_mask_only, "
-                "which this royalegym does not have: upgrade royalegym, or leave the setting off"
+                "which this royalegym does not have (it came in 0.1.21): upgrade royalegym, or "
+                "leave the setting off"
             )
         env_config = env.config()
         say(f"engine        {env_config['engine']['class']} on {spec.num_cards} cards")

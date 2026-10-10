@@ -6,7 +6,8 @@
   its episode's first step (RoyaleGym's `ClashParallelEnv.set_mask_only`), since a scripted
   opponent reads only the masks. The run plays exactly what it played without it: the same
   actions, rewards and episodes, and the same learner rows. Not on the shard that carries the
-  viewer or the recorder. Refused by preflight on a royalegym without the switch. Unset, off.
+  viewer or the recorder. Needs royalegym 0.1.21; preflight refuses it on an older one.
+  Unset, off.
 
 ## 0.5.17
 
