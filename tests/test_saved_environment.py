@@ -330,3 +330,95 @@ def test_from_config_is_called_only_for_the_classes_named_for_it(
     monkeypatch.setattr(WinLossReward, "from_config", classmethod(refuse), raising=False)
     env = Learner.load_env(folder)
     env.close()
+
+
+def _forwarding_engine(monkeypatch: pytest.MonkeyPatch) -> type:
+    """A RoyaleGym engine whose ``__init__`` takes ``*args, **kwargs`` and hands them to its
+    base's, as ``SymmetricRustEngine`` does, put where load_env may find it."""
+    import royalegym.mock_engine as mock_engine
+
+    class ForwardingMockEngine(mock_engine.MockEngine):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+
+    ForwardingMockEngine.__module__ = mock_engine.__name__
+    monkeypatch.setattr(mock_engine, "ForwardingMockEngine", ForwardingMockEngine, raising=False)
+    return ForwardingMockEngine
+
+
+def _saved_env(folder: Path, env: Any) -> Path:
+    from royalelearn.extensions import write_environment_record
+
+    write_environment_record(folder, _described(env))
+    return folder
+
+
+def test_an_engine_that_hands_its_settings_to_its_base_rebuilds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It takes its base's settings, and is held to them. Plant: read only its own signature,
+    and ``cards`` reaches the base's constructor as a keyword it does not take; or a setting the
+    base takes, recorded and not reproduced, is only noted."""
+    from royalegym import ClashParallelEnv
+    from royalegym.done_condition import GameOverCondition, StepLimitCondition
+    from royalegym.mock_engine import MOCK_CARD_NAMES
+
+    engine_cls = _forwarding_engine(monkeypatch)
+    engine = engine_cls(card_names=MOCK_CARD_NAMES[:-1])
+    folder = _saved_env(
+        tmp_path / "bot",
+        ClashParallelEnv(
+            engine, termination_cond=GameOverCondition(), truncation_cond=StepLimitCondition(6)
+        ),
+    )
+    record = msgspec.json.decode((folder / "environment.json").read_bytes())
+    assert record["engine"]["class"] == "royalegym.mock_engine.ForwardingMockEngine"
+    env = Learner.load_env(folder)
+    try:
+        assert type(env.engine) is engine_cls
+        assert _described_open(env) == record
+    finally:
+        env.close()
+
+    def names_a_setting(record: dict[str, Any]) -> None:
+        record["engine"]["params"]["card_names"] = ["Knight"]
+
+    _rewrite(folder, names_a_setting)
+    with pytest.raises(PreflightError, match=r"engine card_names"):
+        Learner.load_env(folder)
+
+
+def test_a_refused_carry_on_leaves_the_runs_record_alone(tmp_path: Path) -> None:
+    """The run's ``environment.json`` describes the env its checkpoints played. Plant: write it
+    before the carry-on is checked, and a refused one leaves the other env's record behind."""
+    run = tmp_path / "run"
+    Learner(build_env, n_envs=2, device="cpu", save_dir=run, **TINY).learn(total_steps=16)
+    before = (run / "environment.json").read_bytes()
+    other = Learner(build_env_of_my_own, n_envs=2, device="cpu", save_dir=run, **TINY)
+    assert other.environment != msgspec.json.decode(before)
+    with pytest.raises(PreflightError, match="cannot carry it on"):
+        other.learn(total_steps=32)
+    assert (run / "environment.json").read_bytes() == before
+
+
+@pytest.mark.engine
+def test_a_symmetric_rust_engine_rebuilds(tmp_path: Path) -> None:
+    from royalegym import ClashParallelEnv
+    from royalegym.done_condition import GameOverCondition, StepLimitCondition
+
+    rust_engine = pytest.importorskip("royalegym.rust_engine")
+    folder = _saved_env(
+        tmp_path / "bot",
+        ClashParallelEnv(
+            rust_engine.SymmetricRustEngine(),
+            termination_cond=GameOverCondition(),
+            truncation_cond=StepLimitCondition(6),
+        ),
+    )
+    record = msgspec.json.decode((folder / "environment.json").read_bytes())
+    env = Learner.load_env(folder)
+    try:
+        assert type(env.engine) is rust_engine.SymmetricRustEngine
+        assert _described_open(env) == record
+    finally:
+        env.close()

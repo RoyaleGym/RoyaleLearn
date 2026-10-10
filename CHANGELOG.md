@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `Learner.load_env` rebuilds an engine whose `__init__` takes `*args, **kwargs` and hands them
+  to its base's, RoyaleGym's `SymmetricRustEngine` among them, which failed on `cards`. It takes
+  its base's settings, and is held to them as any engine is.
+- A refused carry-on, `learn` over a run started with another network, environment or opponent
+  setup, leaves the run's `environment.json` as it was. It was rewritten with the new env before
+  the check.
+
 ## 0.5.18
 
 - `rollout.mask_only_scripted`: a scripted opponent's seat skips building its observation after

@@ -423,7 +423,6 @@ class Learner:
         config = self.config
         if latest is not None:
             self._say_what_changed()
-        write_environment_record(self.save_dir, self._environment)
         print(
             f"training in {self.save_dir} on {config.env.engine.cls.rsplit('.', 1)[-1]}: "
             f"{config.rollout.games_per_worker} battles at once, a line every "
@@ -463,8 +462,11 @@ class Learner:
         )
         with run:
             # What a bot is besides its weights, beside the checkpoints, so that a run stopped
-            # with Ctrl-C, or killed, loads as a bot from its folder.
+            # with Ctrl-C, or killed, loads as a bot from its folder. Only once the run is
+            # entered, which is where a carry-on is checked: a refused one leaves the records of
+            # the run it could not carry on.
             self._write_record(self.save_dir, run.spec)
+            write_environment_record(self.save_dir, self._environment)
             run.learn(until_timesteps=total_steps)
             self.steps = int(run.cumulative_timesteps)
             self._model = run.model
@@ -648,12 +650,37 @@ def _part_class(key: str, path: str) -> Any:
     return cls
 
 
+def _constructor_keywords(cls: type) -> set[str] | None:
+    """The settings ``cls(...)`` takes by name. A class whose ``__init__`` takes ``**kwargs`` and
+    hands them to its base's (RoyaleGym's ``SymmetricRustEngine``) takes its own and its bases'.
+    None when no class in its line names them."""
+    import inspect
+
+    parameters = inspect.signature(cls).parameters
+    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return set(parameters)
+    named: set[str] = set()
+    by_name = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    for klass in cls.__mro__:
+        if klass is object:
+            return named
+        init = vars(klass).get("__init__")
+        if init is None:
+            continue
+        try:
+            own = list(inspect.signature(init).parameters.values())[1:]
+        except (TypeError, ValueError):
+            return None
+        named |= {p.name for p in own if p.kind in by_name}
+        if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in own):
+            return named
+    return None
+
+
 def _rebuild_part(key: str, part: Mapping[str, Any]) -> Any:
     """One part from its ``{class, params}``: ``from_config`` for the classes in ``_FROM_CONFIG``,
     else its constructor with the settings it takes (an engine's ``cards`` are its
     ``card_names``)."""
-    import inspect
-
     from .rollout.envspec import resolve_component
 
     path = str(part.get("class"))
@@ -673,10 +700,10 @@ def _rebuild_part(key: str, part: Mapping[str, Any]) -> Any:
     try:
         if f"{cls.__module__}.{cls.__qualname__}" in _FROM_CONFIG:
             return cls.from_config(params)
-        accepted = inspect.signature(cls).parameters
-        if "cards" in params and "card_names" in accepted:
-            params["card_names"] = params.pop("cards")
-        if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()):
+        accepted = _constructor_keywords(cls)
+        if accepted is not None:
+            if "cards" in params and "card_names" in accepted:
+                params["card_names"] = params.pop("cards")
             params = {k: v for k, v in params.items() if k in accepted}
         return cls(**params)
     except Exception as exc:
@@ -752,7 +779,10 @@ def load_environment(path: str | os.PathLike[str], **given: Any) -> Any:
         elif key == "engine" and (now.get(key) or {}).get("class") == value.get("class"):
             # What the engine's constructor takes, and its cards, are what the saved env chose;
             # anything else it reports is what this install read from its data.
-            accepted = set(inspect.signature(type(env.engine)).parameters) | {"cards"}
+            takes = _constructor_keywords(type(env.engine))
+            if takes is None:
+                takes = set(inspect.signature(type(env.engine)).parameters)
+            accepted = takes | {"cards"}
             theirs, ours = value.get("params", {}), now[key].get("params", {})
             for name in sorted(set(theirs) | set(ours)):
                 if theirs.get(name) != ours.get(name):
