@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.18
 
 - `rollout.mask_only_scripted`: a scripted opponent's seat skips building its observation after
   its episode's first step (RoyaleGym's `ClashParallelEnv.set_mask_only`), since a scripted
