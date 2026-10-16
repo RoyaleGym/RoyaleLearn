@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from .config import RunConfig, geometry
+from .config import RunConfig, geometry, policy_transform_of
 from .rollout.envspec import (
     NOT_RECORDED,
     NOT_STATED,
@@ -381,7 +381,8 @@ def _strings(value: Any) -> list[str]:
 
 
 def user_packages(config: RunConfig) -> dict[str, Path]:
-    """``{top-level package: where its source is}`` for the user code this run's env comes from.
+    """``{top-level package: where its source is}`` for the user code this run's env comes from,
+    and ``ppo.policy_transform``'s.
 
     A component counts when its class lives outside the three packages, and so does any string in
     a component's kwargs that names a module under ``extra_component_modules`` -- which is how a
@@ -408,6 +409,10 @@ def user_packages(config: RunConfig) -> dict[str, Path]:
         for text in _strings(spec.kwargs):
             if any(text == name or text.startswith(name + ".") for name in extra):
                 modules.add(text)
+    transform = policy_transform_of(config.ppo)
+    if transform is not None:
+        # ``plugin:<module>:<function>``: the policy the run trains is that module's function.
+        modules.add(transform.split(":")[1])
     found: dict[str, Path] = {}
     recorded = set(PACKAGES_WITH_COMMITS) | set(_extension_packages(config))
     for top in sorted({module.split(".")[0] for module in modules if module}):

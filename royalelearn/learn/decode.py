@@ -7,8 +7,9 @@ vector ``(B, V)``, all on the run's device, and returns ``(B,)`` integer actions
 deterministic and batched, like the two built in. Every action it returns is checked against the
 mask, and an illegal one stops the run naming the plugin.
 
-The learner's own seats always sample, because that is the policy the update trains. These modes
-are for frozen opponents (``ladder.opponent_mode``) and for evaluation (``ladder.release_mode``).
+The learner's own seats always sample the policy the update trains: the actor's, or the one
+``ppo.policy_transform`` makes of it. These modes are for frozen opponents
+(``ladder.opponent_mode``) and for evaluation (``ladder.release_mode``), which play the actor.
 """
 
 from __future__ import annotations
@@ -73,18 +74,20 @@ def resolve_decoder(mode: str) -> Decoder | None:
     kind, target = parse_mode(mode)
     if kind != PLUGIN:
         return None
+    return import_plugin(target, "decode plugin")  # type: ignore[no-any-return]
+
+
+def import_plugin(target: str, what: str) -> Callable[..., Any]:
+    """The function ``<module>:<function>`` names, imported. One that cannot be found is a
+    ``ValueError`` naming ``what`` and the target."""
     module_name, function_name = target.split(":", 1)
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:
-        raise ValueError(
-            f"decode plugin {target!r}: cannot import {module_name!r} ({exc})"
-        ) from exc
+        raise ValueError(f"{what} {target!r}: cannot import {module_name!r} ({exc})") from exc
     function = getattr(module, function_name, None)
     if not callable(function):
-        raise ValueError(
-            f"decode plugin {target!r}: {module_name} has no function {function_name!r}"
-        )
+        raise ValueError(f"{what} {target!r}: {module_name} has no function {function_name!r}")
     return function  # type: ignore[no-any-return]
 
 

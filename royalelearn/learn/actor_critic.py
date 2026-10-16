@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
     from ..config import ArchSpec
     from .nets import ClashTrunk, PointerPolicyHead, ValueHead
+    from .transform import PolicyTransform
 
 __all__ = [
     "BehaviourSnapshot",
@@ -153,7 +154,14 @@ class ClashCritic(_Autocasting, Critic):
 
 
 class _BaseActorCritic(_Autocasting, ActorCritic):
-    """What the two pairings share: the actor, the sampling path and the snapshot format."""
+    """What the two pairings share: the actor, the sampling path and the snapshot format.
+
+    ``policy_transform`` (``ppo.policy_transform``) is the learner's policy as a function of the
+    actor's logits; None is the actor's own. Every path that reads the learner's policy goes
+    through ``logits`` or ``shaped``, and ``actor`` stays the bare network a snapshot is.
+    """
+
+    policy_transform: PolicyTransform | None = None
 
     def __init__(
         self,
@@ -171,10 +179,15 @@ class _BaseActorCritic(_Autocasting, ActorCritic):
         self.arch_digest = ""
 
     def logits(self, obs: ObsBatch) -> Tensor:
-        return self.actor.logits(obs)
+        return self.shaped(self.actor.logits(obs), obs)
+
+    def shaped(self, logits: Tensor, obs: ObsBatch) -> Tensor:
+        """The actor's ``logits`` on ``obs`` as the policy the update trains."""
+        transform = self.policy_transform
+        return logits if transform is None else transform(logits, obs)
 
     def distribution(self, obs: ObsBatch) -> MaskedCategorical:
-        return self.actor.distribution(obs)
+        return MaskedCategorical(self.logits(obs), obs.mask)
 
     def act(self, obs: ObsBatch, uniforms: Tensor) -> ActResult:
         """One rollout forward: sample, and the diagnostics that come free with it.
@@ -186,7 +199,7 @@ class _BaseActorCritic(_Autocasting, ActorCritic):
         slot rather than of how many rows happened to share this forward.
         """
         with torch.no_grad():
-            distribution = self.actor.distribution(obs)
+            distribution = self.distribution(obs)
             actions = distribution.sample(uniforms)
             return ActResult(
                 actions=actions,
@@ -236,7 +249,7 @@ class SeparateActorCritic(_BaseActorCritic):
         buffer with the transition. A mask recomputed here would be a second opinion about what
         was legal when the action was taken, and the importance ratio would stop meaning
         anything."""
-        distribution = self.actor.distribution(obs)
+        distribution = self.distribution(obs)
         return BackpropResult(
             log_probs=distribution.log_prob(actions),
             entropy=distribution.entropy(),
@@ -260,7 +273,7 @@ class SeparateActorCritic(_BaseActorCritic):
         asks for this method by name when ``ppo.forced_rows`` skips rows, and
         ``check_consistency`` is what makes the shipped pairings reach it.
         """
-        return self.actor.distribution(
+        return self.distribution(
             ObsBatch(*(None if t is None else t.index_select(0, rows) for t in obs))
         )
 
@@ -293,12 +306,20 @@ class SharedTrunkActorCritic(_BaseActorCritic):
             return self.value_head(self.actor.trunk(obs), obs)
 
     def backprop(self, obs: ObsBatch, actions: Tensor) -> BackpropResult:
-        """One trunk forward, both heads off it. That sharing is the point of this variant."""
+        """One trunk forward, both heads off it. That sharing is the point of this variant.
+
+        The policy head runs as the actor's own forward runs it, out of the autocast on float32
+        features under ``net.policy_head_float32``, so these logits are the rollout's.
+        """
         with self.autocast():
             features = self.actor.trunk(obs)
-            logits = self.actor.head(features, obs)
             values = self.value_head(features, obs)
-        distribution = MaskedCategorical(logits, obs.mask)
+            if not self.actor.head_float32:
+                logits = self.actor.head(features, obs)
+        if self.actor.head_float32:
+            with _no_autocast(self.device_type):
+                logits = self.actor.head(features.float(), obs)
+        distribution = MaskedCategorical(self.shaped(logits, obs), obs.mask)
         return BackpropResult(
             log_probs=distribution.log_prob(actions),
             entropy=distribution.entropy(),
@@ -323,21 +344,24 @@ class BehaviourSnapshot:
     so the importance ratio measures the true off-policyness of the batch and the clip bounds it.
     """
 
-    __slots__ = ("actor",)
+    __slots__ = ("actor", "transform")
 
-    def __init__(self, actor: ClashActor) -> None:
+    def __init__(self, actor: ClashActor, transform: PolicyTransform | None = None) -> None:
         self.actor = copy.deepcopy(actor).eval()
         for parameter in self.actor.parameters():
             parameter.requires_grad_(False)
+        #: The pairing's ``policy_transform``: the policy it samples is the learner's.
+        self.transform = transform
 
     @classmethod
     def of(cls, model: _BaseActorCritic) -> BehaviourSnapshot:
-        """A snapshot of whichever actor this pairing holds."""
-        return cls(model.actor)
+        """A snapshot of whichever actor this pairing holds, sampling the policy it trains."""
+        return cls(model.actor, getattr(model, "policy_transform", None))
 
     def logits(self, obs: ObsBatch) -> Tensor:
         with torch.no_grad():
-            return self.actor.logits(obs)
+            logits = self.actor.logits(obs)
+            return logits if self.transform is None else self.transform(logits, obs)
 
     def distribution(self, obs: ObsBatch) -> MaskedCategorical:
         return MaskedCategorical(self.logits(obs), obs.mask)

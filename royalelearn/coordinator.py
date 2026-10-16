@@ -52,7 +52,14 @@ from .checkpoint import (
     check_described,
     check_resume,
 )
-from .config import RunConfig, config_hash, dump_config, geometry, validate
+from .config import (
+    RunConfig,
+    config_hash,
+    dump_config,
+    geometry,
+    policy_transform_of,
+    validate,
+)
 from .errors import CheckpointFormatError, PreflightError, RoyaleLearnError
 from .extensions import (
     RunContext,
@@ -985,6 +992,7 @@ class LearningCoordinator:
         self.factory = DefaultNetworkFactory(config.master_seed)
         self.arch_digest = self.factory.arch_digest(self.spec, config.net)
         self.model = self.factory.build(self.spec, config.net, device=self.device)
+        self._attach_policy_transform()
 
         self._vram_gate(torch)
 
@@ -1315,6 +1323,26 @@ class LearningCoordinator:
             resuming=self.resume_from is not None,
             ratio_atol=self._ratio_atol(),
             precision=logit_precision_name(self.config),
+            policy_transform=getattr(self.model, "policy_transform", None),
+        )
+
+    def _attach_policy_transform(self) -> None:
+        """``ppo.policy_transform`` on the model, bound to this run's action layout."""
+        mode = policy_transform_of(self.config.ppo)
+        if mode is None:
+            return
+        from .learn.transform import PolicyLayout, PolicyTransform
+
+        tiles = int(self.spec.tiles[0]) * int(self.spec.tiles[1])
+        hand = int(self.spec.hand_size)
+        layout = PolicyLayout(hand, tiles, int(self.spec.n_actions) - 1 - hand * tiles)
+        try:
+            self.model.policy_transform = PolicyTransform(mode, layout)
+        except ValueError as exc:
+            raise PreflightError(str(exc)) from exc
+        self.printer(
+            f"policy        {mode}: the learner's seats and the update; snapshots and "
+            "evaluation play the actor itself"
         )
 
     def _freeze_tracker(self) -> FreezeTracker | None:

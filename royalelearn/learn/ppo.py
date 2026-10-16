@@ -56,7 +56,7 @@ from royalegym.action import NOOP
 
 from ..api.policy import ObsBatch
 from ..api.update import ActorTermInputs, Update, UpdateResult, check_actor_terms
-from ..config import PPOConfig
+from ..config import PPOConfig, policy_transform_of
 from ..errors import CheckpointFormatError
 from ..seeding import PPO_MINIBATCH, derive_generator, stream_path
 from .distribution import noop_checked_upstream, noop_violation_message
@@ -1264,7 +1264,13 @@ class PPOUpdate(Update):
             atol = self._ratio_atol()
             value = float(diagnostics.ratio_deviation.item())
             assert value <= atol, _ratio_message(
-                value, ratio, cells, actions, atol, self._n_slots
+                value,
+                ratio,
+                cells,
+                actions,
+                atol,
+                self._n_slots,
+                transform=policy_transform_of(self.config),
             )
 
     # -- the knobs -----------------------------------------------------------
@@ -1849,7 +1855,14 @@ def _one_action_message(buffer: RectBuffer, wrong: np.ndarray) -> str:
 
 
 def _ratio_message(
-    deviation: float, ratio: Tensor, cells: Tensor, actions: Tensor, atol: float, n_slots: int
+    deviation: float,
+    ratio: Tensor,
+    cells: Tensor,
+    actions: Tensor,
+    atol: float,
+    n_slots: int,
+    *,
+    transform: str | None = None,
 ) -> str:
     """The worst ten samples, and the three causes in the order they are worth checking."""
     ratio = ratio.detach()
@@ -1867,4 +1880,11 @@ def _ratio_message(
         + "\n".join(lines)
         + "\nIn order of likelihood:\n"
         + causes
+        + (
+            f"\n  ppo.policy_transform is {transform}: a transform that sharpens the logits by "
+            "1/T multiplies their rounding by 1/T, so the tolerance must allow for that "
+            "(net.policy_head_float32 computes them at float32)"
+            if transform
+            else ""
+        )
     )

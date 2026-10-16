@@ -65,6 +65,10 @@ class RunContext(NamedTuple):
     #: which is what the ratio's arithmetic floor turns on.
     ratio_atol: float
     precision: str
+    #: ``ppo.policy_transform`` bound to the run, ``(logits, obs) -> logits``, or None: the
+    #: learner's policy is the masked softmax of its output on the actor's logits. A term that
+    #: compares a frozen actor with that policy passes the frozen actor's logits through it.
+    policy_transform: Callable[[Any, Any], Any] | None = None
 
 
 class Extension(Protocol):
@@ -497,6 +501,10 @@ _SURFACE: dict[str, str] = {
     "ActorTermInputs": "royalelearn.api.update",
     "FREEZE_ALARM_KEYS": "royalelearn.learn.freeze",
     "freeze_alarms": "royalelearn.learn.freeze",
+    # the policy: a masked distribution over logits, and the run's transform of them
+    "MaskedCategorical": "royalelearn.learn.distribution",
+    "PolicyLayout": "royalelearn.learn.transform",
+    "PolicyTransform": "royalelearn.learn.transform",
     # observations, rows and the environment
     "ObsBatch": "royalelearn.api.policy",
     "EnvSpec": "royalelearn.api.rollout",

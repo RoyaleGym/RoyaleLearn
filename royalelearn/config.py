@@ -27,6 +27,7 @@ import msgspec
 from .determinism import TIERS
 from .errors import PreflightError
 from .learn.decode import mode_problems
+from .learn.transform import transform_problems
 from .rollout.envspec import ComponentSpec, EnvFactorySpec, JsonValue, canonical_json, digest_of
 
 __all__ = [
@@ -280,6 +281,11 @@ def trunk_stride_of(net: NetConfig) -> int:
     return 1 if net.trunk_stride is msgspec.UNSET else int(net.trunk_stride)
 
 
+def policy_transform_of(ppo: PPOConfig) -> str | None:
+    """``ppo.policy_transform``, or None when it is unset."""
+    return None if ppo.policy_transform is msgspec.UNSET else str(ppo.policy_transform)
+
+
 def policy_head_float32_of(net: NetConfig) -> bool:
     """``net.policy_head_float32``, with an unset one read as False."""
     return net.policy_head_float32 is not msgspec.UNSET and bool(net.policy_head_float32)
@@ -402,6 +408,12 @@ class PPOConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     ratio_atol: dict[str, float] = msgspec.field(
         default_factory=lambda: {"float32": 1e-4, "bfloat16": 2e-2}
     )
+    #: ``plugin:<module>:<function>``: the policy the learner trains is the masked softmax of
+    #: that function of the actor's logits, ``f(logits, mask, vector, layout)``, on every path
+    #: the learner's policy is read (``learn/transform.py``). Snapshots, opponents and evaluation
+    #: play the actor itself. A transform that sharpens by 1/T multiplies the logits' rounding by
+    #: 1/T, which ``ratio_atol`` has to allow. Unset, the actor's own policy.
+    policy_transform: str | msgspec.UnsetType = msgspec.UNSET
 
 
 class AdvantageConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -1231,6 +1243,8 @@ def check_consistency(config: RunConfig) -> list[str]:
     problems.extend(_seat_deck_problems(config.ladder))
     problems.extend(mode_problems(config.ladder.release_mode, "ladder.release_mode"))
     problems.extend(mode_problems(config.ladder.opponent_mode, "ladder.opponent_mode"))
+    if config.ppo.policy_transform is not msgspec.UNSET:
+        problems.extend(transform_problems(config.ppo.policy_transform, "ppo.policy_transform"))
     problems.extend(_extension_problems(config))
     problems.extend(_alarm_override_problems(config))
     if config.checkpoint.keep < 1:

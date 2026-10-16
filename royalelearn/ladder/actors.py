@@ -94,7 +94,9 @@ class EvalActors:
                     "would answer a different question: the probe exists because the most recent "
                     "snapshot lags the live weights by the candidate cadence"
                 )
-            return self.policy(self.model)
+            # The actor itself, as a snapshot of it would play: ppo.policy_transform shapes the
+            # policy the update trains, and evaluation judges the actor under release_mode.
+            return self.policy(getattr(self.model, "actor", self.model))
         return self.policy(self.snapshots.get(member, self.device))
 
     def policy(self, actor: Any) -> Policy:

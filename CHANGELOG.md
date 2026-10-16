@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- `ppo.policy_transform`: `plugin:<module>:<function>`, a function of your own of the actor's
+  logits, `f(logits, mask, vector, layout)`. The policy the learner trains is the masked softmax
+  of its output, on every path the learner's policy is read: its seats in training battles, the
+  overlap's behaviour snapshot, the update on either pairing, the ratio check, the entropy terms
+  and the extra actor terms. The stored log-probabilities are the transformed policy's, so the
+  first ratio is still one. Snapshots, opponents, the gate and evaluation play the actor itself,
+  the live learner included. The first batch checks that the output is float32 logits of the
+  input's shape, finite on every legal action, differentiable, and each row's own. Set, it is in
+  `algo_digest` and its module in the identity's `user_code`; unset, nothing is encoded.
+  `RunContext.policy_transform` hands it to an extension, and the surface carries `PolicyLayout`,
+  `PolicyTransform` and `MaskedCategorical`.
+- The shared-trunk pairing's update runs the policy head as the actor's forward does under
+  `net.policy_head_float32`: in float32, on float32 features. It ran the head under the
+  autocast, so its logits were not the rollout's.
 - `Learner.load_env` rebuilds an engine whose `__init__` takes `*args, **kwargs` and hands them
   to its base's, RoyaleGym's `SymmetricRustEngine` among them, which failed on `cards`. It takes
   its base's settings, and is held to them as any engine is.
