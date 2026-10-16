@@ -60,7 +60,7 @@ def test_unset_nothing_is_encoded() -> None:
     assert cfg.policy_transform_of(cfg.PPOConfig()) is None
 
 
-@pytest.mark.parametrize("value", ["stochastic", "argmax", "plugin:transform_plugins", "temperature"])
+@pytest.mark.parametrize("value", ["stochastic", "argmax", "plugin:transform_plugins", "softmax"])
 def test_a_transform_is_a_function_of_your_own(tmp_path: Path, value: str) -> None:
     base = tiny_config(tmp_path)
     config = tiny_config(tmp_path, ppo=msgspec.structs.replace(base.ppo, policy_transform=value))
