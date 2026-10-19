@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.19
 
 - `ppo.policy_transform`: `plugin:<module>:<function>`, a function of your own of the actor's
   logits, `f(logits, mask, vector, layout)`. The policy the learner trains is the masked softmax
