@@ -27,7 +27,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from ..api.buffer import MIN_TABLE_STATES, CodecTable
-from ..config import Geometry, RunConfig, geometry
+from ..config import (
+    Geometry,
+    RunConfig,
+    codec_float16_planes_of,
+    codec_unseen_float16_of,
+    geometry,
+)
 from ..errors import PreflightError
 from ..identity import EngineBuild, engine_build
 from ..obs_layout import hand_fields
@@ -171,7 +177,12 @@ def run_preflight(
         sample = _sample(vec, config.master_seed, table_samples)
         # The codec decides the table from the sample and binds itself to it, so what computes
         # the row size and reads the static planes below is the table that was just decided.
-        table = obs_codec.table(spec, sample, min_states=min_table_states)
+        table = obs_codec.table(
+            spec,
+            sample,
+            min_states=min_table_states,
+            **_table_options(config),
+        )
         row_bytes = int(obs_codec.row_bytes(spec))
         for line in _table_lines(spec, table, row_bytes):
             say(line)
@@ -456,6 +467,18 @@ def _ladder_cost_line(config: RunConfig, geo: Geometry) -> str:
 def _construct(factory: EnvFactorySpec, extra_modules: tuple[str, ...]) -> Any:
     """Gate 1: one engine, constructed. A stale build dies here and not at cycle 0."""
     return build_env(factory, extra_modules)
+
+
+def _table_options(config: RunConfig) -> dict[str, Any]:
+    """``rollout.codec_float16_planes`` and ``rollout.codec_unseen_float16`` for the codec's
+    ``table``. Only what is set, so a codec of your own that takes neither still runs."""
+    options: dict[str, Any] = {}
+    planes = codec_float16_planes_of(config.rollout)
+    if planes:
+        options["float16_planes"] = planes
+    if codec_unseen_float16_of(config.rollout):
+        options["unseen_float16"] = True
+    return options
 
 
 def _sample(vec: Any, master_seed: int, count: int) -> list[dict[str, np.ndarray]]:

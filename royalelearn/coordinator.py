@@ -2027,6 +2027,8 @@ class LearningCoordinator:
         spent = dict.fromkeys(
             ("worker_env", "worker_busy", "worker_idle", "worker_straggle", "parent_wait"), 0.0
         )
+        # What the workers' codecs clipped and rounded, from the same control words.
+        codec = {"clipped": 0, "rounded": 0, "plane": -1}
         for cycle in range(geo.cycles):
             for _shard in range(geo.shards_per_worker):
                 round_ = source.next_round(timeout)
@@ -2042,6 +2044,10 @@ class LearningCoordinator:
                     - float(timings.get("busy_mean_ms", 0.0)),
                 ) / 1000.0
                 spent["parent_wait"] += float(timings.get("parent_wait_ms", 0.0)) / 1000.0
+                codec["clipped"] += int(timings.get("codec_clipped", 0))
+                codec["rounded"] += int(timings.get("codec_rounded", 0))
+                if codec["plane"] < 0:
+                    codec["plane"] = int(timings.get("codec_round_plane", -1))
                 assigned = self._assign(plan, round_, group, opponent, seat, episodes)
                 round_.group[:] = group[round_.slots]
                 answer = self.inference.act(round_)
@@ -2084,6 +2090,7 @@ class LearningCoordinator:
             "seconds": time.perf_counter() - started,
             "env_seconds": env_seconds,
             "spent": spent,
+            "codec": codec,
             "command": command,
         }
 
@@ -2354,6 +2361,30 @@ class LearningCoordinator:
 
     # -- the row -------------------------------------------------------------
 
+    def _codec_health(self, workers: Mapping[str, Any]) -> dict[str, int]:
+        """This iteration's ``health/obs_codec_clipped`` and ``health/obs_codec_rounded``: the
+        workers' counts from their control words plus whatever this process packed itself.
+
+        The first time a plane rounds, a line names it: the alarm says that values were
+        rounded, and this says where.
+        """
+        take = getattr(self.codec, "take_counts", None)
+        own = take() if take is not None else (0, 0, -1)
+        clipped = int(workers.get("clipped", 0)) + own[0]
+        rounded = int(workers.get("rounded", 0)) + own[1]
+        plane = int(workers.get("plane", -1))
+        plane = plane if plane >= 0 else own[2]
+        said = self.__dict__.setdefault("_rounded_planes_said", set())
+        if rounded and plane >= 0 and plane not in said:
+            said.add(plane)
+            name = self.spec.spatial_layout[plane][0]
+            self.printer(
+                f"codec         {rounded} values rounded on their way into uint8 plane {name!r}: "
+                "the sample that decided the table showed it only whole, and its fractions are "
+                f"stored as whole numbers. rollout.codec_float16_planes: [{name!r}] keeps them"
+            )
+        return {"health/obs_codec_clipped": clipped, "health/obs_codec_rounded": rounded}
+
     def _row(
         self,
         *,
@@ -2539,7 +2570,7 @@ class LearningCoordinator:
             "health/mask_disagreements": 0,
             "health/worker_restarts": int(sum(getattr(self.source, "restarts", []) or [0])),
             "health/rows_dropped_dead_worker": int((~buffer.valid[: buffer.cycles]).sum()),
-            "health/obs_codec_clipped": int(getattr(self.codec, "clipped", 0)),
+            **self._codec_health(collection.get("codec") or {}),
             "health/samples_unused_frac": float(result.samples_unused_frac),
             "health/nan_guard_trips": _nan_guard_trips(result),
             "health/vram_peak_mb": _vram_peak_mb(str(self.device)),

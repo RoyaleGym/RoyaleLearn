@@ -313,6 +313,15 @@ def default_alarms(
             severity=HALT,
             meaning="the rectangle holds more cells than it has; an invariant is broken",
         ),
+        MetricAlarm(
+            "obs_codec_rounded",
+            lambda rounded: rounded > 0.0,
+            meaning=(
+                "observation values were rounded into a uint8 plane, so the policy sees them "
+                "as whole numbers; the run's log names the plane, and "
+                "rollout.codec_float16_planes keeps its fractions"
+            ),
+        ),
         RoseAlarm("worker_failures", meaning="a rollout worker was restarted"),
         RoseAlarm(
             "worker_failures_persistent",

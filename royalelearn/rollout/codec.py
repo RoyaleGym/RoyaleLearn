@@ -13,7 +13,9 @@ The rule, per key:
     A plane ``ObsBuilder.spatial_layout()`` declares static is not stored at all; it is held once
     per seat and scattered back in at unpack. A plane whose declared bounds fit an unsigned byte
     and whose sampled values are whole numbers is stored as ``uint8`` and is exact. Anything else
-    is stored as ``float16``.
+    is stored as ``float16``, and so is a plane ``rollout.codec_float16_planes`` names, or, under
+    ``rollout.codec_unseen_float16``, one the sample never shows other than zero. A value that
+    is not whole on its way into a ``uint8`` plane is stored rounded, and counted.
 ``mask_planes``
     Never stored. RoyaleGym builds it as ``action_mask[1:]`` reshaped, so the learner reshapes
     the stored mask at unpack; storing the planes would spend a sixth of the row on a reshape.
@@ -50,7 +52,7 @@ from __future__ import annotations
 
 import functools
 import math
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
@@ -259,7 +261,10 @@ class SpatialObsCodec(ObsCodec):
         self._spec: EnvSpec | None = None
         self._layout: RowLayout | None = None
         self._scratch: np.ndarray | None = None
+        self._rinted: np.ndarray | None = None
         self._clipped = 0
+        self._rounded = 0
+        self._rounded_plane = -1
         self._shift_cache: dict[Any, Any] = {}
 
     # -- the table ---------------------------------------------------------
@@ -270,6 +275,8 @@ class SpatialObsCodec(ObsCodec):
         sample: Sequence[dict[str, np.ndarray]],
         *,
         min_states: int = MIN_TABLE_STATES,
+        float16_planes: Collection[str] = (),
+        unseen_float16: bool = False,
     ) -> CodecTable:
         """Decide every plane's storage, bind the result, and return it.
 
@@ -278,6 +285,13 @@ class SpatialObsCodec(ObsCodec):
         range the space declares for that plane. Too small a sample is refused rather than
         defaulted, because a default here is a silent decision about the size of every row in
         the run.
+
+        ``float16_planes`` (``rollout.codec_float16_planes``) names planes stored as ``float16``
+        whatever the sample holds, and ``unseen_float16`` (``rollout.codec_unseen_float16``)
+        stores so every plane the sample never shows other than zero: a sample without the
+        feature says nothing about whether its values are whole. ``float16`` holds a whole
+        number up to 2048 exactly. Either only decides storage, so the table is the one a
+        sample that showed those planes' fractions would have decided.
         """
         states = _count_states(spec, sample)
         if states < min_states:
@@ -289,7 +303,14 @@ class SpatialObsCodec(ObsCodec):
                 f"the environment under real play before asking for a table."
             )
         planes = np.arange(spec.n_planes)
-        integral = self._integral_planes(spec, sample)
+        names = [name for name, _static in spec.spatial_layout]
+        unknown = sorted(set(float16_planes) - set(names))
+        if unknown:
+            raise PreflightError(
+                f"rollout.codec_float16_planes names {unknown}, which are not planes of this "
+                f"observation; its planes are {names}"
+            )
+        integral, seen = self._integral_planes(spec, sample)
         declared = spec.obs_space["spatial"]
         rows: list[tuple[str, str, float]] = []
         for index in planes:
@@ -300,7 +321,8 @@ class SpatialObsCodec(ObsCodec):
             low = declared.low[index]
             high = declared.high[index]
             fits_a_byte = low >= 0.0 and high <= _UINT8_MAX
-            if fits_a_byte and integral[index]:
+            decided = name not in float16_planes and (seen[index] or not unseen_float16)
+            if fits_a_byte and integral[index] and decided:
                 # Stored as the value itself, so the divisor that takes the byte back to what the
                 # environment produced is one. The declared bound is what admitted the plane.
                 rows.append((name, STORAGE_UINT8, 1.0))
@@ -319,16 +341,18 @@ class SpatialObsCodec(ObsCodec):
     @staticmethod
     def _integral_planes(
         spec: EnvSpec, sample: Sequence[dict[str, np.ndarray]]
-    ) -> np.ndarray:
-        """Per plane: whether every sampled value of it is a whole number."""
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Per plane: whether every sampled value of it is a whole number, and whether any is
+        other than zero."""
         integral = np.ones(spec.n_planes, dtype=bool)
+        seen = np.zeros(spec.n_planes, dtype=bool)
         for observation in sample:
             spatial = np.asarray(observation["spatial"])
             cells = spec.spatial_shape[1] * spec.spatial_shape[2]
             flat = spatial.reshape(-1, spec.n_planes, cells)
-            whole = np.all(flat == np.rint(flat), axis=(0, 2))
-            integral &= whole
-        return integral
+            integral &= np.all(flat == np.rint(flat), axis=(0, 2))
+            seen |= np.any(flat != 0, axis=(0, 2))
+        return integral, seen
 
     def bind(self, spec: EnvSpec, table: CodecTable | None = None) -> CodecTable:
         """Bind this codec to an environment and a table, and compute the row's offsets.
@@ -429,6 +453,7 @@ class SpatialObsCodec(ObsCodec):
         self._scratch = np.empty(
             (len(self._layout.u8_planes), *spec.spatial_shape[1:]), dtype=np.float32
         )
+        self._rinted = np.empty_like(self._scratch)
         return bound
 
     @staticmethod
@@ -519,6 +544,27 @@ class SpatialObsCodec(ObsCodec):
         count, self._clipped = self._clipped, 0
         return count
 
+    @property
+    def rounded(self) -> int:
+        """Values that were not whole numbers on their way into a ``uint8`` plane, since the
+        last ``take_counts``: each was stored rounded. Reported as ``health/obs_codec_rounded``.
+
+        Non-zero means the plane was admitted to a byte by a sample in which its values were
+        whole, typically because the sample never showed the feature at all.
+        """
+        return self._rounded
+
+    @property
+    def rounded_plane(self) -> int:
+        """The first plane a value was rounded in since the last ``take_counts``, or -1."""
+        return self._rounded_plane
+
+    def take_counts(self) -> tuple[int, int, int]:
+        """``(clipped, rounded, first rounded plane or -1)`` since the last call, then zero."""
+        counts = (self._clipped, self._rounded, self._rounded_plane)
+        self._clipped, self._rounded, self._rounded_plane = 0, 0, -1
+        return counts
+
     def row_bytes(self, spec: EnvSpec) -> int:
         """The size of one packed row, for the environment this codec is bound to."""
         layout = self.layout
@@ -563,8 +609,17 @@ class SpatialObsCodec(ObsCodec):
             if over:
                 self._clipped += over
             np.clip(block, 0, _UINT8_MAX, out=scratch)
-            np.rint(scratch, out=scratch)
-            target[layout.u8_start : layout.u8_stop] = scratch.reshape(-1).astype(np.uint8)
+            rinted = self._rinted
+            assert rinted is not None
+            np.rint(scratch, out=rinted)
+            off = scratch != rinted
+            rounded = int(np.count_nonzero(off))
+            if rounded:
+                self._rounded += rounded
+                if self._rounded_plane < 0:
+                    first = int(np.argmax(off.reshape(len(layout.u8_planes), -1).any(axis=1)))
+                    self._rounded_plane = int(layout.u8_planes[first])
+            target[layout.u8_start : layout.u8_stop] = rinted.reshape(-1).astype(np.uint8)
 
         if layout.f16_planes:
             half = spatial[list(layout.f16_planes)].astype(_F16).reshape(-1)

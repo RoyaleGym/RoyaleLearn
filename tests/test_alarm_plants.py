@@ -91,6 +91,8 @@ PLANTS: dict[str, dict[str, Any] | list[dict[str, Any]]] = {
     "reward_clipped": {"ppo/reward_clip_frac": 0.001},
     "nonfinite": {"health/nan_guard_trips": 3},
     "buffer_overflow": {"health/buffer_fill_frac": 1.5},
+    # One value stored rounded is one value the policy never saw.
+    "obs_codec_rounded": {"health/obs_codec_rounded": 1},
     "illegal_actions": {"env/illegal_action_rate": 0.5},
     "worker_failures": {"health/worker_restarts": "+1"},
     "worker_failures_persistent": {"health/worker_restarts": "+1"},

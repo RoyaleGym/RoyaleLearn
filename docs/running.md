@@ -1,7 +1,7 @@
 # running.md: running a job, and what to do when something looks wrong
 
 This page is for the person sitting in front of a run. It covers starting one, reading what
-scrolls past, the 24 alarms every run has and what to do about each, the two ways a shared machine
+scrolls past, the 25 alarms every run has and what to do about each, the two ways a shared machine
 eats an afternoon, and the one memory setting that is worth understanding before you touch it.
 
 Every command block on this page is written for Windows PowerShell, the shell that opens by
@@ -177,6 +177,7 @@ and none is fixed by changing a hyperparameter. Four of the six stop the run.
 | `ratio_invariant` | `ppo/ratio_max_abs_dev` | above `alarms.ratio_invariant_multiple` (5.0) times `ppo.ratio_atol` | halt, 1 |
 | `nonfinite` | `health/nan_guard_trips` | above 0 | halt, 1 |
 | `buffer_overflow` | `health/buffer_fill_frac` | above `max(1.0, alarms.buffer_fill_frac)` | halt, 1 |
+| `obs_codec_rounded` | `health/obs_codec_rounded` | above 0 | warn, 1 |
 | `elixir_count_inexact` | `env/elixir_count_exact_frac` | below 0.99 | warn, 3 |
 | `seat_bias` | `env/win_rate_by_seat_ci95_lo/_hi` | the interval clears 0.45 or 0.55 | warn, 3 |
 

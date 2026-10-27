@@ -137,6 +137,8 @@ COMMAND_DEFER = 19
 #: iteration and there is not one.
 CYCLE_UNBOUND = -1
 _CYCLE_SENTINEL = (1 << 64) - 1
+#: The largest count a control word's codec field holds.
+_U32_MAX = (1 << 32) - 1
 
 #: The assignment region as a structured array: the parent's per-slot answer to "who plays
 #: this seat", written for every slot of a shard whenever any of its battles has just reset.
@@ -834,6 +836,10 @@ class ShardRunner:
         self, parity: int, state: int, cycle: int, err_code: int, err_len: int
     ) -> None:
         view = self.control_layout.view(self.control, self.shard, parity, "control")
+        # What this shard's codec clipped and rounded since its last publication, so the parent
+        # sees every process's packing and not only its own.
+        take = getattr(self.codec, "take_counts", None)
+        clipped, rounded, plane = take() if take is not None else (0, 0, -1)
         CONTROL.pack_into(
             view,
             0,
@@ -850,6 +856,9 @@ class ShardRunner:
                     else time.perf_counter_ns() - self._handle_started_ns
                 ),
                 "t_idle_ns": self.t_idle_ns,
+                "codec_clipped": min(clipped, _U32_MAX),
+                "codec_rounded": min(rounded, _U32_MAX),
+                "codec_round_plane": plane + 1,
             },
         )
 
@@ -916,6 +925,9 @@ def round_timings(words: Mapping[int, Mapping[str, Any]], idle_seen: dict[int, i
     for commands since that worker's last publication. ``idle_seen`` carries each worker's idle
     total from round to round. A worker seen for the first time, or whose total went down
     because its process was restarted, only sets where it stands, and counts no idle time.
+
+    The codec's counts ride along: ``codec_clipped`` and ``codec_rounded`` summed over the
+    workers, and ``codec_round_plane`` the lowest-numbered worker's first rounded plane, or -1.
     """
     if not words:
         return {
@@ -924,7 +936,11 @@ def round_timings(words: Mapping[int, Mapping[str, Any]], idle_seen: dict[int, i
             "busy_mean_ms": 0.0,
             "busy_max_ms": 0.0,
             "idle_ms": 0.0,
+            "codec_clipped": 0,
+            "codec_rounded": 0,
+            "codec_round_plane": -1,
         }
+    planes = [int(word.get("codec_round_plane", 0)) - 1 for _, word in sorted(words.items())]
     env = [int(word["t_env_ns"]) for word in words.values()]
     busy = [int(word.get("t_busy_ns", 0)) for word in words.values()]
     idle = 0
@@ -941,6 +957,9 @@ def round_timings(words: Mapping[int, Mapping[str, Any]], idle_seen: dict[int, i
         "busy_mean_ms": sum(busy) / count / 1e6,
         "busy_max_ms": max(busy) / 1e6,
         "idle_ms": idle / count / 1e6,
+        "codec_clipped": sum(int(word.get("codec_clipped", 0)) for word in words.values()),
+        "codec_rounded": sum(int(word.get("codec_rounded", 0)) for word in words.values()),
+        "codec_round_plane": next((plane for plane in planes if plane >= 0), -1),
     }
 
 
@@ -1638,6 +1657,9 @@ class InlineRolloutSource(RolloutSourceBase):
                     "err_len": 0,
                     "t_busy_ns": 0,
                     "t_idle_ns": 0,
+                    "codec_clipped": 0,
+                    "codec_rounded": 0,
+                    "codec_round_plane": 0,
                 },
             )
             word, round_gamma = runner.read_command(parity)

@@ -418,6 +418,9 @@ class ProcessRolloutSource(RolloutSourceBase):
                     "err_len": 0,
                     "t_busy_ns": 0,
                     "t_idle_ns": 0,
+                    "codec_clipped": 0,
+                    "codec_rounded": 0,
+                    "codec_round_plane": 0,
                 },
             )
             child.actions_ready[shard].release()
@@ -570,6 +573,9 @@ class ProcessRolloutSource(RolloutSourceBase):
                 "err_len": 0,
                 "t_busy_ns": 0,
                 "t_idle_ns": 0,
+                "codec_clipped": 0,
+                "codec_rounded": 0,
+                "codec_round_plane": 0,
             },
         )
         child.actions_ready[shard].release()

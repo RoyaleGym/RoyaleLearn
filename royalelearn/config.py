@@ -191,6 +191,14 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: starts. Not on the shard that carries the viewer or the recorder, which read the
     #: battle's state. Unset means off, and is left out of the encoding.
     mask_only_scripted: bool | msgspec.UnsetType = msgspec.UNSET
+    #: Spatial planes the codec stores as float16 whatever preflight's sample shows, for a
+    #: plane whose values can be fractions the sample never reached: float16 holds a whole
+    #: number up to 2048 exactly. It decides storage only, so the table and its digest are the
+    #: ones a sample that showed the fractions would have decided. Unset, the sample decides.
+    codec_float16_planes: tuple[str, ...] | msgspec.UnsetType = msgspec.UNSET
+    #: True: a plane the sample never shows other than zero is stored as float16, since such a
+    #: sample says nothing about whether its values are whole. Unset means off.
+    codec_unseen_float16: bool | msgspec.UnsetType = msgspec.UNSET
 
 
 class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -269,6 +277,17 @@ def hand_slot_features_of(net: NetConfig) -> tuple[str, ...]:
 def button_head_of(net: NetConfig) -> str:
     """``net.button_head``, with an unset one read as "index"."""
     return "index" if net.button_head is msgspec.UNSET else str(net.button_head)
+
+
+def codec_float16_planes_of(rollout: RolloutConfig) -> tuple[str, ...]:
+    """``rollout.codec_float16_planes``, with an unset one read as none."""
+    planes = rollout.codec_float16_planes
+    return () if planes is msgspec.UNSET else tuple(planes)
+
+
+def codec_unseen_float16_of(rollout: RolloutConfig) -> bool:
+    """``rollout.codec_unseen_float16``, with an unset one read as False."""
+    return rollout.codec_unseen_float16 is not msgspec.UNSET and bool(rollout.codec_unseen_float16)
 
 
 def mask_only_scripted_of(rollout: RolloutConfig) -> bool:

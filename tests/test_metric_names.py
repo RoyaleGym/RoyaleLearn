@@ -49,6 +49,7 @@ PUBLISHED_KEYS = (
     "health/mask_disagreements",
     "health/nan_guard_trips",
     "health/obs_codec_clipped",
+    "health/obs_codec_rounded",
     "health/rows_dropped_dead_worker",
     "health/rss_peak_mb",
     "health/samples_unused_frac",

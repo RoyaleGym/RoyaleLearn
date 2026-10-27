@@ -321,6 +321,38 @@ class SleepyReward:
         return 0.0
 
 
+#: The process a test runs in, for ``FractionalObsBuilder`` to tell its workers from it.
+PARENT_PID_ENV = "ROYALELEARN_TEST_PARENT_PID"
+
+
+class FractionalObsBuilder:
+    """RoyaleGym's ``SpatialObsBuilder``, with ``plane``'s first cell one half larger in every
+    observation another process than the test's builds.
+
+    Preflight samples in the test's own process, sees the plane whole, and admits it to
+    ``uint8``; every rollout worker's value is then rounded on its way in. That is what a
+    feature preflight never sampled does to a run.
+    """
+
+    def __new__(cls, plane: str, **kwargs: Any) -> Any:
+        import os
+
+        from royalegym.obs import SpatialObsBuilder
+
+        class _Fractional(SpatialObsBuilder):  # type: ignore[misc]
+            def build(self, state: Any, team: int, action_mask: np.ndarray) -> dict[str, Any]:
+                obs = super().build(state, team, action_mask)
+                parent = os.environ.get(PARENT_PID_ENV)
+                if parent and int(parent) != os.getpid():
+                    index = [name for name, _ in self.spatial_layout()].index(plane)
+                    spatial = np.array(obs["spatial"], copy=True)
+                    spatial[index].flat[0] += 0.5
+                    obs["spatial"] = spatial
+                return obs
+
+        return _Fractional(**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Driving a source
 # ---------------------------------------------------------------------------

@@ -505,7 +505,7 @@ The pages in `docs/` go further than this README does. If you are about to start
 first one.
 
 - [`docs/running.md`](running.md). Running a job: starting one, reading what scrolls past,
-  the 24 alarms every run has and what to do about each, and the one memory setting worth
+  the 25 alarms every run has and what to do about each, and the one memory setting worth
   understanding.
 - [`docs/throughput.md`](throughput.md). How long a training step takes, how to measure your
   own machine instead of trusting a number from someone else's, and which part of your computer

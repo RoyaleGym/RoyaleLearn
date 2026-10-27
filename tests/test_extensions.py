@@ -172,7 +172,7 @@ def test_an_installed_but_unused_extension_changes_nothing(
     importlib.invalidate_caches()
     with_it = _plain_run(cfg.load_config(cfg.dump_config(config)), tmp_path / "with")
     assert with_it == without
-    assert len(with_it["alarms"]) == 24
+    assert len(with_it["alarms"]) == 25
     assert "unused_ext" not in sys.modules
     assert not marker.exists()
     # and it IS findable: naming it loads it

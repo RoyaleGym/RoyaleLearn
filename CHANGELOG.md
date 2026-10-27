@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- A value that is not a whole number on its way into a `uint8` plane is stored rounded, and is
+  now counted in `health/obs_codec_rounded`, alarmed on (`obs_codec_rounded`, warn), and named
+  once in a line. Preflight admits a plane to a byte when every sampled value of it is whole, and
+  a sample that never showed a feature holds only zeros, so such a plane's fractions were rounded
+  away without a word.
+- `health/obs_codec_clipped` counts what every process packed: each rollout worker sends its
+  codec's counts home in its control word, in the record's reserve, so no offset moved. It read
+  only the parent's codec, which a process worker's rows never pass through, so it was zero under
+  `rollout.source = "process"`. It is now this iteration's count rather than a running total.
+- `rollout.codec_float16_planes`: planes stored as `float16` whatever the sample holds.
+  `rollout.codec_unseen_float16`: every plane the sample never shows other than zero stored so.
+  Either decides storage only, so the table and its digest are the ones a sample that showed
+  those planes' fractions would have decided. Unset, nothing is encoded and tables are unchanged.
+
 ## 0.5.19
 
 - `ppo.policy_transform`: `plugin:<module>:<function>`, a function of your own of the actor's

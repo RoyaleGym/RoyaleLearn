@@ -696,9 +696,19 @@ METRICS: dict[str, MetricSpec] = {
     ),
     "health/obs_codec_clipped": _m(
         "count",
-        "Values clipped on the way into a uint8 plane. Non-zero is a bug report, not a "
-        "tolerance: the plane was admitted on a declared bound, so a clip means the bound was "
-        "wrong.",
+        "Values clipped on the way into a uint8 plane this iteration, in every process that "
+        "packed rows. Non-zero is a bug report, not a tolerance: the plane was admitted on a "
+        "declared bound, so a clip means the bound was wrong.",
+        dtype="int",
+        low=0.0,
+        high=0.0,
+    ),
+    "health/obs_codec_rounded": _m(
+        "count",
+        "Values that were not whole numbers on their way into a uint8 plane this iteration, "
+        "each stored rounded. Non-zero means the sample that decided the codec table showed "
+        "the plane only whole, usually because it never showed the feature; the first time, a "
+        "line names the plane, and rollout.codec_float16_planes keeps its fractions.",
         dtype="int",
         low=0.0,
         high=0.0,
@@ -910,6 +920,7 @@ ALARM_METRICS: dict[str, tuple[str, ...]] = {
     "ratio_invariant": ("ppo/ratio_max_abs_dev",),
     "nonfinite": ("health/nan_guard_trips",),
     "buffer_overflow": ("health/buffer_fill_frac",),
+    "obs_codec_rounded": ("health/obs_codec_rounded",),
     "worker_failures": ("health/worker_restarts",),
     "worker_failures_persistent": ("health/worker_restarts",),
     "clip_pinned": ("ppo/clip_fraction",),

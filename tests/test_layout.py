@@ -45,6 +45,9 @@ GOLDEN_CONTROL = {
     # LAYOUT_VERSION did not change.
     "t_busy_ns": (32, 8),
     "t_idle_ns": (40, 8),
+    "codec_clipped": (48, 4),
+    "codec_rounded": (52, 4),
+    "codec_round_plane": (56, 4),
 }
 
 GOLDEN_SCALARS = {

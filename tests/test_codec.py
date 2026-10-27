@@ -569,3 +569,83 @@ def test_a_table_from_another_observation_is_refused(
     )
     with pytest.raises(PreflightError, match="names it"):
         SpatialObsCodec().bind(env_spec, renamed)
+
+
+# --------------------------------------------------------------------------
+# Rounding, and the planes the sample cannot decide
+# --------------------------------------------------------------------------
+
+
+def _u8_names(table: Any) -> list[str]:
+    return [name for name, storage, _ in table.plane if storage == STORAGE_UINT8]
+
+
+def _with_plane(rollout: list[dict[str, np.ndarray]], plane: int, value: float) -> list[Any]:
+    """The sample with every value of one plane set to ``value``."""
+    out = []
+    for batch in rollout:
+        copy = {key: array.copy() for key, array in batch.items()}
+        copy["spatial"][:, plane] = value
+        out.append(copy)
+    return out
+
+
+def test_a_fraction_on_its_way_into_a_uint8_plane_is_rounded_and_counted(
+    codec: SpatialObsCodec, sample: list[dict[str, np.ndarray]]
+) -> None:
+    """Plant: round without counting, and a plane that is fractional at play reads zero here."""
+    block = bytearray(codec.layout.row_bytes)
+    codec.pack(sample[0], memoryview(block), 0)
+    assert codec.take_counts() == (0, 0, -1)
+    observation = {key: value.copy() for key, value in sample[0].items()}
+    plane = codec.layout.u8_planes[-1]
+    observation["spatial"][plane].flat[:3] = 0.25
+    codec.pack(observation, memoryview(block), 0)
+    assert (codec.clipped, codec.rounded, codec.rounded_plane) == (0, 3, plane)
+    assert codec.take_counts() == (0, 3, plane)
+    assert codec.take_counts() == (0, 0, -1)
+
+
+def test_a_named_plane_is_float16_and_the_table_is_the_one_its_fractions_decide(
+    env_spec: EnvSpec, rollout: list[dict[str, np.ndarray]]
+) -> None:
+    """``rollout.codec_float16_planes`` decides storage and nothing else, so its table, digest
+    included, is the table a sample that showed the plane's fractions decides."""
+    default = SpatialObsCodec().table(env_spec, rollout)
+    name = _u8_names(default)[0]
+    index = [plane for plane, _ in env_spec.spatial_layout].index(name)
+    named = SpatialObsCodec().table(env_spec, rollout, float16_planes=(name,))
+    fractional = SpatialObsCodec().table(env_spec, _with_plane(rollout, index, 0.25))
+    assert dict((n, s) for n, s, _ in named.plane)[name] == STORAGE_FLOAT16
+    assert named == fractional
+    assert named.digest() == fractional.digest() != default.digest()
+    assert _u8_names(named) == [n for n in _u8_names(default) if n != name]
+
+
+def test_a_plane_the_sample_never_shows_is_float16_when_asked(
+    env_spec: EnvSpec, rollout: list[dict[str, np.ndarray]]
+) -> None:
+    """A sample of zeros says nothing about whether a plane's values are whole. Plant: decide
+    from it anyway, and the plane is a byte under the setting as without it."""
+    default = SpatialObsCodec().table(env_spec, rollout)
+    name = _u8_names(default)[0]
+    index = [plane for plane, _ in env_spec.spatial_layout].index(name)
+    unseen = _with_plane(rollout, index, 0.0)
+    assert name in _u8_names(SpatialObsCodec().table(env_spec, unseen))
+    asked = SpatialObsCodec().table(env_spec, unseen, unseen_float16=True)
+    assert name not in _u8_names(asked)
+    # A plane the sample shows, whole, stays a byte; one it never shows does not.
+    names = [plane for plane, _ in env_spec.spatial_layout]
+    seen = {
+        n
+        for n in _u8_names(default)
+        if any(np.any(batch["spatial"][:, names.index(n)] != 0) for batch in unseen)
+    }
+    assert seen and set(_u8_names(asked)) == seen
+
+
+def test_a_named_plane_that_is_not_a_plane_is_refused(
+    env_spec: EnvSpec, rollout: list[dict[str, np.ndarray]]
+) -> None:
+    with pytest.raises(PreflightError, match="not_a_plane"):
+        SpatialObsCodec().table(env_spec, rollout, float16_planes=("not_a_plane",))

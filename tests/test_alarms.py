@@ -30,6 +30,7 @@ HEALTHY: dict[str, float | int | str] = {
     "ppo/reward_clip_frac": 0.0,
     "health/nan_guard_trips": 0,
     "health/buffer_fill_frac": 1.0,
+    "health/obs_codec_rounded": 0,
     "health/worker_restarts": 0,
     "ppo/clip_fraction": 0.12,
     "ppo/kl": 0.008,
@@ -64,6 +65,7 @@ TRIPS: dict[str, dict[str, float]] = {
     "ratio_invariant": {"ppo/ratio_max_abs_dev": 0.9},
     "nonfinite": {"health/nan_guard_trips": 1},
     "buffer_overflow": {"health/buffer_fill_frac": 1.5},
+    "obs_codec_rounded": {"health/obs_codec_rounded": 1},
     "clip_pinned": {"ppo/clip_fraction": 0.8},
     "kl_high": {"ppo/kl": 0.2},
     "kl_dead": {"ppo/kl": 1e-9},
@@ -132,7 +134,7 @@ def test_a_run_without_the_optional_parts_has_none_of_their_alarms() -> None:
     contributed = set(names(contributed_alarms()))
     assert contributed == {"actor_handoff", "critic_unready"}
     assert not plain & contributed
-    assert len(plain) == 24
+    assert len(plain) == 25
 
 
 def test_an_override_naming_no_alarm_of_the_run_is_refused() -> None:

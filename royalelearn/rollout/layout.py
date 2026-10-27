@@ -187,7 +187,9 @@ HEADER = Record(
 #: One shard's control word, per parity. ``t_busy_ns`` is how long the worker worked on the
 #: command this publication answers, and ``t_idle_ns`` how long it has waited for commands in all,
 #: a running total; the parent writes zeros into both with a command. They sit in what was the
-#: record's reserve, so no offset before them moved.
+#: record's reserve, so no offset before them moved. So do the codec's counts since the last
+#: publication: values clipped and values rounded on their way into a ``uint8`` plane, and the
+#: first plane that rounded, plus one (zero for none).
 CONTROL = Record(
     "control",
     [
@@ -199,6 +201,9 @@ CONTROL = Record(
         ("err_len", "I"),
         ("t_busy_ns", "Q"),
         ("t_idle_ns", "Q"),
+        ("codec_clipped", "I"),
+        ("codec_rounded", "I"),
+        ("codec_round_plane", "I"),
     ],
     size=64,
 )

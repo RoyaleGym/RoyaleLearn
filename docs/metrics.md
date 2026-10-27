@@ -201,6 +201,7 @@ every row they appear in. As of 2026-09-22 there were 56 metric files and 249 ro
 
 Some other rows are zero simply because nothing has happened yet, and those are fine:
 `health/worker_restarts`, `health/nan_guard_trips`, `health/obs_codec_clipped`,
+`health/obs_codec_rounded`,
 `health/housekeeping_failures`,
 `ppo/lr_backoff_events`, `ladder/evictions`. Zero there is the healthy
 reading. `env/illegal_action_rate` and `health/samples_unused_frac` are zero **by construction**:

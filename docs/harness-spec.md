@@ -1469,6 +1469,17 @@ Notes an implementer needs:
 - A `uint8` plane whose value exceeds 255 is clipped and counted in `health/obs_codec_clipped`. A
   non-zero value is a bug report, not a tolerance: the plane was admitted to `uint8` on a declared
   bound, so a clip means the bound was wrong.
+- A value that is not a whole number on its way into a `uint8` plane is stored rounded and counted
+  in `health/obs_codec_rounded`, and the first time a plane rounds a line names it. The sample
+  admitted the plane because every value it held was whole, and a sample that never showed the
+  feature at all holds only zeros, which are whole. Every process that packs rows counts: a worker
+  sends its codec's counts home in its control word (`codec_clipped`, `codec_rounded`,
+  `codec_round_plane`, in the record's reserve), and the parent sums them per iteration.
+- `rollout.codec_float16_planes` names planes stored as `float16` whatever the sample holds, and
+  `rollout.codec_unseen_float16` stores so every plane the sample never shows other than zero.
+  `float16` holds a whole number up to 2048 exactly. Either only decides storage, so the table, and
+  its digest, are the ones a sample that showed those planes' fractions would have decided. Unset,
+  nothing is encoded and the sample decides as before.
 - `unpack_to_device` runs on the GPU: `uint8 -> float32` times a per-channel constant divisor,
   `float16 -> float32`, bit-unpack the mask with shifts, reshape it into the mask planes, scatter the
   static planes in, and gather the frame-stack history rows. Its FLOP count is nothing against
@@ -3208,7 +3219,8 @@ anchors under their older names.
 
 **`health/`**: `illegal_action_rate` (**exactly zero by construction; this is an alert, not a plot**),
 `mask_disagreements` (from the start-up gate), `worker_restarts`, `worker_failures_by_kind`,
-`rows_dropped_dead_worker`, `obs_codec_clipped`, `samples_unused_frac`, `nan_guard_trips`,
+`rows_dropped_dead_worker`, `obs_codec_clipped`, `obs_codec_rounded`, `samples_unused_frac`,
+`nan_guard_trips`,
 `housekeeping_failures` (plus `housekeeping/{kind}` for each kind that has failed),
 `vram_peak_mb`, `rss_peak_mb`, `buffer_fill_frac`, and the device-memory regime read at the end of
 each iteration when the run's device is a CUDA device: `vram_reserved_mb`, `vram_inactive_split_mb`,
@@ -3260,6 +3272,7 @@ being hunted, and a false halt costs everything the run was for.
 | `ratio_invariant` | `ppo/ratio_max_abs_dev > 5 * ratio_atol` | 1 | **halt** | a mask, codec or weight-version mismatch (section 9.6). The multiple of the configured tolerance is what keeps the alarm meaningful in fp32 and under bf16 alike; all three failures it is aimed at produce a deviation of order one |
 | `nonfinite` | any loss, gradient or logit non-finite | 1 | **halt** | |
 | `buffer_overflow` | `health/buffer_fill_frac > 1.0` | 1 | **halt** | an invariant is broken. A healthy rectangle reads **exactly one**: every cell is written once per iteration, so anything under one is a cell nobody filled and anything over it is impossible. The threshold is above one and not below it for that reason: a bound of 0.98 would halt every healthy run on its first iteration |
+| `obs_codec_rounded` | `health/obs_codec_rounded > 0` | 1 | warn | observation values were rounded into a `uint8` plane, so the policy sees them as whole numbers. The run's log names the plane; `rollout.codec_float16_planes` keeps its fractions |
 | `worker_failures` | `health/worker_restarts` rose | 1 | warn | |
 | `worker_failures_persistent` | rose on three consecutive iterations | 3 | **halt** | |
 | `clip_pinned` | `ppo/clip_fraction > 0.5` | 3 | **halt** | mask disagreement, or a learning rate far too high |
