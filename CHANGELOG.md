@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.20
 
 - A value that is not a whole number on its way into a `uint8` plane is stored rounded, and is
   now counted in `health/obs_codec_rounded`, alarmed on (`obs_codec_rounded`, warn), and named
