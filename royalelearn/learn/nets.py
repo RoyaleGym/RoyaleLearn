@@ -42,6 +42,7 @@ from ..api.policy import NetworkFactory
 from ..config import (
     button_head_of,
     critic_arch_of,
+    critic_autocast_dtype_of,
     hand_slot_features_of,
     policy_head_float32_of,
     trunk_stride_of,
@@ -267,7 +268,7 @@ def _arch_for_digest(arch: ArchSpec) -> Any:
     fields = [
         (f.name, f.type, f.default)
         for f in msgspec.structs.fields(arch)
-        if f.name != "factored_act_init"
+        if f.name not in ("factored_act_init", "critic_autocast_dtype")
         and not (f.name == "trunk_stride" and trunk_stride_of(arch) == 1)
         and not (f.name == "button_head" and button_head_of(arch) == "index")
     ]
@@ -283,6 +284,7 @@ ACTOR_NEUTRAL_FIELDS = frozenset(
     {
         "autocast_dtype",
         "policy_head_float32",
+        "critic_autocast_dtype",
         "device",
         "init",
         "factored_act_init",
@@ -931,11 +933,21 @@ class DefaultNetworkFactory(NetworkFactory):
         actor = build_actor(spec, arch)
         actor.initialise(generator)
         model: ActorCritic
+        critic_dtype = critic_autocast_dtype_of(arch)
+        if critic_dtype is not None and not arch.separate_trunks:
+            raise PreflightError(
+                "net.critic_autocast_dtype needs net.separate_trunks: with one trunk the critic's "
+                "features are the actor's, at the actor's precision"
+            )
         if arch.separate_trunks:
             critic_arch = critic_arch_of(arch)
             critic = ClashCritic(ClashTrunk(spec, critic_arch), ValueHead(spec, critic_arch))
             critic.initialise(generator)
             model = SeparateActorCritic(actor, critic, arch, torch_device, autocast_dtype)
+            if critic_dtype is not None and dtype is None:
+                # A dtype the caller forces is the whole model's; otherwise the critic's own.
+                critic.autocast_dtype = resolve_dtype(critic_dtype)
+                critic.head_float32 = True
         else:
             value_head = ValueHead(spec, arch)
             value_head.initialise(generator)

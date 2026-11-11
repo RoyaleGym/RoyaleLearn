@@ -148,11 +148,18 @@ class ClashCritic(_Autocasting, Critic):
         super().__init__(autocast_dtype)
         self.trunk = trunk
         self.head = head
+        #: ``net.critic_autocast_dtype``: the value head out of the autocast, on float32
+        #: features, so a value is not rounded to the trunk's precision.
+        self.head_float32 = False
 
     def forward(self, obs: ObsBatch) -> Tensor:
         """``(B,)`` float32."""
         with self.autocast():
-            return self.head(self.trunk(obs), obs)
+            if not self.head_float32:
+                return self.head(self.trunk(obs), obs)
+            features = self.trunk(obs)
+        with _no_autocast(self.device_type):
+            return self.head(features.float(), obs)
 
     def value(self, obs: ObsBatch) -> Tensor:
         return self(obs)

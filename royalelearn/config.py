@@ -271,6 +271,14 @@ class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: features without that rounding, and the trunk, where the compute is, keeps the autocast.
     #: Unset means the head runs at the autocast dtype too, and is left out of the encoding.
     policy_head_float32: bool | msgspec.UnsetType = msgspec.UNSET
+    #: The critic's trunk at this dtype and its value head at float32, whatever
+    #: ``autocast_dtype`` the actor runs at. The critic's numbers never enter the importance
+    #: ratio, so a run that keeps its actor at float32 for the ratio invariant can still train
+    #: its critic, which under ``ppo.forced_rows`` "critic_only" is most of an update, on the
+    #: bfloat16 path. Needs ``separate_trunks``. Unset means the critic runs at
+    #: ``autocast_dtype`` as it always has, and is left out of the encoding. Left out of
+    #: ``arch_digest`` too, as a precision rather than a shape: a run can resume with it changed.
+    critic_autocast_dtype: str | msgspec.UnsetType = msgspec.UNSET
     device: str = "cuda"
 
 
@@ -313,6 +321,11 @@ def trunk_stride_of(net: NetConfig) -> int:
 def policy_transform_of(ppo: PPOConfig) -> str | None:
     """``ppo.policy_transform``, or None when it is unset."""
     return None if ppo.policy_transform is msgspec.UNSET else str(ppo.policy_transform)
+
+
+def critic_autocast_dtype_of(net: NetConfig) -> str | None:
+    """``net.critic_autocast_dtype``, or None when unset (the critic at ``autocast_dtype``)."""
+    return None if net.critic_autocast_dtype is msgspec.UNSET else str(net.critic_autocast_dtype)
 
 
 def policy_head_float32_of(net: NetConfig) -> bool:
