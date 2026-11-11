@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.21
 
 - The rollout's inference gathers, decodes and uploads the uniforms of a round's policy rows once,
   gives each policy's forward its own contiguous part of that batch, and brings every policy's
