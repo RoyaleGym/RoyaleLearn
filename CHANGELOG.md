@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.22
 
 - `rollout.cuda_graphs`: each policy's rollout forward is captured as a CUDA graph at the smallest
   of a few bucketed batch sizes (8 to 512 rows) and replayed, so the host launches one graph
