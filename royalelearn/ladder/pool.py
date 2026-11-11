@@ -175,6 +175,16 @@ class LadderPool:
         spine the ladder's own history is told along."""
         return tuple(self.state.champion_chain)
 
+    @property
+    def gated_champion(self) -> str | None:
+        """The champion once it is one that won its gate by playing, else None.
+
+        The chain's first member was promoted into an empty ladder without a game (the gate has
+        nothing to measure it against), so until a second promotion no champion has beaten
+        anything. A floor admission never promotes, so it never moves this either.
+        """
+        return self.state.champion if len(self.state.champion_chain) > 1 else None
+
     def learner_stand_in(self, ratings: RatingTable | None) -> tuple[str, int, float] | None:
         """PFSP's stand-in for the live learner: ``(member, env step, fitted rating)``, or None.
 

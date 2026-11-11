@@ -500,6 +500,8 @@ def test_the_context_names_the_champion_and_loads_a_snapshot(tmp_path: Path) -> 
         run.pool.add("snap:c", step=7)
         run.pool.promote("snap:c")
         assert ctx.champion() == "snap:c"
+        # Promoted into an empty ladder, without a game: not yet a champion that won its gate.
+        assert ctx.champion(gated=True) is None
         actor = ctx.build_actor(run.device)
         ctx.load_snapshot("snap:c", actor)
         stored = run.snapshot_store.get("snap:c", run.device).state_dict()
@@ -507,3 +509,7 @@ def test_the_context_names_the_champion_and_loads_a_snapshot(tmp_path: Path) -> 
         for name, value in actor.state_dict().items():
             assert torch.equal(value, stored[name])
             assert torch.equal(value, live[name].half().to(value.dtype))
+        run.snapshot_store.put("snap:d", run.model, {"step": 8})
+        run.pool.add("snap:d", step=8)
+        run.pool.promote("snap:d")
+        assert ctx.champion() == ctx.champion(gated=True) == "snap:d"

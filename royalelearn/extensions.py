@@ -69,9 +69,11 @@ class RunContext(NamedTuple):
     #: learner's policy is the masked softmax of its output on the actor's logits. A term that
     #: compares a frozen actor with that policy passes the frozen actor's logits through it.
     policy_transform: Callable[[Any, Any], Any] | None = None
-    #: The ladder's champion now, ``() -> snapshot id`` or None before the first promotion. Read
+    #: The ladder's champion now, ``(gated=False) -> snapshot id`` or None before the first
+    #: promotion. ``gated=True`` names it only once it is a champion that won its gate by
+    #: playing: the run's first champion is promoted into an empty ladder without a game. Read
     #: when called: the pool is built after the terms are, and the champion moves at gates.
-    champion: Callable[[], str | None] | None = None
+    champion: Callable[..., str | None] | None = None
     #: ``(snapshot_id, actor) -> None``: a pool snapshot's weights, as the pool stores them
     #: (float16), loaded into an actor ``build_actor`` built.
     load_snapshot: Callable[[str, Any], None] | None = None

@@ -11,9 +11,10 @@
   every shaped weight before they are normalised; the hard shape at power 2 with both floors at
   zero and an offset of 0.05 gives (1 - score)^2 + 0.05. Unset, nothing is encoded and nothing
   changes.
-- `RunContext.champion()` names the ladder's champion now, and `RunContext.load_snapshot(id,
-  actor)` loads a pool snapshot's weights into an actor of the run's architecture, so an
-  extension's term can anchor to the champion and follow it from one promotion to the next.
+- `RunContext.champion()` names the ladder's champion now (`gated=True`: only once a champion has
+  won its gate by playing, `LadderPool.gated_champion`), and `RunContext.load_snapshot(id, actor)`
+  loads a pool snapshot's weights into an actor of the run's architecture, so an extension's term
+  can anchor to the champion and follow it from one promotion to the next.
 
 ## 0.5.22
 

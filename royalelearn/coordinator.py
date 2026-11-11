@@ -1340,10 +1340,13 @@ class LearningCoordinator:
             load_snapshot=self._load_snapshot,
         )
 
-    def _ladder_champion(self) -> str | None:
-        """``RunContext.champion``: the pool's champion, or None before the pool exists."""
+    def _ladder_champion(self, gated: bool = False) -> str | None:
+        """``RunContext.champion``: the pool's champion, or None before the pool exists. With
+        ``gated``, only a champion that won its gate by playing (``LadderPool.gated_champion``)."""
         pool = getattr(self, "pool", None)
-        return None if pool is None else pool.champion
+        if pool is None:
+            return None
+        return pool.gated_champion if gated else pool.champion
 
     def _load_snapshot(self, snapshot_id: str, actor: Any) -> None:
         """``RunContext.load_snapshot``: a pool snapshot's weights into ``actor``."""
