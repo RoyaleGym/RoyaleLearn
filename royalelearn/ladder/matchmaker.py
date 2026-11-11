@@ -48,8 +48,8 @@ from ..api.rollout import (
     EpisodeRecord,
     SlotPlan,
 )
-from ..config import role_counts
-from ..seeding import MATCH_BATTLE, derive_generator, stream_path
+from ..config import opponent_affinity_of, role_counts
+from ..seeding import MATCH_BATTLE, MATCH_SHARD, derive_generator, stream_path
 from .pool import SCRIPTED_IDS
 from .seat_decks import learner_seat_of
 
@@ -154,6 +154,8 @@ class MixMatchmaker(Matchmaker):
         self._n_battles: int | None = None
         self._mirror_battles = 0
         self._layout: np.ndarray | None = None
+        #: ``ladder.opponent_affinity``'s battle -> (worker, shard), from the plan's geometry.
+        self._shard_of: tuple[np.ndarray, np.ndarray] | None = None
         if n_battles is not None:
             self.set_rectangle(int(n_battles))
 
@@ -410,6 +412,10 @@ class MixMatchmaker(Matchmaker):
                 stand_in[2] if stand_in is not None else None,
             )
             position = int(rng.choice(len(residents), p=weights))
+            if opponent_affinity_of(self.config):
+                # Drawn and then replaced, as the seat is under seat_decks, so the battle's own
+                # stream reads as it did.
+                position = self._shared_position(battle, ordinal, weights)
             opponent = residents[position]
             other = position
         group = [0, 0]
@@ -423,6 +429,26 @@ class MixMatchmaker(Matchmaker):
             group=(group[0], group[1]),
             learner_seat=learner_seat,
         )
+
+    def _shared_position(self, battle: int, ordinal: int, weights: np.ndarray) -> int:
+        """The resident position the pool battles of ``battle``'s shard on episode ``ordinal``
+        share: one draw by ``weights`` from the shard's own stream."""
+        if self._shard_of is None:
+            raise RuntimeError(
+                "ladder.opponent_affinity draws one opponent per shard, and no plan has said "
+                "which shard a battle is in yet: plan the iteration before assigning in it"
+            )
+        workers, shards = self._shard_of
+        rng = derive_generator(
+            self.master_seed,
+            stream_path(
+                MATCH_SHARD,
+                worker=int(workers[battle]),
+                shard=int(shards[battle]),
+                ordinal=ordinal,
+            ),
+        )
+        return int(rng.choice(len(weights), p=weights))
 
     def plan(
         self,
@@ -439,6 +465,12 @@ class MixMatchmaker(Matchmaker):
         """
         self._plan_epoch = None
         self.set_rectangle(geometry.n_battles)
+        battles = np.arange(geometry.n_battles)
+        # The layout rollout.plan.SlotPlanner gives a battle, which is where its rows are.
+        self._shard_of = (
+            battles // geometry.games_per_worker,
+            (battles % geometry.games_per_worker) // geometry.games_per_shard,
+        )
         assignments = tuple(
             self.assign(battle, self.ordinal(battle), pool, ratings)
             for battle in range(geometry.n_battles)

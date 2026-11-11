@@ -603,6 +603,18 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: runs are two experiments, and saying so is what the identity is for.
     gate: GateConfig = GateConfig()
     rater: RaterConfig = RaterConfig()
+    #: True: the pool battles of one shard that are on the same episode ordinal meet one
+    #: opponent, drawn once for them by the same PFSP weights. A shard's battles are a few
+    #: episodes apart at most, so a round holds a few frozen opponents rather than one per pool
+    #: battle, and the inference makes that few forwards. Each episode's opponent is still a
+    #: draw by the weights, and a battle's seat and its own stream are what they were. Unset
+    #: means off, and is left out of the encoding.
+    opponent_affinity: bool | msgspec.UnsetType = msgspec.UNSET
+
+
+def opponent_affinity_of(ladder: LadderConfig) -> bool:
+    """``ladder.opponent_affinity``, with an unset one read as False."""
+    return ladder.opponent_affinity is not msgspec.UNSET and bool(ladder.opponent_affinity)
 
 
 class CheckpointConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

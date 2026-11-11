@@ -118,6 +118,7 @@ in the order `seeding.STREAMS` holds it.
 | `env/battle/{b}/ordinal/{k}` | one episode of one battle, so a resume can start the next one |
 | `env/stagger/worker/{w}/shard/{s}/gen/{g}` | the warm-up that spreads a shard's episode endings apart |
 | `match/battle/{b}/ordinal/{k}` | who this battle plays this episode |
+| `match/worker/{w}/shard/{s}/ordinal/{k}` | under `ladder.opponent_affinity`, the pool opponent a shard's battles share on episode `k` |
 | `act/iteration/{i}/cycle/{t}` | the random numbers that pick an action |
 | `scripted/worker/{w}/slot/{r}/gen/{g}` | one scripted (hand written, not learned) opponent |
 | `ppo/minibatch/iteration/{i}/epoch/{e}` | the shuffle before a weight update |

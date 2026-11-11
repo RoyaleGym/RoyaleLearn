@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `ladder.opponent_affinity`: the pool battles of one shard that are on the same episode ordinal
+  meet one opponent, drawn once for them by the same PFSP weights, from a stream of the shard's
+  own (`match/worker/{w}/shard/{s}/ordinal/{k}`). The inference makes one forward per frozen
+  opponent present in a shard's round, and drawn per battle a dozen pool battles against a large
+  pool make about one each; a shard's battles are an episode or two apart, so with it a round
+  holds one or two. Each episode's opponent is still a draw by the weights, and a battle's seat
+  and its own stream are what they were. Unset, nothing is encoded and nothing changes.
+
 ## 0.5.20
 
 - A value that is not a whole number on its way into a `uint8` plane is stored rounded, and is

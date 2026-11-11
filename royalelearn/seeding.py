@@ -29,6 +29,7 @@ __all__ = [
     "EVAL_MATCH",
     "EVAL_SEED_SET",
     "MATCH_BATTLE",
+    "MATCH_SHARD",
     "PPO_MINIBATCH",
     "PREFLIGHT_ENV",
     "PREFLIGHT_SAMPLE",
@@ -95,6 +96,9 @@ ENV_STAGGER = "env/stagger/worker/{worker}/shard/{shard}/gen/{generation}"
 #: ordinal rather than by the iteration and the slot, so an episode meets the same opponent
 #: however the iteration boundary happens to fall across it.
 MATCH_BATTLE = "match/battle/{battle}/ordinal/{ordinal}"
+#: The pool opponent the battles of one shard share on one episode ordinal, under
+#: ``ladder.opponent_affinity``. Addressed by the ordinal for the reason ``MATCH_BATTLE`` is.
+MATCH_SHARD = "match/worker/{worker}/shard/{shard}/ordinal/{ordinal}"
 #: The ``(R,)`` uniform vector that drives action sampling at one cycle.
 ACT_CYCLE = "act/iteration/{iteration}/cycle/{cycle}"
 #: A worker-side scripted opponent's generator, per slot.
@@ -124,6 +128,7 @@ STREAMS: tuple[Stream, ...] = (
     Stream(ENV_EPISODE, "one episode of one battle, so a resume can start the next one"),
     Stream(ENV_STAGGER, "the warm-up that spreads one shard's episode boundaries"),
     Stream(MATCH_BATTLE, "the matchmaker's assignment for one episode of one battle"),
+    Stream(MATCH_SHARD, "the pool opponent one shard's battles share on one episode ordinal"),
     Stream(ACT_CYCLE, "the uniforms that drive action sampling at one cycle"),
     Stream(SCRIPTED_SLOT, "one worker-side scripted opponent"),
     Stream(PPO_MINIBATCH, "the minibatch permutation of one epoch"),
