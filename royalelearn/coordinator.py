@@ -21,6 +21,7 @@ import contextlib
 import hashlib
 import math
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -61,6 +62,8 @@ from .config import (
     geometry,
     pfsp_source_of,
     policy_transform_of,
+    rollback_after_of,
+    rollback_below_of,
     validate,
 )
 from .errors import CheckpointFormatError, PreflightError, RoyaleLearnError
@@ -80,6 +83,7 @@ from .ladder.gate import WilsonGate, floor_decision
 from .ladder.matchmaker import MixMatchmaker
 from .ladder.pool import LEARNER_ID, LadderPool, is_learner, learner_probe_id
 from .ladder.rating import BradleyTerryDavidsonRater, EloReadout
+from .ladder.recovery import ROLLBACK, STOP, Recovery, recovery_enabled
 from .ladder.results import KIND_PROBE, ResultLog, context_digest
 from .ladder.snapshots import DiskSnapshotStore, SnapshotSpec
 from .metrics.alarms import AlarmSet
@@ -1449,6 +1453,15 @@ class LearningCoordinator:
         )
         self.elo = EloReadout()
         self.eviction = HallOfFameEviction()
+        #: ``ladder.rollback_after`` and ``ladder.stall_after``; None with both off, and then
+        #: the run carries no recovery state at all.
+        self.recovery: Recovery | None = (
+            Recovery(config.ladder, ladder_dir / "learners", keep=config.checkpoint.keep)
+            if recovery_enabled(config.ladder)
+            else None
+        )
+        #: Why the stall stop ended the run, once it has.
+        self._recovery_stop = ""
         self.seeds: SeedSet = eval_seed_set(config.master_seed, config.ladder.eval_seed_count)
         (ladder_dir / "eval_seeds.json").write_bytes(msgspec.json.encode(self.seeds))
         eval_env = (
@@ -1739,6 +1752,7 @@ class LearningCoordinator:
             "rating": _GroupComponent([self.rater, self.elo]),
             "metrics": self.sinks,
             "rng": self.rng,
+            **({"recovery": self.recovery} if self.recovery is not None else {}),
         }
 
     # -- the loop ------------------------------------------------------------
@@ -1935,6 +1949,8 @@ class LearningCoordinator:
         )
         self._maybe_heatmap()
         command = collection["command"]
+        if self._recovery_stop:
+            command = "q"
         if command in ("c", "q") or self._checkpoint_due():
             self._checkpoint()
         if self._prefetched is not None:
@@ -2310,13 +2326,19 @@ class LearningCoordinator:
             {"step": self.cumulative_env_steps, "iteration": self.iteration},
         )
         admit_refused = admit_refused_of(config)
+        previous = self.pool.champion
+        saved: Path | None = None
         if floor_due:
             self._last_floor_step = self.cumulative_env_steps
         if floor_due and not (admit_refused and candidate_due):
-            decision = floor_decision(candidate, self.pool.champion)
+            decision = floor_decision(candidate, previous)
         else:
             # Under ladder.admit_refused a due gate is never replaced by the floor: the candidate
             # joins the pool whatever the gate decides, which is what the floor is for.
+            if self.recovery is not None:
+                # Before the gate, while the learner is the one the snapshot was taken of: if
+                # the candidate is promoted, this is the state a rollback returns to.
+                saved = self._save_learner(self.recovery.folder_for(candidate))
             decision = self.gate.evaluate(candidate, self.pool, self.eval_runner)
         self.pool.apply(decision, step=self.cumulative_env_steps)
         joined = ""
@@ -2333,7 +2355,52 @@ class LearningCoordinator:
             f"gate          {candidate}: admit={decision.admit} promote={decision.promote} "
             f"cycle={decision.cycle} in {seconds:.1f}s{joined}"
         )
+        if self.recovery is not None:
+            action = self.recovery.after_gate(decision, previous=previous, saved=saved)
+            if action == ROLLBACK:
+                self._rollback()
+            elif action == STOP:
+                self._recovery_stop = (
+                    f"{self.recovery.state.since_promotion} straight gates without a promotion "
+                    "(ladder.stall_after)"
+                )
+                self.printer(f"stop          {self._recovery_stop}")
         return seconds
+
+    def _save_learner(self, folder: Path) -> Path:
+        """The learner's weights and both optimizers' states, for ``ladder.rollback_after``."""
+        if folder.exists():
+            shutil.rmtree(folder)
+        self.components["actor_critic"].save_checkpoint(folder / "actor_critic")
+        self.update.save_optimizer_state(folder / "optimizers")
+        return folder
+
+    def _rollback(self) -> None:
+        """Return the learner to the champion's: its weights and both optimizers' states.
+
+        Everything else carries on from the present: the clocks and counters, the coefficients,
+        the return scaler, the freeze, the pool. The batch collected beside this update
+        (``rollout.overlap``) was sampled by the learner being abandoned, so it is dropped and
+        the next iteration collects afresh, as a resume from this iteration's checkpoint would.
+        """
+        assert self.recovery is not None
+        champion = self.pool.champion
+        folder = self.recovery.learner_of(champion)
+        if folder is None:
+            self.printer(
+                f"rollback      skipped: the champion {champion} has no saved learner (it was "
+                "promoted before ladder.rollback_after was on)"
+            )
+            return
+        self.components["actor_critic"].load_checkpoint(folder / "actor_critic", strict=True)
+        self.update.load_optimizer_state(folder / "optimizers", strict=True)
+        self._prefetched = None
+        self.recovery.state.rollbacks += 1
+        self.printer(
+            f"rollback      {self.recovery.state.rollbacks}: the learner is the champion "
+            f"{champion}'s again, after {rollback_after_of(self.config.ladder)} straight gates "
+            f"below {rollback_below_of(self.config.ladder):g} against it"
+        )
 
     def _maybe_probe_rungs(self) -> float:
         """Play the LIVE policy against the fixed rungs, on its own cadence in iterations.
@@ -2605,6 +2672,16 @@ class LearningCoordinator:
                 ),
             ),
             **role_count_fields(episodes, self.matchmaker.role_of),
+            # Present only with ladder.rollback_after or ladder.stall_after on.
+            **(
+                {
+                    "ladder/rollbacks": self.recovery.state.rollbacks,
+                    "ladder/gates_since_promotion": self.recovery.state.since_promotion,
+                    "ladder/gates_below": self.recovery.state.below,
+                }
+                if self.recovery is not None
+                else {}
+            ),
         )
 
         failures = getattr(self, "failures_by_kind", {})

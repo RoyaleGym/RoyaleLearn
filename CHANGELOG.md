@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `ladder.rollback_after`: after that many straight gates in which the candidate scored below
+  `ladder.rollback_below` (0.45 unset) against the champion, the learner goes back to the
+  champion's weights and both optimizers' states, saved beside each candidate before its gate
+  (`ladder/learners/`). Everything else carries on, and with `rollout.overlap` the batch collected
+  beside that update is dropped. `ladder.stall_after`: after that many straight gates without a
+  promotion the run stops and saves itself. Only gates that played count, and a promotion ends
+  both streaks. `ladder/rollbacks`, `ladder/gates_below` and `ladder/gates_since_promotion` report
+  them. A checkpoint written with both off resumes with them on, with the streaks at zero.
+
 ## 0.5.23
 
 - `ladder.pfsp_source: "games"`: PFSP weighs the pool by the learner's own latest learning games

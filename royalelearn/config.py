@@ -635,6 +635,17 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: ``pfsp_weighting`` "hard", ``pfsp_power`` 2, ``pfsp_uniform_floor`` and
     #: ``weight_floor_scale`` 0 and this at 0.05, a member's weight is (1 - score)^2 + 0.05.
     pfsp_offset: float | msgspec.UnsetType = msgspec.UNSET
+    #: After this many straight gates in which the candidate scored below ``rollback_below``
+    #: against the champion, the learner goes back to the champion's: its weights and both
+    #: optimizers' moments, saved beside each candidate before its gate and kept while it is
+    #: champion. Only gates that played count. Unset (or 0) is off.
+    rollback_after: int | msgspec.UnsetType = msgspec.UNSET
+    #: The score against the champion below which a gate counts toward ``rollback_after``.
+    #: Unset means 0.45.
+    rollback_below: float | msgspec.UnsetType = msgspec.UNSET
+    #: After this many straight gates without a promotion the run stops, says why and saves
+    #: itself. Only gates that played count. Unset (or 0) is off.
+    stall_after: int | msgspec.UnsetType = msgspec.UNSET
     #: True: a candidate due its gate is always gated, also when a floor admission is due at the
     #: same step, and one the gate refuses joins the pool anyway, unpromoted, as a floor
     #: admission does. So every candidate is measured against the champion and the pool keeps
@@ -672,6 +683,45 @@ def pfsp_window_of(ladder: LadderConfig) -> int:
 def pfsp_offset_of(ladder: LadderConfig) -> float:
     """``ladder.pfsp_offset``, with an unset one read as 0."""
     return 0.0 if ladder.pfsp_offset is msgspec.UNSET else float(ladder.pfsp_offset)
+
+
+#: ``ladder.rollback_below`` when it is unset.
+ROLLBACK_BELOW = 0.45
+
+
+def rollback_after_of(ladder: LadderConfig) -> int:
+    """``ladder.rollback_after``, with an unset one read as 0 (off)."""
+    return 0 if ladder.rollback_after is msgspec.UNSET else int(ladder.rollback_after)
+
+
+def rollback_below_of(ladder: LadderConfig) -> float:
+    """``ladder.rollback_below``, with an unset one read as 0.45."""
+    if ladder.rollback_below is msgspec.UNSET:
+        return ROLLBACK_BELOW
+    return float(ladder.rollback_below)
+
+
+def stall_after_of(ladder: LadderConfig) -> int:
+    """``ladder.stall_after``, with an unset one read as 0 (off)."""
+    return 0 if ladder.stall_after is msgspec.UNSET else int(ladder.stall_after)
+
+
+def _recovery_problems(ladder: LadderConfig) -> list[str]:
+    """Everything wrong with the rollback and the stall stop."""
+    problems: list[str] = []
+    if rollback_after_of(ladder) < 0:
+        problems.append("ladder.rollback_after must not be negative; 0 or unset is off")
+    if stall_after_of(ladder) < 0:
+        problems.append("ladder.stall_after must not be negative; 0 or unset is off")
+    below = rollback_below_of(ladder)
+    if not 0.0 < below < 1.0:
+        problems.append(f"ladder.rollback_below is {below}; it must be between 0 and 1")
+    if ladder.rollback_below is not msgspec.UNSET and rollback_after_of(ladder) <= 0:
+        problems.append(
+            "ladder.rollback_below is set and ladder.rollback_after is off, which is the only "
+            "rule that reads it"
+        )
+    return problems
 
 
 def _pfsp_problems(ladder: LadderConfig) -> list[str]:
@@ -1368,6 +1418,7 @@ def check_consistency(config: RunConfig) -> list[str]:
     problems.extend(_seed_snapshot_problems(config.ladder))
     problems.extend(_seat_deck_problems(config.ladder))
     problems.extend(_pfsp_problems(config.ladder))
+    problems.extend(_recovery_problems(config.ladder))
     problems.extend(mode_problems(config.ladder.release_mode, "ladder.release_mode"))
     problems.extend(mode_problems(config.ladder.opponent_mode, "ladder.opponent_mode"))
     if config.ppo.policy_transform is not msgspec.UNSET:

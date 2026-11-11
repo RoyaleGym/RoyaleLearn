@@ -643,6 +643,26 @@ METRICS: dict[str, MetricSpec] = {
         "count", "Evaluation battles played so far in this run.", dtype="int"
     ),
     "ladder/evictions": _m("count", "Snapshots removed from the sampler so far.", dtype="int"),
+    "ladder/rollbacks": _m(
+        "count",
+        "Times the learner went back to the champion's weights and optimizer state "
+        "(ladder.rollback_after). Present only with ladder.rollback_after or "
+        "ladder.stall_after on.",
+        dtype="int",
+    ),
+    "ladder/gates_since_promotion": _m(
+        "count",
+        "Straight played gates without a promotion; ladder.stall_after stops the run at its value. "
+        "Present only with ladder.rollback_after or ladder.stall_after on.",
+        dtype="int",
+    ),
+    "ladder/gates_below": _m(
+        "count",
+        "Straight played gates in which the candidate scored below ladder.rollback_below against "
+        "the champion; ladder.rollback_after rolls the learner back at its value. Present only "
+        "with ladder.rollback_after or ladder.stall_after on.",
+        dtype="int",
+    ),
     "ladder/role_counts/mirror": _m(
         "count",
         "Training battles that finished this iteration as mirror battles, one per battle episode.",

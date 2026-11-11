@@ -1353,9 +1353,7 @@ class PPOUpdate(Update):
         by parameter index, which is what ``weights_only=True`` can read back, and the weights
         themselves are safetensors in the folder next door.
         """
-        folder.mkdir(parents=True, exist_ok=True)
-        torch.save(self.actor_optimizer.state_dict(), folder / self.ACTOR_FILE)
-        torch.save(self.critic_optimizer.state_dict(), folder / self.CRITIC_FILE)
+        self.save_optimizer_state(folder)
         state: dict[str, Any] = {
             "format_version": self.FORMAT_VERSION,
             "cumulative_model_updates": self.model_updates,
@@ -1377,13 +1375,15 @@ class PPOUpdate(Update):
             state["extensions"] = extensions
         (folder / self.STATE_FILE).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
-    def load_checkpoint(self, folder: Path, *, strict: bool) -> None:
-        """Restore both optimizers, then the configured keyword arguments over them.
+    def save_optimizer_state(self, folder: Path) -> None:
+        """Both optimizers' states and nothing else: what ``ladder.rollback_after`` returns to
+        beside the weights."""
+        folder.mkdir(parents=True, exist_ok=True)
+        torch.save(self.actor_optimizer.state_dict(), folder / self.ACTOR_FILE)
+        torch.save(self.critic_optimizer.state_dict(), folder / self.CRITIC_FILE)
 
-        The order is the point. An optimizer state dict carries the learning rate the run was
-        saved at, so loading it last would silently undo a rate the user changed for the resumed
-        half of the run.
-        """
+    def load_optimizer_state(self, folder: Path, *, strict: bool = True) -> None:
+        """Both optimizers' states, then the configured keyword arguments over them."""
         for optimizer, name, kwargs in (
             (self.actor_optimizer, self.ACTOR_FILE, self.actor_kwargs),
             (self.critic_optimizer, self.CRITIC_FILE, self.critic_kwargs),
@@ -1399,6 +1399,15 @@ class PPOUpdate(Update):
             )
             for group in optimizer.param_groups:
                 group.update(kwargs)
+
+    def load_checkpoint(self, folder: Path, *, strict: bool) -> None:
+        """Restore both optimizers, then the configured keyword arguments over them.
+
+        The order is the point. An optimizer state dict carries the learning rate the run was
+        saved at, so loading it last would silently undo a rate the user changed for the resumed
+        half of the run.
+        """
+        self.load_optimizer_state(folder, strict=strict)
         path = folder / self.STATE_FILE
         if not path.exists():
             if strict:

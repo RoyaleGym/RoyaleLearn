@@ -279,6 +279,11 @@ class DirCheckpointStore(CheckpointStore):
         self.verify(path, manifest)
         for component_name, component in components.items():
             folder = path / component_name
+            if not folder.is_dir() and getattr(component, "MAY_BE_ABSENT", False):
+                # Added after the checkpoint was written, by a setting turned on since: the
+                # component says itself what starting without its state means.
+                component.load_checkpoint(folder, strict=strict)
+                continue
             if not folder.is_dir():
                 if strict:
                     raise CheckpointFormatError(

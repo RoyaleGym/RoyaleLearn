@@ -201,6 +201,16 @@ they are normalised, so with the hard shape at power 2, both floors at zero and 
 (`max_resident_opponents` of them) and then each game's opponent among those, so to have every
 member drawn by its own weight, set `max_resident_opponents` to at least the size of the pool.
 
+### Going back to the champion, and stopping
+
+Two settings, both off unless set. `rollback_after: 2` sends the bot back to the champion when
+two gates in a row go badly: each candidate scoring under 45% (`rollback_below`) against the
+champion. "Back" means the champion's own weights and optimizer state, saved when the champion
+was a candidate, so training restarts from the best bot so far rather than from the one that has
+been getting worse. The step counters and everything else carry on. `stall_after: 10` stops the
+run after ten gates in a row without a promotion, and saves it first. Floor admissions are not
+gates for either rule, and a promotion resets both counts.
+
 You can see the weighting in one command. The last argument is the stand-in's rating:
 
 ```

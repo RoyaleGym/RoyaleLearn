@@ -58,6 +58,10 @@ PRODUCED_ELSEWHERE: dict[str, str] = {
     "run/determinism_tier": "coordinator",
     "run/resumed_with_drift": "coordinator",
     "run/state_digest": "coordinator",
+    # ladder.rollback_after and ladder.stall_after, by the coordinator and only with one on
+    "ladder/rollbacks": "coordinator",
+    "ladder/gates_below": "coordinator",
+    "ladder/gates_since_promotion": "coordinator",
     # the rollout farm's timing and the parent's own clock
     **{key: "coordinator" for key in schema.METRICS if key.startswith("throughput/")},
     **{key: "coordinator" for key in schema.METRICS if key.startswith("time/")},
