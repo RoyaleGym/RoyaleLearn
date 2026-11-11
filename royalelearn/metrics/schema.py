@@ -1057,6 +1057,10 @@ CONDITIONAL: dict[str, str] = {
     "ladder/transitivity_residual": "a rating fit exists",
     "ladder/rating_above_v0": "the fit holds both the learner and the first snapshot",
     "ladder/pfsp_learner_step": "the fit has rated the learner's newest archived snapshot",
+    **dict.fromkeys(
+        ("ladder/rollbacks", "ladder/gates_below", "ladder/gates_since_promotion"),
+        "ladder.rollback_after or ladder.stall_after is on",
+    ),
     "ladder/gate_observed_rate": "a gate decision carries its champion condition",
     "ladder/gate_lower_bound": "a gate decision carries its champion condition",
     # Absent without a device rather than zero. A zero here would read as "no fragmentation"

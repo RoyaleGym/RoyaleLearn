@@ -167,3 +167,85 @@ def test_overlap_keeps_one_behaviour_actor_so_its_graphs_are_not_captured_again(
             for parameter in model.actor.parameters():
                 parameter.mul_(1.1)
     assert seen[0] == seen[1] == seen[2]
+
+
+def test_a_round_beside_an_update_captures_nothing_and_the_next_prepare_does(
+    rect: Any,  # noqa: F811
+) -> None:
+    """Under overlap the rounds run beside the update, and a capture there broke the update on
+    a GPU. So a deferred round builds no graph: what it finds missing runs as it would without
+    graphs, and ``prepare_overlap``, on the main thread before the next update, captures it.
+    Plant: capture in the deferred round, and a graph appears before the prepare."""
+    from royalelearn.learn.actor_critic import BehaviourSnapshot
+
+    model = build_model(rect.spec)
+    store = _OneActorStore(build_model(rect.spec).actor)
+    engine = inference_for(rect, model=model, snapshots=store, cuda_graphs=True)
+    eager = inference_for(rect, model=model, snapshots=store)
+    plan = _pool_plan(SLOTS, ("snap:a", "snap:b"))
+    eager.begin_iteration(plan)
+    held = engine.prepare_overlap(plan, BehaviourSnapshot.of(model))
+    engine.begin_iteration(plan, behaviour=held, defer_capture=True)
+    got = engine.act(round_with(_mixed(), cycle=0, buffer=rect.buffer))
+    want = eager.act(round_with(_mixed(), cycle=0, buffer=rect.buffer))
+    assert np.array_equal(got.actions, want.actions)
+    assert not engine._graphs
+    assert {key[0] for key in engine._misses} == {"learner", "frozen"}
+    held = engine.prepare_overlap(plan, BehaviourSnapshot.of(model))
+    built = {key: id(entry) for key, entry in engine._graphs.items()}
+    assert {key[0] for key in built} == {"learner", "frozen"} and not engine._misses
+    engine.begin_iteration(plan, behaviour=held, defer_capture=True)
+    engine.act(round_with(_mixed(), cycle=1, buffer=rect.buffer))
+    assert {key: id(entry) for key, entry in engine._graphs.items()} == built
+    assert not engine._misses
+
+
+def test_with_overlap_every_graph_is_built_on_the_main_thread(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The run itself: rounds collected on the collection thread beside the update, the graph
+    path on (its CPU stand-in), and every graph built on the thread the update runs on, before
+    it runs. Plant: begin the collection thread's iteration without defer_capture, and the
+    collection thread builds graphs."""
+    import threading
+
+    import royalelearn.learn.inference as inference_module
+
+    built: list[str] = []
+
+    class _Recording(GraphedForward):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            built.append(threading.current_thread().name)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(inference_module, "GraphedForward", _Recording)
+    base = tiny_config(tmp_path)
+    config = tiny_config(
+        tmp_path,
+        rollout=msgspec.structs.replace(base.rollout, overlap=True),
+        alarms=msgspec.structs.replace(base.alarms, enabled=False),
+    )
+    with coordinator(config) as run:
+        run.inference.cuda_graphs = True  # the CPU stand-in of the graph path
+        prepare = run.inference.prepare_overlap
+        calls: list[int] = []
+
+        def forgetful(plan: Any, behaviour: Any) -> Any:
+            # The first prepare forgets every graph, so it knows no size to capture at and the
+            # collection thread meets a forward with no graph: what it does then is the test.
+            if not calls:
+                run.inference._graphs.clear()
+            calls.append(len(calls))
+            return prepare(plan, behaviour)
+
+        run.inference.prepare_overlap = forgetful
+        # What learn() sets: without a limit an iteration does not collect the next beside it.
+        run._limit = 10**12
+        for _ in range(4):
+            run.iterate()
+        assert run._prefetched is not None
+    assert len(calls) >= 2
+    # Iteration 0's on the main thread, then the one the collection thread missed, captured by
+    # the next prepare, on the main thread too.
+    assert len(built) >= 2
+    assert set(built) == {threading.main_thread().name}

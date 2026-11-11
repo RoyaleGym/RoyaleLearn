@@ -244,24 +244,88 @@ class BatchedInference:
         self._graph_pool = (
             torch.cuda.graph_pool_handle() if self.cuda_graphs and self._capture else None
         )
+        #: True while the rounds are collected beside an update (``rollout.overlap``, on the
+        #: collection thread): no graph is captured then, see ``prepare_overlap``.
+        self._defer_capture = False
+        #: The forwards a deferred round found without a graph: (key, size) -> (actor, fn, obs).
+        self._misses: dict[tuple[Any, ...], tuple[Any, Callable[[ObsBatch], Tensor], ObsBatch]] = {}
 
     # -- the iteration ------------------------------------------------------
 
     def begin_iteration(
-        self, plan: SlotPlan, *, behaviour: BehaviourSnapshot | None = None
+        self,
+        plan: SlotPlan,
+        *,
+        behaviour: BehaviourSnapshot | None = None,
+        defer_capture: bool = False,
     ) -> None:
         """Take the iteration's opening table and, with overlap, the actor to sample from.
 
         The plan is what turns a non-negative group index into a snapshot id: the workers carry
-        one byte per slot and the parent owns the table it indexes.
+        one byte per slot and the parent owns the table it indexes. ``defer_capture`` is for
+        rounds collected beside an update: no CUDA graph is captured in them (see
+        ``prepare_overlap``).
         """
         self.plan = plan
         self.iteration = plan.iteration
         self.behaviour = self._behaviour_held(behaviour)
+        self._defer_capture = bool(defer_capture)
         self._uniforms = None
         self._uniform_cycle = -1
-        # A graph holds its actor; one whose actor will not play this iteration goes.
-        actor = self.behaviour if self.behaviour is not None else self.model
+        self._prune(self.behaviour if self.behaviour is not None else self.model, plan)
+
+    def prepare_overlap(self, plan: SlotPlan, behaviour: BehaviourSnapshot) -> BehaviourSnapshot:
+        """Ready the graphs the next overlapped collection will replay, on the calling thread,
+        before the update starts beside it. Returns the behaviour actor to collect with.
+
+        A capture must not overlap the update. A capture on one thread and an update on another
+        fail together in ways no capture mode prevents: the update's first critic pass (a conv
+        the process has not run before, at a shape it has not seen) raised "operation not
+        permitted when stream is capturing" on molab while the collection thread captured. So
+        under overlap the collection thread captures nothing: every graph is captured here,
+        while nothing else runs. That is the learner's at every size it has used, for the
+        behaviour actor this collection samples from, and every graph the last overlapped
+        collection found missing, for the opponents still resident. A forward that still finds
+        no graph runs as it would without graphs, and is captured at the next call.
+        """
+        held = self._behaviour_held(behaviour)
+        assert held is not None
+        if not self.cuda_graphs:
+            self._misses.clear()
+            return held
+        templates: dict[int, ObsBatch] = {}
+        for (*_, size), entry in self._graphs.items():
+            templates.setdefault(size, entry.inputs)
+        learner_sizes = {key[-1] for key in self._graphs if key[0] == "learner"}
+        for key, (_keep, _fn, obs) in self._misses.items():
+            templates.setdefault(key[-1], obs)
+            if key[0] == "learner":
+                learner_sizes.add(key[-1])
+        self._prune(held, plan)
+        wanted: dict[tuple[Any, ...], tuple[Any, Callable[[ObsBatch], Tensor]]] = {
+            ("learner", size): (held, held.logits) for size in sorted(learner_sizes)
+        }
+        resident = set(plan.resident_snapshots)
+        for key, (keep, fn, _obs) in self._misses.items():
+            if key[0] == "frozen" and key[1] in resident:
+                wanted.setdefault(key, (keep, fn))
+        self._misses.clear()
+        for key, (keep, fn) in wanted.items():
+            entry = self._graphs.get(key)
+            if entry is not None and entry.keep is keep:
+                continue
+            self._graphs[key] = GraphedForward(
+                fn,
+                templates[key[-1]],
+                key[-1],
+                keep=keep,
+                capture=self._capture,
+                pool=self._graph_pool,
+            )
+        return held
+
+    def _prune(self, actor: Any, plan: SlotPlan) -> None:
+        """Drop each graph whose actor will not play this iteration: a graph holds its actor."""
         resident = set(plan.resident_snapshots)
         for key in list(self._graphs):
             if (key[0] == "learner" and self._graphs[key].keep is not actor) or (
@@ -285,6 +349,8 @@ class BatchedInference:
         if behaviour is None:
             return None
         held = getattr(self, "_behaviour", None)
+        if held is behaviour:
+            return held
         if held is None or held.transform is not behaviour.transform:
             self._behaviour = type(behaviour)(behaviour.actor, behaviour.transform)
             return self._behaviour
@@ -437,6 +503,10 @@ class BatchedInference:
             return fn(obs)
         entry = self._graphs.get((*key, size))
         if entry is None or entry.keep is not keep:
+            if self._defer_capture:
+                # Beside an update: not captured now, but by the next prepare_overlap.
+                self._misses[(*key, size)] = (keep, fn, obs)
+                return fn(obs)
             entry = GraphedForward(
                 fn, obs, size, keep=keep, capture=self._capture, pool=self._graph_pool
             )

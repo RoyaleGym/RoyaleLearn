@@ -241,6 +241,8 @@ def test_a_run_rolls_back_to_the_champion_and_carries_on(tmp_path: Path, overlap
     lines: list[str] = []
     with coordinator(config, printer=lines.append) as run:
         run.gate = _ScriptedGate(["first", "won", 0.3, 0.3, 0.6])
+        # What learn() sets: without a limit an iteration does not collect the next beside it.
+        run._limit = 10**12
         run.iterate()  # the first champion, promoted without a game
         run.iterate()  # a champion that won its gate
         champion = run.pool.champion
@@ -248,6 +250,7 @@ def test_a_run_rolls_back_to_the_champion_and_carries_on(tmp_path: Path, overlap
         assert at_champion is not None
         run.iterate()  # lost badly: one
         assert run.rows[-1]["ladder/gates_below"] == 1
+        assert (run._prefetched is not None) is overlap
         before = (run.iteration, run.cumulative_env_steps, run.update.model_updates)
         run.iterate()  # lost badly: two, and back
         assert run.rows[-1]["ladder/rollbacks"] == 1

@@ -1979,6 +1979,10 @@ class LearningCoordinator:
         )
         plan = self.matchmaker.plan(iteration, self.pool, self.ratings, self.geometry)
         behaviour = BehaviourSnapshot.of(self.model)
+        # Here, on this thread and before the update starts, every CUDA graph the collection will
+        # replay is captured: the collection thread captures none (learn/inference.py,
+        # prepare_overlap). ``behaviour`` itself stays the update's.
+        sampled = self.inference.prepare_overlap(plan, behaviour)
         stream = None
         if self.device.type == "cuda":  # pragma: no cover - the suite runs on the CPU
             stream = torch.cuda.Stream(device=self.device)
@@ -1992,7 +1996,7 @@ class LearningCoordinator:
                         scope.enter_context(torch.cuda.stream(stream))
                     self.collect_buffer.begin_iteration(plan, geo.cycles)
                     self.source.begin_iteration(plan, self.collect_buffer, iteration)
-                    self.inference.begin_iteration(plan, behaviour=behaviour)
+                    self.inference.begin_iteration(plan, behaviour=sampled, defer_capture=True)
                     collection = self._collect(
                         plan,
                         sched,

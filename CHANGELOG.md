@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Under `rollout.overlap` no CUDA graph is captured on the collection thread. 0.5.23's capture,
+  thread-local and without the device-wide synchronise, still broke the update beside it on a GPU
+  ("operation not permitted when stream is capturing" in the first update's critic pass). Every
+  graph is now captured on the main thread before the update starts: the learner's at each size
+  it has used, for the behaviour actor, and every graph the last overlapped collection found
+  missing, which ran without a graph meanwhile.
 - `ladder.rollback_after`: after that many straight gates in which the candidate scored below
   `ladder.rollback_below` (0.45 unset) against the champion, the learner goes back to the
   champion's weights and both optimizers' states, saved beside each candidate before its gate
