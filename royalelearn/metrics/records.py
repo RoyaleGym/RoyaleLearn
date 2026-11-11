@@ -477,6 +477,7 @@ def ladder_fields(
     members: Iterable[str] | None = None,
     rungs: Mapping[str, Comparison] | None = None,
     probe_seconds_frac: float | None = None,
+    pfsp_effective: bool | None = None,
 ) -> dict[str, MetricValue]:
     """The ``ladder/`` group: the fit, the pool's shape, the last gate and the last probe.
 
@@ -489,6 +490,9 @@ def ladder_fields(
     would publish a score for weights that have since moved, and the whole reason these keys
     were empty before the probe existed is that a number which lags the policy is worse than a
     missing one: the absence is visible.
+
+    ``pfsp_effective`` is passed when PFSP does not read the fit (``ladder.pfsp_source``
+    "games"): whether any member the weights read has a learning game behind its score.
     """
     from ..ladder.gate import failed_condition
     from ..ladder.pool import SCRIPTED_NOOP, SCRIPTED_RANDOM_LEGAL
@@ -505,7 +509,9 @@ def ladder_fields(
         "ladder/evictions": pool.state.evictions,
         # Whether PFSP weighed the pool by a rating this iteration or fell back to uniform,
         # and which snapshot stood in for the learner (docs/harness-spec.md section 11.3).
-        "ladder/pfsp_effective": int(stand_in is not None),
+        "ladder/pfsp_effective": int(
+            stand_in is not None if pfsp_effective is None else pfsp_effective
+        ),
         # Counted from the log rather than from ``pool.state.eval_games``. That counter lives in
         # ``LadderPool.record`` (pool.py:226) and is keyed on KIND_EVAL correctly, but the only
         # caller of ``record`` in the package is ``record_training_results``, which hardcodes

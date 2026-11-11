@@ -581,8 +581,9 @@ METRICS: dict[str, MetricSpec] = {
     "ladder/pfsp_effective": _m(
         "flag",
         "1 when PFSP weighed the pool by a fitted rating this iteration, 0 when it fell back "
-        "to uniform because no rated snapshot stood in for the learner. An arm meant to "
-        "train against ladder.pfsp_weighting reads this first.",
+        "to uniform because no rated snapshot stood in for the learner. Under "
+        "ladder.pfsp_source 'games', 1 when a member's weight read a learning game. An arm "
+        "meant to train against ladder.pfsp_weighting reads this first.",
         dtype="int",
     ),
     "ladder/pfsp_learner_step": _m(

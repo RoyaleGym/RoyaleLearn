@@ -620,11 +620,70 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: draw by the weights, and a battle's seat and its own stream are what they were. Unset
     #: means off, and is left out of the encoding.
     opponent_affinity: bool | msgspec.UnsetType = msgspec.UNSET
+    #: Where PFSP reads the learner's score against a pool member from. "fit" (what unset
+    #: means): the fitted ratings, through the snapshot standing in for the learner. "games":
+    #: the learner's own latest learning games against that member, the last ``pfsp_window`` of
+    #: them, a win one, a draw a half and a loss nothing; a member it has not played yet reads
+    #: one half. The scores are read once per iteration, as its plan is drawn, so every episode
+    #: of an iteration is drawn by the same weights. Unset is left out of the encoding.
+    pfsp_source: str | msgspec.UnsetType = msgspec.UNSET
+    #: How many of the learner's latest learning games per pool member ``pfsp_source`` "games"
+    #: reads. Unset means 200.
+    pfsp_window: int | msgspec.UnsetType = msgspec.UNSET
+    #: Added to every member's shaped weight before the weights are normalised, so a member the
+    #: learner beats every time is still drawn. Unset means nothing is added. With
+    #: ``pfsp_weighting`` "hard", ``pfsp_power`` 2, ``pfsp_uniform_floor`` and
+    #: ``weight_floor_scale`` 0 and this at 0.05, a member's weight is (1 - score)^2 + 0.05.
+    pfsp_offset: float | msgspec.UnsetType = msgspec.UNSET
 
 
 def opponent_affinity_of(ladder: LadderConfig) -> bool:
     """``ladder.opponent_affinity``, with an unset one read as False."""
     return ladder.opponent_affinity is not msgspec.UNSET and bool(ladder.opponent_affinity)
+
+
+#: The values ``ladder.pfsp_source`` takes.
+PFSP_SOURCES = ("fit", "games")
+#: ``ladder.pfsp_window`` when it is unset.
+PFSP_WINDOW = 200
+
+
+def pfsp_source_of(ladder: LadderConfig) -> str:
+    """``ladder.pfsp_source``, with an unset one read as "fit"."""
+    return "fit" if ladder.pfsp_source is msgspec.UNSET else str(ladder.pfsp_source)
+
+
+def pfsp_window_of(ladder: LadderConfig) -> int:
+    """``ladder.pfsp_window``, with an unset one read as 200."""
+    return PFSP_WINDOW if ladder.pfsp_window is msgspec.UNSET else int(ladder.pfsp_window)
+
+
+def pfsp_offset_of(ladder: LadderConfig) -> float:
+    """``ladder.pfsp_offset``, with an unset one read as 0."""
+    return 0.0 if ladder.pfsp_offset is msgspec.UNSET else float(ladder.pfsp_offset)
+
+
+def _pfsp_problems(ladder: LadderConfig) -> list[str]:
+    """Everything wrong with where PFSP reads its scores from and what it adds to them."""
+    problems: list[str] = []
+    source = pfsp_source_of(ladder)
+    if source not in PFSP_SOURCES:
+        problems.append(
+            f"ladder.pfsp_source is {source!r}, which is not one of {', '.join(PFSP_SOURCES)}"
+        )
+    if ladder.pfsp_window is not msgspec.UNSET:
+        if pfsp_window_of(ladder) < 1:
+            problems.append("ladder.pfsp_window must be at least 1")
+        if source != "games":
+            # A window nothing reads is a setting the run would appear to have and not have.
+            problems.append(
+                "ladder.pfsp_window is set and ladder.pfsp_source is not 'games', which is the "
+                "only source that reads it"
+            )
+    offset = pfsp_offset_of(ladder)
+    if not math.isfinite(offset) or offset < 0:
+        problems.append(f"ladder.pfsp_offset is {offset}; it must be finite and not negative")
+    return problems
 
 
 class CheckpointConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -1282,6 +1341,7 @@ def check_consistency(config: RunConfig) -> list[str]:
     problems.extend(_scripted_opponent_problems(config.ladder))
     problems.extend(_seed_snapshot_problems(config.ladder))
     problems.extend(_seat_deck_problems(config.ladder))
+    problems.extend(_pfsp_problems(config.ladder))
     problems.extend(mode_problems(config.ladder.release_mode, "ladder.release_mode"))
     problems.extend(mode_problems(config.ladder.opponent_mode, "ladder.opponent_mode"))
     if config.ppo.policy_transform is not msgspec.UNSET:

@@ -192,6 +192,13 @@ uniformly. Before the first snapshot has been rated, the draw is still uniform. 
 says which happened: `ladder/pfsp_effective` is 1 when the draw used a rating and 0 when it fell
 back to uniform, and `ladder/pfsp_learner_step` is the env step of the snapshot that stood in.
 
+`ladder.pfsp_source: "games"` weighs by the live bot's own record instead: its last 200 learning
+games against each member (`pfsp_window`), a win 1, a draw a half and a loss 0, and a half for a
+member it has not played. Nothing stands in and nothing lags a snapshot cadence; the record is
+read as each iteration's plan is drawn. `pfsp_offset` adds a constant to every weight before
+they are normalised, so with the hard shape at power 2, both floors at zero and the offset at
+0.05 a member's weight is (1 - score)^2 + 0.05.
+
 You can see the weighting in one command. The last argument is the stand-in's rating:
 
 ```

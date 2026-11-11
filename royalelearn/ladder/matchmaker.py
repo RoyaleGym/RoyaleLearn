@@ -30,7 +30,7 @@ episode boundary, so a partially controlled trajectory cannot occur.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,7 +48,13 @@ from ..api.rollout import (
     EpisodeRecord,
     SlotPlan,
 )
-from ..config import opponent_affinity_of, role_counts
+from ..config import (
+    opponent_affinity_of,
+    pfsp_offset_of,
+    pfsp_source_of,
+    pfsp_window_of,
+    role_counts,
+)
 from ..seeding import MATCH_BATTLE, MATCH_SHARD, derive_generator, stream_path
 from .pool import SCRIPTED_IDS
 from .seat_decks import learner_seat_of
@@ -156,6 +162,10 @@ class MixMatchmaker(Matchmaker):
         self._layout: np.ndarray | None = None
         #: ``ladder.opponent_affinity``'s battle -> (worker, shard), from the plan's geometry.
         self._shard_of: tuple[np.ndarray, np.ndarray] | None = None
+        #: ``ladder.pfsp_source`` "games": each pool member's latest learner scores, oldest
+        #: first, and the means the current plan's weights read, taken as it was drawn.
+        self._games: dict[str, list[float]] = {}
+        self._scores: dict[str, float] = {}
         if n_battles is not None:
             self.set_rectangle(int(n_battles))
 
@@ -306,18 +316,28 @@ class MixMatchmaker(Matchmaker):
         tail becomes unreachable, which is the job AlphaStar's forgotten-players slice does;
         with them, the weakest member of a pool of fifty is still drawn about once in a
         thousand episodes and the fit keeps a number for it.
+
+        The score each shape reads is the fit's prediction, or under ``ladder.pfsp_source``
+        "games" the learner's own recent record (``record_learning_games``), and
+        ``ladder.pfsp_offset`` is added to every shaped weight before it is normalised.
         """
         count = len(candidates)
         if count == 0:
             return np.zeros(0, dtype=np.float64)
-        predicted = np.array(
-            [
-                self._predicted_score(candidate, ratings, learner_rating)
-                for candidate in candidates
-            ],
-            dtype=np.float64,
-        )
+        if pfsp_source_of(self.config) == "games":
+            predicted = np.array(
+                [self._scores.get(candidate, 0.5) for candidate in candidates], dtype=np.float64
+            )
+        else:
+            predicted = np.array(
+                [
+                    self._predicted_score(candidate, ratings, learner_rating)
+                    for candidate in candidates
+                ],
+                dtype=np.float64,
+            )
         shaped = pfsp_shape(predicted, weighting, self.config.pfsp_power)
+        shaped = shaped + pfsp_offset_of(self.config)
         shaped = shaped / shaped.sum()
         uniform = self.config.pfsp_uniform_floor
         weights = (1.0 - uniform) * shaped + uniform / count
@@ -350,6 +370,36 @@ class MixMatchmaker(Matchmaker):
         if other is None:
             return 0.5
         return 1.0 / (1.0 + 10.0 ** ((other - learner_rating) / 400.0))
+
+    # -- the learner's own record ------------------------------------------
+
+    def record_learning_games(self, outcomes: Iterable[tuple[str, float]]) -> None:
+        """Add the learner's scores in finished learning games, ``(opponent, score)`` with a
+        draw as a half, keeping each opponent's latest ``ladder.pfsp_window``.
+
+        Under ``ladder.pfsp_source`` "games" only; otherwise nothing reads them and nothing is
+        kept. They reach the weights at the next ``plan``, so an iteration's episodes are all
+        drawn by the scores its plan read.
+        """
+        if pfsp_source_of(self.config) != "games":
+            return
+        window = pfsp_window_of(self.config)
+        for opponent, score in outcomes:
+            games = self._games.setdefault(str(opponent), [])
+            games.append(float(score))
+            del games[:-window]
+
+    def learning_scores(self) -> dict[str, float]:
+        """The scores the current plan's weights read: each member's mean over its window."""
+        return dict(self._scores)
+
+    def _read_learning_games(self, pool: LadderPool) -> None:
+        """Take the scores this plan's weights read, after dropping members no longer drawable."""
+        drawable = set(pool.sampler())
+        self._games = {
+            member: games for member, games in self._games.items() if member in drawable and games
+        }
+        self._scores = {member: float(np.mean(games)) for member, games in self._games.items()}
 
     # -- the draw -----------------------------------------------------------
 
@@ -471,6 +521,8 @@ class MixMatchmaker(Matchmaker):
             battles // geometry.games_per_worker,
             (battles % geometry.games_per_worker) // geometry.games_per_shard,
         )
+        if pfsp_source_of(self.config) == "games":
+            self._read_learning_games(pool)
         assignments = tuple(
             self.assign(battle, self.ordinal(battle), pool, ratings)
             for battle in range(geometry.n_battles)
@@ -495,14 +547,21 @@ class MixMatchmaker(Matchmaker):
         would only add a second copy that could disagree with the first.
         """
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / "matchmaker.json").write_bytes(
-            msgspec.json.encode(
-                {
-                    "ordinal": {str(k): v for k, v in sorted(self._ordinal.items())},
-                    "n_battles": self._n_battles,
-                }
+        state: dict[str, object] = {
+            "ordinal": {str(k): v for k, v in sorted(self._ordinal.items())},
+            "n_battles": self._n_battles,
+        }
+        if pfsp_source_of(self.config) == "games":
+            # The record moves every iteration and the resident set is drawn only when the
+            # residency epoch moves, by the scores of that moment, so neither is a function of
+            # the pool any longer and both are kept.
+            state["learning_games"] = {k: v for k, v in sorted(self._games.items())}
+            state["residents"] = (
+                None
+                if self._residents is None
+                else [self._residents[0], list(self._residents[1])]
             )
-        )
+        (folder / "matchmaker.json").write_bytes(msgspec.json.encode(state))
 
     def load_checkpoint(self, folder: Path, *, strict: bool = True) -> None:
         """Put the ordinals and the rectangle back.
@@ -528,3 +587,10 @@ class MixMatchmaker(Matchmaker):
         stored = state.get("n_battles")
         if stored is not None:
             self.set_rectangle(int(stored))
+        self._games = {
+            str(k): [float(x) for x in v] for k, v in state.get("learning_games", {}).items()
+        }
+        self._scores = {}
+        residents = state.get("residents")
+        if residents is not None:
+            self._residents = (int(residents[0]), tuple(str(r) for r in residents[1]))

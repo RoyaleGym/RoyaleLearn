@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `ladder.pfsp_source: "games"`: PFSP weighs the pool by the learner's own latest learning games
+  against each member, the last `ladder.pfsp_window` (200 unset) of them, a draw as a half and a
+  half before any, rather than by the fit's prediction through the snapshot standing in for the
+  learner. The scores are read as each plan is drawn, so an iteration's episodes are all drawn by
+  one set of weights, and the matchmaker's checkpoint keeps the record and the resident set it
+  drew, so a resumed run draws what the run would have. `ladder.pfsp_offset` adds a constant to
+  every shaped weight before they are normalised; the hard shape at power 2 with both floors at
+  zero and an offset of 0.05 gives (1 - score)^2 + 0.05. Unset, nothing is encoded and nothing
+  changes.
+
 ## 0.5.22
 
 - `rollout.cuda_graphs`: each policy's rollout forward is captured as a CUDA graph at the smallest

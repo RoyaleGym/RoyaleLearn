@@ -58,6 +58,7 @@ from .config import (
     cuda_graphs_of,
     dump_config,
     geometry,
+    pfsp_source_of,
     policy_transform_of,
     validate,
 )
@@ -2268,6 +2269,8 @@ class LearningCoordinator:
             self.elo.update(LEARNER_ID, record.opponent_id, outcomes[-1][2])
         if outcomes:
             self.pool.record_training_results(outcomes, iteration=self.iteration)
+            # ladder.pfsp_source "games" weighs the pool by these; read at the next plan.
+            self.matchmaker.record_learning_games((b, score) for _a, b, score in outcomes)
 
     def _maybe_gate(self) -> float:
         """Snapshot a candidate at the env-step cadence and put it through the gate."""
@@ -2565,6 +2568,11 @@ class LearningCoordinator:
                     else self.gate_seconds_total / max(1e-9, wall)
                 ),
                 rungs=self.last_rungs or None,
+                pfsp_effective=(
+                    bool(self.matchmaker.learning_scores())
+                    if pfsp_source_of(self.config.ladder) == "games"
+                    else None
+                ),
                 # Absent until a probe has run, rather than a zero that reads as "probing is
                 # free" on a run that never probes.
                 probe_seconds_frac=(
