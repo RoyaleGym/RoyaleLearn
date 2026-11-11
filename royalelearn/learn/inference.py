@@ -135,7 +135,9 @@ class RectGather:
             staged[:, 0] = current
         if not live.all():
             staged[~live] = 0
-        raw = slab[:count].to(self.device, non_blocking=True)
+        # Only CUDA's copy is fenced by the ring's events. On MPS a non_blocking copy is still
+        # reading the slab when it returns, and the next gather would overwrite it.
+        raw = slab[:count].to(self.device, non_blocking=self.device.type == "cuda")
         self._ring.copied()
         out = self.buffer._empty_obs(count)
         self.buffer.codec.unpack_to_device(raw, self.buffer._statics(), out)
@@ -518,7 +520,9 @@ class BatchedInference:
         staged = staging[: values.size]
         staged.numpy()[...] = values
         out = torch.empty(values.size, dtype=staging.dtype, device=self.device)
-        out.copy_(staged, non_blocking=True)
+        # Asynchronous on CUDA only: on MPS the copy would still be reading ``staging`` when the
+        # next call refills it.
+        out.copy_(staged, non_blocking=self.device.type == "cuda")
         return out
 
     def _choice_rows(self, cycle: int, slots: np.ndarray) -> np.ndarray:
@@ -649,8 +653,9 @@ class _StatAccumulator:
         # choice rows only.
         held = p_noop.index_select(0, choice_index)
         widths = n_legal.index_select(0, choice_index).to(held.dtype)
-        gap = distribution.hold_gap().index_select(0, choice_index).to(torch.float64)
-        legal_log = widths.to(torch.float64).log()
+        # float64 on the host: MPS has no float64, and these sums are read on the host anyway.
+        gap = distribution.hold_gap().index_select(0, choice_index).cpu().to(torch.float64)
+        legal_log = widths.cpu().to(torch.float64).log()
         self._pending.append(
             (
                 torch.stack(

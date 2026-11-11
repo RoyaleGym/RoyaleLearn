@@ -181,4 +181,5 @@ class WelfordReturnScaler:
 def _as_float64(values: Tensor | np.ndarray) -> np.ndarray:
     if isinstance(values, np.ndarray):
         return values.astype(np.float64, copy=False)
-    return values.detach().to(device="cpu", dtype=torch.float64).numpy()
+    # Moved first, then cast: MPS refuses a float64 target even on the way to the host.
+    return values.detach().cpu().to(torch.float64).numpy()

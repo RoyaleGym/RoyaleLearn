@@ -172,8 +172,10 @@ class _StagingRing:
     whole point of the events: the host loop runs ahead of the device, and a pinned slab rewritten
     while its transfer is still pending gives a minibatch another minibatch's observations beside
     its own actions and advantages -- a wrong importance ratio, with nothing raised anywhere.
-    On a device that is not CUDA the copy is synchronous, the slabs are not pinned and there is
-    nothing to wait for, so the events are not created at all.
+    On a device that is not CUDA the slabs are not pinned and the events are not created, so the
+    copy must be synchronous there: it is asked for with ``non_blocking`` only on CUDA. MPS does
+    run a ``non_blocking`` copy asynchronously, and without an event the slab would be rewritten
+    under it.
     """
 
     def __init__(
@@ -229,7 +231,8 @@ class _StagingRing:
         staged = self.columns[self._held][name][: values.size]
         staged.numpy()[...] = values
         out = torch.empty(values.size, dtype=staged.dtype, device=device)
-        out.copy_(staged, non_blocking=True)
+        # Asynchronous on CUDA only, where the slot's event fences it (see ``_StagingRing``).
+        out.copy_(staged, non_blocking=torch.device(device).type == "cuda")
         return out
 
     def copied(self) -> None:
@@ -761,7 +764,7 @@ class RectBuffer(ExperienceBuffer):
         # The slot's event is recorded whatever happens below: a column that failed to allocate
         # must not leave the slot marked done while the slab's own copy is still in flight.
         try:
-            raw = slab[:count].to(device, non_blocking=True)
+            raw = slab[:count].to(device, non_blocking=torch.device(device).type == "cuda")
             # After the sort, so the index names rows of this minibatch as it is handed over.
             legal = np.take(self.n_legal.reshape(-1), cells)
             choice = np.flatnonzero(legal > 1)
