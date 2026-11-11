@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.23
 
 - `ladder.pfsp_source: "games"`: PFSP weighs the pool by the learner's own latest learning games
   against each member, the last `ladder.pfsp_window` (200 unset) of them, a draw as a half and a
