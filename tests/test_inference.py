@@ -242,6 +242,37 @@ def test_a_round_reads_its_answers_home_once_whatever_its_policies(
     assert np.array_equal(mixed.log_probs[learner], alone.log_probs[learner])
 
 
+@pytest.mark.parametrize("seat", ["learner", "frozen"])
+def test_a_row_without_its_noop_stops_the_round(
+    rect: Fixture, monkeypatch: pytest.MonkeyPatch, seat: str
+) -> None:
+    """Each policy's distribution is built with the per-construction no-op check off, and the
+    round checks the no-op bit from the copy its answers come home in instead. So that check is
+    the only one: a row without its no-op, at a learner's seat or a frozen opponent's, stops the
+    round. Plant: skip it, and the round plays on."""
+    from royalelearn.learn.distribution import NOOP
+
+    engine = inference_for(rect, snapshots=_OneActorStore(build_model(rect.spec).actor))
+    engine.begin_iteration(_pool_plan(SLOTS, ("snap:a",)))
+    groups = np.full(SLOTS, GROUP_LEARNER, dtype=np.int8)
+    groups[1::2] = 0
+    healthy = engine.act(round_with(groups, buffer=rect.buffer))
+    assert healthy.actions.shape == (SLOTS,)
+    gathered = engine.gather.observations
+    # The round's rows are gathered learner first, then the frozen group.
+    row = 0 if seat == "learner" else SLOTS - 1
+
+    def without_noop(*args: Any, **kwargs: Any) -> Any:
+        obs = gathered(*args, **kwargs)
+        mask = obs.mask.clone()
+        mask[row, NOOP] = False
+        return obs._replace(mask=mask)
+
+    monkeypatch.setattr(engine.gather, "observations", without_noop)
+    with pytest.raises(AssertionError, match=r"mask\[NOOP\] must be True on every row"):
+        engine.act(round_with(groups, buffer=rect.buffer))
+
+
 def test_only_the_learner_s_rows_carry_a_log_probability(rect: Fixture) -> None:
     """A frozen seat's transition is not trained on, and a log-probability from another
     policy's parameters would be a ratio against a denominator nothing optimised."""

@@ -8,6 +8,7 @@ alarm take the number from one function, so they cannot disagree.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -18,12 +19,18 @@ from royalelearn.learn.ppo import TF32_RATIO_ATOL, ratio_tolerance
 
 
 @pytest.fixture
-def tf32(monkeypatch: pytest.MonkeyPatch) -> Any:
+def tf32(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    # The cuBLAS flag is set and put back by hand: from torch 2.15 its module reads and sets the
+    # flag but cannot delete it, which is how monkeypatch undoes an attribute not in __dict__.
+    matmul = torch.backends.cuda.matmul
+    before = matmul.allow_tf32
+
     def allow(on: bool) -> None:
         monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", on)
-        monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+        matmul.allow_tf32 = False
 
-    return allow
+    yield allow
+    matmul.allow_tf32 = before
 
 
 def test_float32_on_a_gpu_allowed_tf32_has_the_tf32_tolerance(tf32: Any) -> None:
