@@ -55,6 +55,7 @@ from .checkpoint import (
 from .config import (
     RunConfig,
     config_hash,
+    cuda_graphs_of,
     dump_config,
     geometry,
     policy_transform_of,
@@ -1079,6 +1080,15 @@ class LearningCoordinator:
             ),
         )
         self._build_ladder()
+        graphs = cuda_graphs_of(config.rollout)
+        if graphs and torch.device(self.device).type != "cuda":
+            self.printer(
+                f"cuda graphs   off: rollout.cuda_graphs needs a CUDA device and this run is on "
+                f"{self.device}, so its forwards run as they always did"
+            )
+            graphs = False
+        elif graphs:
+            self.printer("cuda graphs   each policy's rollout forward replayed as a CUDA graph")
         self.inference = BatchedInference(
             self.buffer,
             self.model,
@@ -1086,6 +1096,7 @@ class LearningCoordinator:
             snapshots=self.snapshot_store,
             device=self.device,
             opponent_mode=config.ladder.opponent_mode,
+            cuda_graphs=graphs,
         )
         # With overlap the workers write one rectangle and the update trains on a copy of it,
         # so the next iteration can be collected while this one trains. Without it they are one.

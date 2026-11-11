@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `rollout.cuda_graphs`: each policy's rollout forward is captured as a CUDA graph at the smallest
+  of a few bucketed batch sizes (8 to 512 rows) and replayed, so the host launches one graph
+  rather than a few hundred kernels per forward (`learn/graphs.py`). The rows are copied into
+  buffers the graph owns and their logits read back out; the padding is real rows the network
+  never mixes in. One graph per policy and size: the learner's (captured again when the overlap's
+  behaviour snapshot changes) and each frozen opponent's, which goes when that opponent is no
+  longer resident. Only the forward is captured, so sampling, decodes and the learner's statistics
+  are as before. Off a CUDA device it is off, and a line says so. Unset, nothing is encoded.
+- Tests marked `gpu` need a CUDA device and are deselected by default (`-m gpu` runs them).
+
 ## 0.5.21
 
 - The rollout's inference gathers, decodes and uploads the uniforms of a round's policy rows once,

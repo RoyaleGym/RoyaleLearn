@@ -199,6 +199,11 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: True: a plane the sample never shows other than zero is stored as float16, since such a
     #: sample says nothing about whether its values are whole. Unset means off.
     codec_unseen_float16: bool | msgspec.UnsetType = msgspec.UNSET
+    #: True: each policy's rollout forward is captured as a CUDA graph at a bucketed batch size
+    #: and replayed (``learn/graphs.py``), which is the host launching one graph instead of a
+    #: few hundred kernels per forward. On a device other than CUDA it is off, and a line says
+    #: so. Unset means off, and is left out of the encoding.
+    cuda_graphs: bool | msgspec.UnsetType = msgspec.UNSET
 
 
 class NetConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -288,6 +293,11 @@ def codec_float16_planes_of(rollout: RolloutConfig) -> tuple[str, ...]:
 def codec_unseen_float16_of(rollout: RolloutConfig) -> bool:
     """``rollout.codec_unseen_float16``, with an unset one read as False."""
     return rollout.codec_unseen_float16 is not msgspec.UNSET and bool(rollout.codec_unseen_float16)
+
+
+def cuda_graphs_of(rollout: RolloutConfig) -> bool:
+    """``rollout.cuda_graphs``, with an unset one read as False."""
+    return rollout.cuda_graphs is not msgspec.UNSET and bool(rollout.cuda_graphs)
 
 
 def mask_only_scripted_of(rollout: RolloutConfig) -> bool:

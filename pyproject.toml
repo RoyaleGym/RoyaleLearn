@@ -50,10 +50,11 @@ python_files = ["test_*.py"]
 pythonpath = ["."]
 # The default run is the fast suite. The slow tests and the ones needing a freshly built
 # royalesim are selected explicitly, so a bare `pytest -q` stays a few seconds long.
-addopts = "-ra --strict-markers -m \"not slow and not engine\""
+addopts = "-ra --strict-markers -m \"not slow and not engine and not gpu\""
 markers = [
     "slow: takes more than about five seconds",
     "engine: needs a royalesim build that matches the data on disk",
+    "gpu: needs a CUDA device",
 ]
 
 [tool.ruff]

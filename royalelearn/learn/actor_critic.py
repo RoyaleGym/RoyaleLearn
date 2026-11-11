@@ -20,6 +20,7 @@ Both hold the same ``ClashActor``, so a pool snapshot written by one loads into 
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
@@ -58,7 +59,15 @@ def autocast_context(device_type: str, dtype: torch.dtype) -> Any:
     """
     if dtype is torch.float32 or device_type not in ("cuda", "cpu", "xpu"):
         return contextlib.nullcontext()
-    return torch.autocast(device_type, dtype=dtype)
+    # A CUDA graph cannot hold autocast's cache of cast weights: the cache belongs to the
+    # region that filled it, and a replay is outside every region.
+    return torch.autocast(device_type, dtype=dtype, cache_enabled=not GRAPH_CAPTURE.get())
+
+
+#: True while a CUDA graph of a forward is being captured (``learn/graphs.py``).
+GRAPH_CAPTURE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "royalelearn_graph_capture", default=False
+)
 
 
 def _no_autocast(device_type: str) -> Any:

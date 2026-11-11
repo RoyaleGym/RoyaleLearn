@@ -1191,6 +1191,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `launch_delay_s` | 0.5 | seconds | three `RustEngine` constructions at once each decode `calibration.json` and `arena.json` |
 | `stagger_first_reset` | `true` | | desynchronise episode phase across battles at run start, so episode ends spread across cycles |
 | `overlap` | `false` | | lag-1 collection under the update, at the cost of a second buffer (623 MB at 95 cards). Refused under `determinism.tier` run_exact; no profile sets it |
+| `cuda_graphs` | unset | | true: each policy's rollout forward is captured as a CUDA graph at the smallest bucketed batch size that holds its rows (8 to 512) and replayed (`learn/graphs.py`): one launch instead of a few hundred kernels per forward. The rows go into buffers the graph owns, padded with real rows the network never mixes in, and their logits come back out; only the forward is captured, so sampling, decodes and statistics are as before. A graph holds its actor: the learner's is captured again when the behaviour snapshot changes, and a frozen opponent's goes when it is no longer resident. Off a CUDA device it is off, and a line says so |
 | `eval_workers` | 2 | processes | the gate's farm, built at gate time and closed after |
 | `eval_games_per_worker` | 24 | battles | |
 | **`net`** (`ArchSpec`) | | | |

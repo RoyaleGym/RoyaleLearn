@@ -46,8 +46,11 @@ from ..seeding import ACT_CYCLE, derive_generator, stream_path
 from .buffer import _StagingRing
 from .decode import STOCHASTIC, decode_actions, parse_mode, resolve_decoder
 from .distribution import MaskedCategorical, noop_checked_upstream, noop_violation_message
+from .graphs import GraphedForward, bucket
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from collections.abc import Callable
+
     from ..api.ladder import SnapshotStore
     from ..api.policy import Actor, ActorCritic
     from ..api.rollout import RolloutRound, SlotPlan
@@ -205,6 +208,7 @@ class BatchedInference:
         device: torch.device | str | None = None,
         staging_slots: int = 4,
         opponent_mode: str = "stochastic",
+        cuda_graphs: bool = False,
     ) -> None:
         self.buffer = buffer
         self.model = model
@@ -232,6 +236,14 @@ class BatchedInference:
         pin = self.device.type == "cuda" and torch.cuda.is_available()
         self._uniform_staging = torch.empty(self.n_slots, dtype=torch.float32, pin_memory=pin)
         self._choice_staging = torch.empty(self.n_slots, dtype=torch.int64, pin_memory=pin)
+        #: ``rollout.cuda_graphs`` (``learn/graphs.py``): each policy's forward at a bucketed
+        #: batch size, replayed. Off a CUDA device the same buffers are called directly.
+        self.cuda_graphs = bool(cuda_graphs)
+        self._capture = self.device.type == "cuda"
+        self._graphs: dict[tuple[Any, ...], GraphedForward] = {}
+        self._graph_pool = (
+            torch.cuda.graph_pool_handle() if self.cuda_graphs and self._capture else None
+        )
 
     # -- the iteration ------------------------------------------------------
 
@@ -248,6 +260,14 @@ class BatchedInference:
         self.behaviour = behaviour
         self._uniforms = None
         self._uniform_cycle = -1
+        # A graph holds its actor; one whose actor will not play this iteration goes.
+        actor = behaviour if behaviour is not None else self.model
+        resident = set(plan.resident_snapshots)
+        for key in list(self._graphs):
+            if (key[0] == "learner" and self._graphs[key].keep is not actor) or (
+                key[0] == "frozen" and key[1] not in resident
+            ):
+                del self._graphs[key]
 
     def uniforms(self, cycle: int) -> np.ndarray:
         """The ``(R,)`` uniform vector of one cycle, drawn once and shared by its shards.
@@ -321,7 +341,10 @@ class BatchedInference:
                 )
                 home += [chosen, chosen_log_probs.contiguous().view(torch.int32).to(torch.int64)]
             else:
-                home.append(self._act_frozen(self._snapshot(gid), obs, u))
+                actor = self._snapshot(gid)  # refuses a group the plan does not name
+                assert self.plan is not None
+                name = self.plan.resident_snapshots[gid]
+                home.append(self._act_frozen(actor, obs, u, name))
             flags.append(_noop_flag(obs.mask))
             start = stop
         with torch.inference_mode():
@@ -353,7 +376,8 @@ class BatchedInference:
         """
         actor: Any = self.behaviour if self.behaviour is not None else self.model
         with torch.no_grad(), noop_checked_upstream():
-            distribution = MaskedCategorical(actor.logits(obs).float(), obs.mask)
+            logits = self._logits(("learner",), actor, actor.logits, obs)
+            distribution = MaskedCategorical(logits.float(), obs.mask)
             actions = distribution.sample(uniforms)
             log_probs = distribution.log_prob(actions)
             self._stats.policy(
@@ -364,15 +388,35 @@ class BatchedInference:
             )
         return actions, log_probs
 
-    def _act_frozen(self, actor: Actor, obs: ObsBatch, uniforms: Tensor) -> Tensor:
+    def _act_frozen(
+        self, actor: Actor, obs: ObsBatch, uniforms: Tensor, name: str = ""
+    ) -> Tensor:
         """A pool opponent's seats, decoded by ``opponent_mode``, as actions on the device.
         Never differentiated."""
         mode = getattr(self, "opponent_mode", STOCHASTIC)
         with torch.inference_mode(), noop_checked_upstream():
-            distribution = MaskedCategorical(actor.logits(obs).float(), obs.mask)
+            logits = self._logits(("frozen", name), actor, actor.logits, obs)
+            distribution = MaskedCategorical(logits.float(), obs.mask)
             if mode == STOCHASTIC:
                 return distribution.sample(uniforms)
             return decode_actions(distribution, mode, uniforms, vector=obs.vector)
+
+    def _logits(
+        self, key: tuple[Any, ...], keep: Any, fn: Callable[[ObsBatch], Tensor], obs: ObsBatch
+    ) -> Tensor:
+        """``fn(obs)``: through the graph of ``key`` at ``obs``'s bucket under
+        ``rollout.cuda_graphs``, captured on first use and again when ``keep`` (the actor) is
+        another object than the one it was captured on; else called."""
+        size = bucket(int(obs.mask.shape[0])) if self.cuda_graphs else None
+        if size is None:
+            return fn(obs)
+        entry = self._graphs.get((*key, size))
+        if entry is None or entry.keep is not keep:
+            entry = GraphedForward(
+                fn, obs, size, keep=keep, capture=self._capture, pool=self._graph_pool
+            )
+            self._graphs[(*key, size)] = entry
+        return entry(obs)
 
     def _up(self, staging: Tensor, values: np.ndarray) -> Tensor:
         """``values`` on the device, through ``staging``, in a copy that does not wait."""
