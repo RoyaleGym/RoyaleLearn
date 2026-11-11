@@ -201,3 +201,7 @@ def test_a_transform_the_update_leaves_out_is_caught(
     refused = pytest.raises(AssertionError, match=r"ppo\.policy_transform is")
     with refused, coordinator(config) as run:
         run.iterate()
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

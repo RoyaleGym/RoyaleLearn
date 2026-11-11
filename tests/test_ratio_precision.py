@@ -73,3 +73,7 @@ def test_a_wider_action_space_dilutes_it() -> None:
     narrow = ratio_precision(noop_bias=6.0, n_actions=100, dtype_name="bfloat16")
     wide = ratio_precision(noop_bias=6.0, n_actions=4000, dtype_name="bfloat16")
     assert wide < narrow
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

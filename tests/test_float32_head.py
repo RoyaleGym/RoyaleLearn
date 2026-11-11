@@ -129,3 +129,7 @@ def test_every_bare_actor_comes_through_one_builder_that_reads_the_flag(env_spec
         if re.search(r"(?<!class )\bClashActor\(", path.read_text(encoding="utf-8"))
     )
     assert direct == ["learn/nets.py"]
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

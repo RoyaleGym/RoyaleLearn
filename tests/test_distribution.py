@@ -363,3 +363,7 @@ def test_the_spread_sees_what_normalised_entropy_cannot() -> None:
     assert float(normalised[0]) > 0.999
     assert float(normalised[1]) > 0.985
     assert float(normalised[0] - normalised[1]) < 3e-2
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

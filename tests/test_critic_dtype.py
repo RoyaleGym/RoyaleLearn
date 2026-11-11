@@ -80,3 +80,13 @@ def test_a_run_with_a_bfloat16_critic_keeps_the_ratio_exact(tmp_path: Any) -> No
         for _ in range(2):
             run.iterate()
         assert all(row["ppo/ratio_max_abs_dev"] == 0.0 for row in run.rows)
+
+
+
+def test_this_module_runs_without_onednn() -> None:
+    """conftest's guard: a module that runs bfloat16 on the processor runs without oneDNN."""
+    assert torch.backends.mkldnn.enabled is False
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

@@ -397,3 +397,7 @@ def test_a_behaviour_snapshot_is_frozen_at_the_boundary(torch: Any, env_spec: An
     assert torch.equal(snapshot.logits(obs), before)
     assert not torch.allclose(model.logits(obs), before)
     assert all(not p.requires_grad for p in snapshot.actor.parameters())
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

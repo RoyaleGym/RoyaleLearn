@@ -113,3 +113,7 @@ def test_a_runs_actor_folders_state_their_actor_digest(tmp_path: Any) -> None:
         spec = run.artifact_spec()
         assert spec.actor_digest == actor_digest_of(run.spec, config.net)
         assert run.snapshot_template.actor_digest == spec.actor_digest
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

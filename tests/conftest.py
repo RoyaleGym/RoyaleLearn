@@ -24,6 +24,30 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from royalelearn.rollout.envspec import EnvFactorySpec
 
 
+@pytest.fixture(autouse=True)
+def _cpu_bfloat16_off_onednn(request: pytest.FixtureRequest) -> Iterator[None]:
+    """A test module that sets ``CPU_BFLOAT16 = True`` runs bfloat16 on the processor, and it
+    runs without oneDNN, on PyTorch's own kernels.
+
+    On some of CI's Windows runners oneDNN cannot create a bfloat16 primitive at all, and once
+    one creation has failed every convolution and linear layer after it in the process fails the
+    same way, float32 or not: one bfloat16 test turned a hundred unrelated ones red. Without
+    oneDNN no such primitive is ever made. Every other module keeps oneDNN.
+    """
+    if not getattr(request.module, "CPU_BFLOAT16", False):
+        yield
+        return
+    import torch
+
+    # The flag itself rather than ``mkldnn.flags()``, which also sets a TF32 option and warns.
+    was = torch.backends.mkldnn.enabled
+    torch.backends.mkldnn.enabled = False
+    try:
+        yield
+    finally:
+        torch.backends.mkldnn.enabled = was
+
+
 @pytest.fixture(scope="session")
 def mock_env_spec() -> EnvFactorySpec:
     """The environment description the suite runs against."""

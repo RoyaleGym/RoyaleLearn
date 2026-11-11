@@ -346,3 +346,7 @@ def test_the_vram_cap_refused_on_nvidia_still_stops_the_run(
     monkeypatch.setattr(torch.cuda, "set_per_process_memory_fraction", refuse)
     with pytest.raises(RuntimeError, match="Invalid device"):
         LearningCoordinator._cap_vram(_cap([]), torch)  # type: ignore[arg-type]
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True

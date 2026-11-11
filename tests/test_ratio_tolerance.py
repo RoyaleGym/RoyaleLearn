@@ -79,3 +79,7 @@ def test_a_real_drift_still_trips_the_check_under_tf32(
                 update._ratio_invariant(ratio, cells, actions, diagnostics, 0)
         else:
             update._ratio_invariant(ratio, cells, actions, diagnostics, 0)
+
+
+#: Runs bfloat16 on the processor, so conftest runs it without oneDNN (see there why).
+CPU_BFLOAT16 = True
