@@ -217,21 +217,32 @@ class DiskSnapshotStore(SnapshotStore):
                 "this snapshot store can archive and describe snapshots but not load them: "
                 "it was built without a way to construct an actor"
             )
-        folder = self._folder(snapshot_id)
-        if self.template is not None:
-            check_compatible(
-                msgspec.json.decode((folder / SPEC_NAME).read_bytes(), type=SnapshotSpec),
-                self.template,
-            )
+        # Refused before anything is built: an incompatible snapshot costs no construction.
+        self._check_spec(snapshot_id)
         actor = self.build(device)
-        state = _decode_tensors((folder / WEIGHTS_NAME).read_bytes(), device)
-        actor.load_state_dict(state)  # type: ignore[attr-defined]
+        self.load_into(snapshot_id, actor, device)
         actor.eval()  # type: ignore[attr-defined]
         self._cache[key] = actor
         self._cache.move_to_end(key)
         while len(self._cache) > self.max_resident:
             self._cache.popitem(last=False)
         return actor
+
+    def load_into(self, snapshot_id: str, actor: Any, device: Any) -> None:
+        """Put a snapshot's weights, as stored (float16), into an actor of this run's
+        architecture on ``device``. Nothing is cached: the actor is the caller's."""
+        self._check_spec(snapshot_id)
+        state = _decode_tensors((self._folder(snapshot_id) / WEIGHTS_NAME).read_bytes(), device)
+        actor.load_state_dict(state)
+
+    def _check_spec(self, snapshot_id: str) -> None:
+        if self.template is not None:
+            check_compatible(
+                msgspec.json.decode(
+                    (self._folder(snapshot_id) / SPEC_NAME).read_bytes(), type=SnapshotSpec
+                ),
+                self.template,
+            )
 
     @property
     def resident(self) -> tuple[str, ...]:

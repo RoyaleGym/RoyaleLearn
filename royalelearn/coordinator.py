@@ -1336,7 +1336,18 @@ class LearningCoordinator:
             ratio_atol=self._ratio_atol(),
             precision=logit_precision_name(self.config),
             policy_transform=getattr(self.model, "policy_transform", None),
+            champion=self._ladder_champion,
+            load_snapshot=self._load_snapshot,
         )
+
+    def _ladder_champion(self) -> str | None:
+        """``RunContext.champion``: the pool's champion, or None before the pool exists."""
+        pool = getattr(self, "pool", None)
+        return None if pool is None else pool.champion
+
+    def _load_snapshot(self, snapshot_id: str, actor: Any) -> None:
+        """``RunContext.load_snapshot``: a pool snapshot's weights into ``actor``."""
+        self.snapshot_store.load_into(snapshot_id, actor, self.device)
 
     def _attach_policy_transform(self) -> None:
         """``ppo.policy_transform`` on the model, bound to this run's action layout."""

@@ -484,3 +484,26 @@ def test_a_resume_does_not_report_keys_the_shim_dropped(
         pass
     printed = capsys.readouterr().out
     assert "config differs" not in printed, printed
+
+
+def test_the_context_names_the_champion_and_loads_a_snapshot(tmp_path: Path) -> None:
+    """``RunContext.champion`` reads the pool when called, and ``load_snapshot`` puts a pool
+    snapshot's weights, float16 as stored, into an actor the context built."""
+    import torch
+
+    from royalelearn.testing import coordinator, tiny_config
+
+    with coordinator(tiny_config(tmp_path)) as run:
+        ctx = run.run_context()
+        assert ctx.champion() is None
+        run.snapshot_store.put("snap:c", run.model, {"step": 7})
+        run.pool.add("snap:c", step=7)
+        run.pool.promote("snap:c")
+        assert ctx.champion() == "snap:c"
+        actor = ctx.build_actor(run.device)
+        ctx.load_snapshot("snap:c", actor)
+        stored = run.snapshot_store.get("snap:c", run.device).state_dict()
+        live = run.model.actor.state_dict()
+        for name, value in actor.state_dict().items():
+            assert torch.equal(value, stored[name])
+            assert torch.equal(value, live[name].half().to(value.dtype))

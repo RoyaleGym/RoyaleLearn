@@ -221,6 +221,9 @@ nothing, so you write only the hooks you use. There are no others.
 
 `ctx` is a `RunContext`. It carries the config, the environment description, the device, the live
 model, whether the run is resuming, and helpers for building a spare actor and unpacking rows.
+`ctx.champion()` names the ladder's champion now (None before the first promotion), and
+`ctx.load_snapshot(snapshot_id, actor)` loads a pool snapshot's weights, as the pool stores them,
+into an actor `ctx.build_actor` built. A term that anchors to the champion calls both in `begin`.
 
 A run that holds the actor still gets two extra alarms, `actor_handoff` and `critic_unready`.
 [running.md](running.md) section 3.6 describes them. The extension that sets the schedule adds
