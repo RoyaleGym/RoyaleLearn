@@ -210,6 +210,38 @@ def test_one_forward_per_distinct_policy(rect: Fixture) -> None:
     assert store.asked == ["snap:a", "snap:b"], "in ascending group order, not arrival order"
 
 
+def test_a_round_reads_its_answers_home_once_whatever_its_policies(
+    rect: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every policy's actions, log-probabilities and no-op check come home in one copy, and the
+    learner's seats get what a round of the learner alone gives them. Plant: read each policy's
+    answers back as it finishes, and a round of three policies waits on the device three times."""
+    import royalelearn.learn.inference as inference
+
+    store = _OneActorStore(build_model(rect.spec).actor)
+    engine = inference_for(rect, snapshots=store)
+    engine.begin_iteration(_pool_plan(SLOTS, ("snap:a", "snap:b")))
+    groups = np.full(SLOTS, GROUP_LEARNER, dtype=np.int8)
+    groups[1::4] = 0
+    groups[2::4] = 1
+    reads: list[int] = []
+    original = inference._numpy
+
+    def counted(tensor: Any, dtype: Any) -> Any:
+        reads.append(1)
+        return original(tensor, dtype)
+
+    monkeypatch.setattr(inference, "_numpy", counted)
+    mixed = engine.act(round_with(groups, buffer=rect.buffer))
+    assert len(reads) == 1
+    learner = groups == GROUP_LEARNER
+    alone = engine.act(
+        round_with(np.where(learner, GROUP_LEARNER, GROUP_SCRIPTED), buffer=rect.buffer)
+    )
+    assert np.array_equal(mixed.actions[learner], alone.actions[learner])
+    assert np.array_equal(mixed.log_probs[learner], alone.log_probs[learner])
+
+
 def test_only_the_learner_s_rows_carry_a_log_probability(rect: Fixture) -> None:
     """A frozen seat's transition is not trained on, and a log-probability from another
     policy's parameters would be a ratio against a denominator nothing optimised."""

@@ -267,7 +267,14 @@ class BatchedInference:
     # -- one round ----------------------------------------------------------
 
     def act(self, round_: RolloutRound, uniforms: np.ndarray | None = None) -> InferenceResult:
-        """Answer one shard-round: one forward per distinct policy, in slot order."""
+        """Answer one shard-round: one forward per distinct policy, in slot order.
+
+        The round's policy rows are gathered, decoded and given their uniforms once, and each
+        policy's forward reads its own contiguous part of that batch. Every policy's actions,
+        log-probabilities and no-op check come home in ONE copy at the end: a read per policy
+        made the host wait for the device once per opponent in the round, so the launches of
+        one policy's forward never overlapped the work of the one before.
+        """
         started = time.perf_counter()
         draw = self.uniforms(round_.cycle) if uniforms is None else np.asarray(uniforms)
         slots = np.asarray(round_.slots, dtype=np.int64)
@@ -284,47 +291,67 @@ class BatchedInference:
         # worker that stopped. The action left behind
         # is the no-op, which is what a seat that could not be asked should do.
         live = np.asarray(round_.valid, dtype=bool)
-        forwards = 0
-        for gid in sorted(int(value) for value in np.unique(group[live])):
-            if gid in (GROUP_SCRIPTED, GROUP_DEAD):
-                # The worker fills its own scripted seats, and a dead worker's slots have no
-                # observation to read. Neither is a policy the parent holds.
-                continue
-            rows = np.flatnonzero((group == gid) & live)
-            if rows.size == 0:  # pragma: no cover - np.unique only reports values that occur
-                continue
-            forwards += 1
-            row_slots = slots[rows]
-            obs = self.gather.observations(
-                np.full(rows.size, round_.cycle, dtype=np.int64), row_slots
-            )
-            u = self._up(self._uniform_staging, draw[row_slots])
+        # The worker fills its own scripted seats, and a dead worker's slots have no observation
+        # to read. Neither is a policy the parent holds.
+        groups = [
+            gid
+            for gid in sorted(int(value) for value in np.unique(group[live]))
+            if gid not in (GROUP_SCRIPTED, GROUP_DEAD)
+        ]
+        if not groups:
+            self._stats.round(forwards=0, seconds=time.perf_counter() - started)
+            return InferenceResult(actions=actions, log_probs=log_probs)
+        parts = [np.flatnonzero((group == gid) & live) for gid in groups]
+        order = np.concatenate(parts)
+        row_slots = slots[order]
+        batch = self.gather.observations(
+            np.full(order.size, round_.cycle, dtype=np.int64), row_slots
+        )
+        drawn = self._up(self._uniform_staging, draw[row_slots])
+        home: list[Tensor] = []
+        flags: list[Tensor] = []
+        start = 0
+        for gid, rows in zip(groups, parts, strict=True):
+            stop = start + rows.size
+            obs = ObsBatch(*(None if t is None else t[start:stop] for t in batch))
+            u = drawn[start:stop]
             if gid == GROUP_LEARNER:
                 chosen, chosen_log_probs = self._act_learner(
-                    obs, u, self._choice_rows(round_.cycle, row_slots)
+                    obs, u, self._choice_rows(round_.cycle, slots[rows])
                 )
-                log_probs[rows] = chosen_log_probs
+                home += [chosen, chosen_log_probs.contiguous().view(torch.int32).to(torch.int64)]
             else:
-                chosen = self._act_frozen(self._snapshot(gid), obs, u)
-            actions[rows] = chosen
-        self._stats.round(forwards=forwards, seconds=time.perf_counter() - started)
+                home.append(self._act_frozen(self._snapshot(gid), obs, u))
+            flags.append(_noop_flag(obs.mask))
+            start = stop
+        with torch.inference_mode():
+            host = _numpy(torch.cat(home + flags), np.int64)
+        if not host[host.size - len(flags) :].all():
+            raise AssertionError(noop_violation_message(batch.mask))
+        at = 0
+        for gid, rows in zip(groups, parts, strict=True):
+            actions[rows] = host[at : at + rows.size]
+            at += rows.size
+            if gid == GROUP_LEARNER:
+                # The log-probabilities crossed as their own bit patterns: the same floats.
+                bits = host[at : at + rows.size].astype(np.int32)
+                log_probs[rows] = bits.view(np.float32)
+                at += rows.size
+        self._stats.round(forwards=len(groups), seconds=time.perf_counter() - started)
         return InferenceResult(actions=actions, log_probs=log_probs)
 
     def _act_learner(
         self, obs: ObsBatch, uniforms: Tensor, choice_rows: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[Tensor, Tensor]:
         """Sample the learner's seats, and record what the policy looked like doing it.
 
         Under ``no_grad`` and not ``inference_mode``: the actor sampled from here is the one the
         update differentiates, and a tensor produced in inference mode carries a flag that
-        refuses to take part in a later autograd graph.
-
-        One read back to the host, not several: the actions, the log-probabilities' bits and the
-        no-op check travel in one copy, and the policy statistics wait on the device until the
-        iteration's row is built, after the update.
+        refuses to take part in a later autograd graph. Returns ``(actions, log_probs)`` on the
+        device; the policy statistics wait on the device until the iteration's row is built,
+        after the update.
         """
         actor: Any = self.behaviour if self.behaviour is not None else self.model
-        n = int(uniforms.numel())
         with torch.no_grad(), noop_checked_upstream():
             distribution = MaskedCategorical(actor.logits(obs).float(), obs.mask)
             actions = distribution.sample(uniforms)
@@ -335,32 +362,17 @@ class BatchedInference:
                 self._up(self._choice_staging, choice_rows),
                 int(choice_rows.size),
             )
-            host = _numpy(
-                torch.cat(
-                    [
-                        actions,
-                        log_probs.contiguous().view(torch.int32).to(torch.int64),
-                        _noop_flag(obs.mask),
-                    ]
-                ),
-                np.int64,
-            )
-        _refuse_without_noop(host, obs.mask)
-        # The log-probabilities crossed as their own bit patterns, so they are the same floats.
-        return host[:n].copy(), host[n : 2 * n].astype(np.int32).view(np.float32).copy()
+        return actions, log_probs
 
-    def _act_frozen(self, actor: Actor, obs: ObsBatch, uniforms: Tensor) -> np.ndarray:
-        """A pool opponent's seats, decoded by ``opponent_mode``. Never differentiated."""
+    def _act_frozen(self, actor: Actor, obs: ObsBatch, uniforms: Tensor) -> Tensor:
+        """A pool opponent's seats, decoded by ``opponent_mode``, as actions on the device.
+        Never differentiated."""
         mode = getattr(self, "opponent_mode", STOCHASTIC)
         with torch.inference_mode(), noop_checked_upstream():
             distribution = MaskedCategorical(actor.logits(obs).float(), obs.mask)
             if mode == STOCHASTIC:
-                actions = distribution.sample(uniforms)
-            else:
-                actions = decode_actions(distribution, mode, uniforms, vector=obs.vector)
-            host = _numpy(torch.cat([actions, _noop_flag(obs.mask)]), np.int64)
-        _refuse_without_noop(host, obs.mask)
-        return host[:-1].copy()
+                return distribution.sample(uniforms)
+            return decode_actions(distribution, mode, uniforms, vector=obs.vector)
 
     def _up(self, staging: Tensor, values: np.ndarray) -> Tensor:
         """``values`` on the device, through ``staging``, in a copy that does not wait."""
@@ -604,12 +616,6 @@ class _StatAccumulator:
 def _noop_flag(mask: Tensor) -> Tensor:
     """``(1,)`` int64: whether every row has its no-op, to ride home with the actions."""
     return mask[:, NOOP].all().to(torch.int64).view(1)
-
-
-def _refuse_without_noop(host: np.ndarray, mask: Tensor) -> None:
-    """The distribution's own check, read from the copy the actions came home in."""
-    if not host[-1]:
-        raise AssertionError(noop_violation_message(mask))
 
 
 def _numpy(tensor: Tensor, dtype: Any) -> np.ndarray:

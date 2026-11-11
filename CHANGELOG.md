@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The rollout's inference gathers, decodes and uploads the uniforms of a round's policy rows once,
+  gives each policy's forward its own contiguous part of that batch, and brings every policy's
+  actions, log-probabilities and no-op check home in one copy at the end of the round. It read
+  each policy's answers back as that policy finished, so a round against several frozen opponents
+  waited on the device once per opponent, and the launches of one forward never overlapped the
+  work of the last. The actions and log-probabilities are the same.
+
 - `ladder.opponent_affinity`: the pool battles of one shard that are on the same episode ordinal
   meet one opponent, drawn once for them by the same PFSP weights, from a stream of the shard's
   own (`match/worker/{w}/shard/{s}/ordinal/{k}`). The inference makes one forward per frozen
