@@ -195,3 +195,79 @@ def test_the_coordinator_files_each_learning_game_with_the_matchmaker(tmp_path: 
         mirror = msgspec.structs.replace(_record(2, 0), opponent_id="learner", outcome=1)
         run._record_training_results([won, lost, lost, mirror])
         assert run.matchmaker._games == {"snap:a": [1.0, 0.0, 0.0]}
+
+
+def test_a_record_that_can_weigh_a_member_nothing_is_refused() -> None:
+    ladder = msgspec.structs.replace(
+        LadderConfig(), pfsp_source="games", pfsp_uniform_floor=0.0, weight_floor_scale=0.0
+    )
+    problems = check_consistency(RunConfig(ladder=ladder))
+    assert any("always beats at exactly zero" in problem for problem in problems)
+    fine = msgspec.structs.replace(ladder, pfsp_offset=0.05)
+    assert not any("pfsp" in problem for problem in check_consistency(RunConfig(ladder=fine)))
+
+
+def test_an_episode_keeps_its_opponent_when_the_weights_move_under_it(tmp_path: Path) -> None:
+    """The record moves the weights at every plan, and a plan draws again for every battle at
+    its current ordinal. A battle still on the same episode keeps its opponent and seat; one
+    that has moved on is drawn by the new weights. Plant: draw again regardless, and battles
+    change opponent in the middle of an episode."""
+    matchmaker, shape = _matchmaker(_ladder())
+    pool = _pool(tmp_path)
+    first = matchmaker.plan(0, pool, None, shape)
+    # Lose to some, beat others, so the weights move a long way.
+    matchmaker.record_learning_games(
+        [("snap:0", 0.0)] * 30 + [("snap:1", 1.0)] * 30 + [("snap:5", 0.0)] * 30
+    )
+    second = matchmaker.plan(1, pool, None, shape)
+    for was, now in zip(first.assignment, second.assignment, strict=True):
+        assert (now.opponent_id, now.learner_seat) == (was.opponent_id, was.learner_seat)
+    # Battle 0 finishes its episode: its next one is drawn, as a fresh matchmaker would draw it.
+    matchmaker.on_episode(_record(0, 0))
+    third = matchmaker.plan(2, pool, None, shape)
+    fresh, _ = _matchmaker(_ladder())
+    fresh.record_learning_games(
+        [("snap:0", 0.0)] * 30 + [("snap:1", 1.0)] * 30 + [("snap:5", 0.0)] * 30
+    )
+    fresh.restore_ordinals({0: 1})
+    assert third.assignment[0] == fresh.plan(2, pool, None, shape).assignment[0]
+    assert third.assignment[0].ordinal == 1
+    # Drawn again without holding them, some of these battles would meet other opponents.
+    unheld, _ = _matchmaker(_ladder())
+    unheld.record_learning_games(
+        [("snap:0", 0.0)] * 30 + [("snap:1", 1.0)] * 30 + [("snap:5", 0.0)] * 30
+    )
+    redrawn = unheld.plan(1, pool, None, shape)
+    assert any(
+        a.opponent_id != b.opponent_id
+        for a, b in zip(first.assignment, redrawn.assignment, strict=True)
+    )
+
+
+def test_a_resume_leaves_the_residency_epoch_where_it_was(tmp_path: Path) -> None:
+    """A resumed run takes the fit it had without moving the residency epoch: the saved epoch
+    already counts the refit, and moving it would redraw the resident set from another stream.
+    Plant: note the fit as a refit on resume, and the epoch is one past the saved one."""
+    from royalelearn.api.ladder import RatingTable
+
+    config = tiny_config(tmp_path)
+    table = RatingTable(
+        rating={"snap:a": 10.0},
+        se={},
+        anchor="scripted:noop",
+        draw_nu=None,
+        n_games={},
+        transitivity_residual=0.0,
+        converged=True,
+        iterations=1,
+    )
+    with coordinator(config) as run:
+        run.iterate()
+        run.rater._table = table
+        run.ratings = table
+        run.pool.note_refit(table)
+        epoch = run.pool.residency_epoch
+        saved = run.checkpoint()
+    with coordinator(config, resume=saved) as resumed:
+        assert resumed.ratings == table
+        assert resumed.pool.residency_epoch == epoch

@@ -93,14 +93,26 @@ class GraphedForward:
         with torch.cuda.stream(side), torch.no_grad():
             for _ in range(2):
                 fn(self.inputs)
-        current.wait_stream(side)
         graph = torch.cuda.CUDAGraph()
         token = GRAPH_CAPTURE.set(True)
+        # Captured with the graph's own begin and end rather than ``torch.cuda.graph``, whose
+        # entry synchronises the whole device and empties the allocator's cache, and in
+        # thread-local mode. Under rollout.overlap the capture runs on the collection thread
+        # while the update runs on the main one: a device-wide synchronise there waits on the
+        # update, an emptied cache sends the update's next allocation to cudaMalloc, and in the
+        # default global mode a cudaMalloc from any other thread during a capture is an error.
+        # Thread-local mode forbids only this thread's unsafe calls, and the capture's own
+        # stream (``side``, which has waited on the current one) orders it after the warm-up.
         try:
-            with torch.no_grad(), torch.cuda.graph(graph, pool=pool):
-                self.output = fn(self.inputs)
+            with torch.no_grad(), torch.cuda.stream(side):
+                graph.capture_begin(pool=pool, capture_error_mode="thread_local")
+                try:
+                    self.output = fn(self.inputs)
+                finally:
+                    graph.capture_end()
         finally:
             GRAPH_CAPTURE.reset(token)
+        current.wait_stream(side)
         self.graph = graph
 
     def _fill(self, obs: ObsBatch) -> int:

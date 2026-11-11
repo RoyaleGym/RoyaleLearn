@@ -2772,7 +2772,7 @@ class LearningCoordinator:
         self._last_floor_step = _recorded(manifest.last_floor_step, here)
         self.ratings = self.rater.table
         if self.ratings is not None:
-            self.pool.note_refit(self.ratings)
+            self.pool.restore_ratings(self.ratings)
         # The state this process actually holds, recomputed from what was just loaded, and not
         # the manifest's record of it: a component that failed to restore would otherwise be
         # reported as the recorded state, and verify-resume would compare that record with

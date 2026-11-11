@@ -166,6 +166,11 @@ class MixMatchmaker(Matchmaker):
         #: first, and the means the current plan's weights read, taken as it was drawn.
         self._games: dict[str, list[float]] = {}
         self._scores: dict[str, float] = {}
+        #: Under "games": each pool battle's assignment for the episode it is on. The weights move
+        #: at every plan, and a plan draws again for every battle at its current ordinal, so an
+        #: episode still running at the boundary would otherwise be drawn again by other weights
+        #: and could change opponent halfway through.
+        self._held: dict[int, Assignment] = {}
         if n_battles is not None:
             self.set_rectangle(int(n_battles))
 
@@ -445,6 +450,21 @@ class MixMatchmaker(Matchmaker):
                 learner_seat=0,
             )
 
+        held = self._held.get(battle) if role == ROLE_POOL else None
+        if (
+            held is not None
+            and held.ordinal == ordinal
+            and held.opponent_id in residents
+        ):
+            # The same episode, so the same opponent and seat, at its place in this plan's table.
+            position = residents.index(held.opponent_id)
+            group = [0, 0]
+            group[held.learner_seat] = GROUP_LEARNER
+            group[1 - held.learner_seat] = position
+            kept = msgspec.structs.replace(held, group=(group[0], group[1]))
+            self._held[battle] = kept
+            return kept
+
         learner_seat = int(rng.integers(2))
         if self.config.seat_decks is not None:
             # The deal puts the named deck on this battle's fixed seat (ladder/seat_decks.py).
@@ -471,7 +491,7 @@ class MixMatchmaker(Matchmaker):
         group = [0, 0]
         group[learner_seat] = GROUP_LEARNER
         group[1 - learner_seat] = other
-        return Assignment(
+        assignment = Assignment(
             battle=battle,
             ordinal=ordinal,
             role=role,
@@ -479,6 +499,9 @@ class MixMatchmaker(Matchmaker):
             group=(group[0], group[1]),
             learner_seat=learner_seat,
         )
+        if role == ROLE_POOL and pfsp_source_of(self.config) == "games":
+            self._held[battle] = assignment
+        return assignment
 
     def _shared_position(self, battle: int, ordinal: int, weights: np.ndarray) -> int:
         """The resident position the pool battles of ``battle``'s shard on episode ``ordinal``
@@ -591,6 +614,8 @@ class MixMatchmaker(Matchmaker):
             str(k): [float(x) for x in v] for k, v in state.get("learning_games", {}).items()
         }
         self._scores = {}
+        # A resumed run starts each battle's episode again, so none is held over.
+        self._held = {}
         residents = state.get("residents")
         if residents is not None:
             self._residents = (int(residents[0]), tuple(str(r) for r in residents[1]))

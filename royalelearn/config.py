@@ -683,6 +683,21 @@ def _pfsp_problems(ladder: LadderConfig) -> list[str]:
     offset = pfsp_offset_of(ladder)
     if not math.isfinite(offset) or offset < 0:
         problems.append(f"ladder.pfsp_offset is {offset}; it must be finite and not negative")
+    elif (
+        source == "games"
+        and ladder.pfsp_weighting != "uniform"
+        and offset == 0.0
+        and ladder.pfsp_uniform_floor == 0.0
+        and ladder.weight_floor_scale == 0.0
+    ):
+        # A record of all wins (or under "variance", of all losses) reads a score the shape
+        # weighs at exactly zero, and with nothing added and no floor the resident draw, which
+        # is without replacement, cannot fill its places from too few members with a weight.
+        problems.append(
+            "ladder.pfsp_source 'games' with ladder.pfsp_offset 0 and both floors 0 weighs a "
+            "member the learner always beats at exactly zero; give pfsp_offset (0.05 is the "
+            "reference's) or a floor"
+        )
     return problems
 
 

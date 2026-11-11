@@ -339,6 +339,14 @@ class LadderPool:
         else:
             self.state.consecutive_gate_failures += 1
 
+    def restore_ratings(self, ratings: RatingTable) -> None:
+        """Take the fit a resumed run already had. Unlike ``note_refit`` the residency epoch
+        stays where the checkpoint left it: nothing was fitted, and the saved epoch already
+        counts the refit that made these ratings. Moving it would redraw the resident set
+        from another stream and the resumed run would meet other opponents than the run that
+        never stopped."""
+        self._ratings = ratings
+
     def note_refit(self, ratings: RatingTable) -> None:
         """Take a fresh fit. The drawable set is allowed to move here and nowhere else, so an
         assignment drawn inside an iteration cannot meet an opponent the iteration's plan did

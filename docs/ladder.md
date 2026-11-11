@@ -197,7 +197,9 @@ games against each member (`pfsp_window`), a win 1, a draw a half and a loss 0, 
 member it has not played. Nothing stands in and nothing lags a snapshot cadence; the record is
 read as each iteration's plan is drawn. `pfsp_offset` adds a constant to every weight before
 they are normalised, so with the hard shape at power 2, both floors at zero and the offset at
-0.05 a member's weight is (1 - score)^2 + 0.05.
+0.05 a member's weight is (1 - score)^2 + 0.05. The weights pick the loaded opponents first
+(`max_resident_opponents` of them) and then each game's opponent among those, so to have every
+member drawn by its own weight, set `max_resident_opponents` to at least the size of the pool.
 
 You can see the weighting in one command. The last argument is the stand-in's rating:
 

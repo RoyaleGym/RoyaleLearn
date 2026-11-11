@@ -129,3 +129,41 @@ def test_a_captured_graph_replays_the_forward(env_spec: Any) -> None:
         for parameter in actor.parameters():
             parameter.mul_(1.01)
         assert torch.allclose(graph(later), actor.logits(later), atol=1e-5)
+
+
+def test_overlap_keeps_one_behaviour_actor_so_its_graphs_are_not_captured_again(
+    rect: Any,  # noqa: F811
+) -> None:
+    """Each overlapped iteration brings a new behaviour snapshot. Its weights are copied into
+    the one held since the first, so the learner's graph is the same graph, replaying the new
+    weights. Plant: hold the snapshot handed in, and a new graph is captured every iteration,
+    on the collection thread, while the update runs."""
+    from royalelearn.learn.actor_critic import BehaviourSnapshot
+
+    model = build_model(rect.spec)
+    engine = inference_for(
+        rect, model=model, snapshots=_OneActorStore(build_model(rect.spec).actor), cuda_graphs=True
+    )
+    groups = np.full(SLOTS, GROUP_LEARNER, dtype=np.int8)
+    seen = []
+    for cycle in range(3):
+        snapshot = BehaviourSnapshot.of(model)
+        engine.begin_iteration(_pool_plan(SLOTS, ("snap:a",)), behaviour=snapshot)
+        assert engine.behaviour is not snapshot
+        for held, given in zip(
+            engine.behaviour.actor.state_dict().values(),
+            snapshot.actor.state_dict().values(),
+            strict=True,
+        ):
+            assert torch.equal(held, given)
+        want = (
+            inference_for(rect, model=model, snapshots=_OneActorStore(model.actor))
+            .act(round_with(groups, cycle=cycle, buffer=rect.buffer))
+        )
+        got = engine.act(round_with(groups, cycle=cycle, buffer=rect.buffer))
+        assert np.array_equal(got.actions, want.actions)
+        seen.append({key: id(entry) for key, entry in engine._graphs.items()})
+        with torch.no_grad():
+            for parameter in model.actor.parameters():
+                parameter.mul_(1.1)
+    assert seen[0] == seen[1] == seen[2]

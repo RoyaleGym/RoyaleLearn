@@ -10,7 +10,21 @@
   drew, so a resumed run draws what the run would have. `ladder.pfsp_offset` adds a constant to
   every shaped weight before they are normalised; the hard shape at power 2 with both floors at
   zero and an offset of 0.05 gives (1 - score)^2 + 0.05. Unset, nothing is encoded and nothing
-  changes.
+  changes. The weights are over the resident set: once the drawable pool is larger than
+  `ladder.max_resident_opponents`, residents are drawn by them first and an episode's opponent
+  among the residents, so for the formula over every member set `max_resident_opponents` to at
+  least the drawable pool. Under "games" a battle still on the same episode keeps its opponent
+  and seat when a plan is drawn, since the weights move at every plan; and a config that could
+  weigh a member at exactly zero (no offset, both floors zero) is refused.
+- A resumed run takes the fit it had without moving the residency epoch, so it holds the
+  residents the run that never stopped held. It was moved by one at every resume, and the
+  resident set was drawn again from another stream.
+- `rollout.cuda_graphs` captures with the graph's own begin and end in thread-local mode, without
+  the device-wide synchronise and emptied allocator cache `torch.cuda.graph` adds. Under
+  `rollout.overlap` the capture runs on the collection thread while the update runs, and in the
+  default global mode an allocation the update makes during a capture is an error. With overlap
+  the behaviour snapshot's weights are copied into one actor held across iterations, so the
+  learner's graphs are captured once rather than every iteration.
 - `RunContext.champion()` names the ladder's champion now (`gated=True`: only once a champion has
   won its gate by playing, `LadderPool.gated_champion`), and `RunContext.load_snapshot(id, actor)`
   loads a pool snapshot's weights into an actor of the run's architecture, so an extension's term

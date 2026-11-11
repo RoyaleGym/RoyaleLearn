@@ -257,17 +257,37 @@ class BatchedInference:
         """
         self.plan = plan
         self.iteration = plan.iteration
-        self.behaviour = behaviour
+        self.behaviour = self._behaviour_held(behaviour)
         self._uniforms = None
         self._uniform_cycle = -1
         # A graph holds its actor; one whose actor will not play this iteration goes.
-        actor = behaviour if behaviour is not None else self.model
+        actor = self.behaviour if self.behaviour is not None else self.model
         resident = set(plan.resident_snapshots)
         for key in list(self._graphs):
             if (key[0] == "learner" and self._graphs[key].keep is not actor) or (
                 key[0] == "frozen" and key[1] not in resident
             ):
                 del self._graphs[key]
+
+    def _behaviour_held(self, behaviour: BehaviourSnapshot | None) -> BehaviourSnapshot | None:
+        """The behaviour snapshot this iteration samples from, as one object across iterations.
+
+        Each overlapped iteration brings a new snapshot. Its weights are copied into the one held
+        since the first, in place, so the learner's CUDA graphs, which read that object's
+        parameters, replay the new weights rather than being captured again on the collection
+        thread every iteration. The snapshot handed in is the update's, and is left as it is.
+        """
+        if behaviour is None:
+            return None
+        held = getattr(self, "_behaviour", None)
+        if held is None or held.transform is not behaviour.transform:
+            self._behaviour = type(behaviour)(behaviour.actor, behaviour.transform)
+            return self._behaviour
+        with torch.no_grad():
+            mine = held.actor.state_dict()
+            for name, value in behaviour.actor.state_dict().items():
+                mine[name].copy_(value)
+        return held
 
     def uniforms(self, cycle: int) -> np.ndarray:
         """The ``(R,)`` uniform vector of one cycle, drawn once and shared by its shards.
