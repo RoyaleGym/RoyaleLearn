@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.24
 
 - `net.critic_autocast_dtype`: the critic's trunk at its own precision (bfloat16, say) and its
   value head at float32, whatever the actor runs at. The critic never enters the importance
