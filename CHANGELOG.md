@@ -16,6 +16,10 @@
   least the drawable pool. Under "games" a battle still on the same episode keeps its opponent
   and seat when a plan is drawn, since the weights move at every plan; and a config that could
   weigh a member at exactly zero (no offset, both floors zero) is refused.
+- `ladder.admit_refused`: a candidate due its gate is always gated, also when a floor admission is
+  due at the same step, and one the gate refuses joins the pool anyway, unpromoted. Without it a
+  due floor admission takes the gate's place, so a floor cadence that is a multiple of the
+  candidate cadence admits every second candidate without a gate. Unset, nothing changes.
 - A resumed run takes the fit it had without moving the residency epoch, so it holds the
   residents the run that never stopped held. It was moved by one at every resume, and the
   resident set was drawn again from another stream.

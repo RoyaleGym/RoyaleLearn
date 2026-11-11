@@ -268,6 +268,11 @@ class BatchedInference:
                 key[0] == "frozen" and key[1] not in resident
             ):
                 del self._graphs[key]
+        if not self._graphs and self._graph_pool is not None:
+            # Every graph that shared the pool is gone, so the pool is waiting to be released,
+            # and a capture into it fails an assertion inside the caching allocator (graphs
+            # captured into a released pool). The next capture takes a fresh one.
+            self._graph_pool = torch.cuda.graph_pool_handle()
 
     def _behaviour_held(self, behaviour: BehaviourSnapshot | None) -> BehaviourSnapshot | None:
         """The behaviour snapshot this iteration samples from, as one object across iterations.

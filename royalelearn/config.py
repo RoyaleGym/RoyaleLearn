@@ -635,6 +635,17 @@ class LadderConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: ``pfsp_weighting`` "hard", ``pfsp_power`` 2, ``pfsp_uniform_floor`` and
     #: ``weight_floor_scale`` 0 and this at 0.05, a member's weight is (1 - score)^2 + 0.05.
     pfsp_offset: float | msgspec.UnsetType = msgspec.UNSET
+    #: True: a candidate due its gate is always gated, also when a floor admission is due at the
+    #: same step, and one the gate refuses joins the pool anyway, unpromoted, as a floor
+    #: admission does. So every candidate is measured against the champion and the pool keeps
+    #: the recent snapshots whatever the gates decide. Unset (False): a due floor admission takes
+    #: the gate's place, and a refused candidate is discarded.
+    admit_refused: bool | msgspec.UnsetType = msgspec.UNSET
+
+
+def admit_refused_of(ladder: LadderConfig) -> bool:
+    """``ladder.admit_refused``, with an unset one read as False."""
+    return ladder.admit_refused is not msgspec.UNSET and bool(ladder.admit_refused)
 
 
 def opponent_affinity_of(ladder: LadderConfig) -> bool:

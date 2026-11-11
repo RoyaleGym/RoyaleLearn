@@ -54,6 +54,7 @@ from .checkpoint import (
 )
 from .config import (
     RunConfig,
+    admit_refused_of,
     config_hash,
     cuda_graphs_of,
     dump_config,
@@ -2308,19 +2309,29 @@ class LearningCoordinator:
             self.model,
             {"step": self.cumulative_env_steps, "iteration": self.iteration},
         )
+        admit_refused = admit_refused_of(config)
         if floor_due:
             self._last_floor_step = self.cumulative_env_steps
+        if floor_due and not (admit_refused and candidate_due):
             decision = floor_decision(candidate, self.pool.champion)
         else:
+            # Under ladder.admit_refused a due gate is never replaced by the floor: the candidate
+            # joins the pool whatever the gate decides, which is what the floor is for.
             decision = self.gate.evaluate(candidate, self.pool, self.eval_runner)
         self.pool.apply(decision, step=self.cumulative_env_steps)
+        joined = ""
+        if admit_refused and not decision.admit:
+            self.pool.add(
+                candidate, step=self.cumulative_env_steps, meta={"cycle": False, "refused": True}
+            )
+            joined = " (refused, admitted unpromoted: ladder.admit_refused)"
         self.last_decision = decision
         self._evict()
         seconds = time.perf_counter() - started
         self.gate_seconds_total += seconds
         self.printer(
             f"gate          {candidate}: admit={decision.admit} promote={decision.promote} "
-            f"cycle={decision.cycle} in {seconds:.1f}s"
+            f"cycle={decision.cycle} in {seconds:.1f}s{joined}"
         )
         return seconds
 
