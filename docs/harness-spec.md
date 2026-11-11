@@ -1209,6 +1209,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `init` | `"orthogonal"` | | gain sqrt(2) hidden, **0.01 policy head**, 1.0 value head |
 | `noop_bias` | 0.0 | logits | self-limiting at init; the formula for when it is needed is in section 8.4. Refused with the factored head, which has no no-op logit |
 | `autocast_dtype` | `"bfloat16"` | | Ampere bf16 tensor cores; bf16 keeps fp32's exponent range so `finfo.min` masking is safe and no `GradScaler` is needed |
+| `critic_autocast_dtype` | unset | | the critic's trunk at this dtype and its value head at float32, whatever `autocast_dtype` the actor runs at. The critic never enters the importance ratio, so a run that keeps its actor at float32 for the ratio invariant can train its critic, most of an update under `ppo.forced_rows` "critic_only", on the bfloat16 path. Needs `separate_trunks`. Left out of `arch_digest` and `actor_digest`: a precision, not a shape, so a run resumes with it changed |
 | `device` | `"cuda"` | | |
 | **`ppo`** | | | |
 | `n_epochs` | 3 | | the family disagrees by three orders of magnitude (1, 10, about 1000 gradient steps per 50 k), so none of them is evidence; 3 balances reuse against the update being the wall-clock bottleneck. Watch clip fraction across epochs |

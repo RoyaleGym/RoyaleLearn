@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `net.critic_autocast_dtype`: the critic's trunk at its own precision (bfloat16, say) and its
+  value head at float32, whatever the actor runs at. The critic never enters the importance
+  ratio, so an actor kept at float32 for the ratio invariant no longer holds the critic, which is
+  most of an update under `ppo.forced_rows` "critic_only", to float32 as well. Needs
+  `net.separate_trunks`; left out of both digests, so a run can resume with it changed.
 - Under `rollout.overlap` no CUDA graph is captured on the collection thread. 0.5.23's capture,
   thread-local and without the device-wide synchronise, still broke the update beside it on a GPU
   ("operation not permitted when stream is capturing" in the first update's critic pass). Every
