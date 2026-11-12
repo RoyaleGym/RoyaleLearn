@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.25
 
 - `rollout.eval_device: "cuda"`: the gate's evaluation workers run their actors on the run's GPU
   rather than at one CPU thread and a batch of one a decision. The gate is synchronous, so its
