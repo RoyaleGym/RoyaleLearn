@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.26
 
 - `rollout.eval_lockstep`: each evaluation worker plays `rollout.eval_games_per_worker` of its
   battles at once, a decision at a time for all of them, with one forward per policy per decision
