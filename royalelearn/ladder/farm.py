@@ -83,6 +83,8 @@ class EvalWorkerConfig(msgspec.Struct, frozen=True):
     release_mode: str
     max_decisions: int
     max_resident: int
+    #: ``rollout.eval_device``: where this worker's actors run.
+    device: str = "cpu"
 
 
 def _build_player(config: EvalWorkerConfig) -> Any:
@@ -110,7 +112,7 @@ def _build_player(config: EvalWorkerConfig) -> Any:
         config.spec,
         config.net,
         store,
-        device="cpu",
+        device=config.device,
         release_mode=config.release_mode,
         model=None,
     )
@@ -120,7 +122,7 @@ def _build_player(config: EvalWorkerConfig) -> Any:
         actors,
         master_seed=config.master_seed,
         extra_modules=config.extra_modules,
-        device="cpu",
+        device=config.device,
         release_mode=config.release_mode,
         max_decisions=config.max_decisions,
     )
@@ -148,9 +150,11 @@ def _pin_threads() -> None:
 def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
     """One worker: build a player, then answer battles until told to stop.
 
-    CPU on purpose. A batch-of-one forward is latency-bound rather than throughput-bound, and K
-    workers sharing one device would serialise on it anyway; the point of the farm is the K
-    environments, which are the expensive half. One thread each, before anything else.
+    On the CPU unless ``rollout.eval_device`` says "cuda". A batch-of-one forward is
+    latency-bound, and on the CPU it is tens of milliseconds for a network the size of a real
+    run's: a gate of a thousand battles then holds the update for hours while the GPU it waits
+    beside is idle. On the GPU each worker has its own context and the same forward is a few
+    milliseconds. One thread each either way, before anything else.
     """
     _pin_threads()
     config = msgspec.msgpack.decode(payload, type=EvalWorkerConfig)

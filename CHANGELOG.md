@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `rollout.eval_device: "cuda"`: the gate's evaluation workers run their actors on the run's GPU
+  rather than at one CPU thread and a batch of one a decision. The gate is synchronous, so its
+  battles hold the update, and on the processor a gate of a thousand battles with a network of a
+  real run's size held it for hours while the GPU was idle. Off a CUDA run it stays on the CPU and
+  says so; left out of the run identity, so a run can turn it on at a resume.
 - `time/update_critic`, `time/update_actor`, `time/update_terms`, `time/update_backward` and
   `time/update_optimizer`: where the update's epochs spent their seconds. On CUDA each phase is a
   pair of events read after the update's one synchronisation, so the split is the device's time

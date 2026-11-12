@@ -176,6 +176,12 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     overlap: bool = False
     eval_workers: int = 2
     eval_games_per_worker: int = 24
+    #: Where the evaluation workers (``eval_workers`` above 1) run their actors. "cpu" (what
+    #: unset means): one thread each, a batch of one per decision. "cuda": on the run's GPU,
+    #: which the gate otherwise leaves idle while the update waits for it; a decision there is
+    #: a few milliseconds rather than tens. Off a CUDA run it is "cpu", and a line says so. A
+    #: performance setting, so it is left out of the run identity, and unset out of the encoding.
+    eval_device: str | msgspec.UnsetType = msgspec.UNSET
     #: Saves completed battles to disk so they can be watched afterwards, which is the only form
     #: that works: ``time/collection`` is about 5% of an iteration and those seconds hold tens of
     #: thousands of engine ticks, so a live view is a firehose between silences. NOT part of
@@ -301,6 +307,15 @@ def codec_float16_planes_of(rollout: RolloutConfig) -> tuple[str, ...]:
 def codec_unseen_float16_of(rollout: RolloutConfig) -> bool:
     """``rollout.codec_unseen_float16``, with an unset one read as False."""
     return rollout.codec_unseen_float16 is not msgspec.UNSET and bool(rollout.codec_unseen_float16)
+
+
+#: The values ``rollout.eval_device`` takes.
+EVAL_DEVICES = ("cpu", "cuda")
+
+
+def eval_device_of(rollout: RolloutConfig) -> str:
+    """``rollout.eval_device``, with an unset one read as "cpu"."""
+    return "cpu" if rollout.eval_device is msgspec.UNSET else str(rollout.eval_device)
 
 
 def cuda_graphs_of(rollout: RolloutConfig) -> bool:
@@ -1432,6 +1447,11 @@ def check_consistency(config: RunConfig) -> list[str]:
     problems.extend(_seat_deck_problems(config.ladder))
     problems.extend(_pfsp_problems(config.ladder))
     problems.extend(_recovery_problems(config.ladder))
+    if eval_device_of(config.rollout) not in EVAL_DEVICES:
+        problems.append(
+            f"rollout.eval_device is {eval_device_of(config.rollout)!r}, which is not one of "
+            f"{', '.join(EVAL_DEVICES)}"
+        )
     problems.extend(mode_problems(config.ladder.release_mode, "ladder.release_mode"))
     problems.extend(mode_problems(config.ladder.opponent_mode, "ladder.opponent_mode"))
     if config.ppo.policy_transform is not msgspec.UNSET:

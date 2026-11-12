@@ -1542,8 +1542,19 @@ class LearningCoordinator:
         A worker that fails DURING a batch is a different matter and raises: half a comparison
         from the parent and half from a worker would be one measurement from two sources.
         """
+        from .config import eval_device_of
         from .ladder.farm import EvalFarm, EvalWorkerConfig
 
+        device = eval_device_of(config.rollout)
+        if device == "cuda" and self.device.type != "cuda":
+            self.printer(
+                "eval device   cpu: rollout.eval_device cuda needs a CUDA run and this run is on "
+                f"{self.device.type}"
+            )
+            device = "cpu"
+        elif device == "cuda":
+            device = str(self.device)  # the run's own GPU, index and all
+            self.printer(f"eval device   {device}: the gate's workers run their actors on the GPU")
         try:
             worker_config = EvalWorkerConfig(
                 spec=self.spec,
@@ -1556,6 +1567,7 @@ class LearningCoordinator:
                 release_mode=config.ladder.release_mode,
                 max_decisions=self.player.max_decisions,
                 max_resident=config.ladder.max_resident_opponents + 2,
+                device=device,
             )
             return EvalFarm(
                 worker_config,

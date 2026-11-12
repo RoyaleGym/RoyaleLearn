@@ -1194,6 +1194,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `cuda_graphs` | unset | | true: each policy's rollout forward is captured as a CUDA graph at the smallest bucketed batch size that holds its rows (8 to 512) and replayed (`learn/graphs.py`): one launch instead of a few hundred kernels per forward. The rows go into buffers the graph owns, padded with real rows the network never mixes in, and their logits come back out; only the forward is captured, so sampling, decodes and statistics are as before. A graph holds its actor: the learner's is captured again when the behaviour snapshot changes, and a frozen opponent's goes when it is no longer resident. Off a CUDA device it is off, and a line says so |
 | `eval_workers` | 2 | processes | the gate's farm, built at gate time and closed after |
 | `eval_games_per_worker` | 24 | battles | |
+| `eval_device` | unset | | where the evaluation workers (`eval_workers` above 1) run their actors: "cpu" (unset) at one thread and a batch of one per decision, or "cuda" on the run's own GPU, which the synchronous gate otherwise leaves idle while the update waits for it. Off a CUDA run it is "cpu" and a line says so. Left out of the run identity |
 | **`net`** (`ArchSpec`) | | | |
 | `channels` C | 64 | | about 430 k parameters per network; 223 TFLOP per iteration is about 25 s bf16 on a 3050 |
 | `blocks` N | 4 | residual blocks | |
