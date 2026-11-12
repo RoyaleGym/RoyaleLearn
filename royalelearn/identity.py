@@ -103,6 +103,7 @@ EXCLUDED_FROM_IDENTITY: tuple[str, ...] = (
     "rollout.eval_workers",
     "rollout.eval_games_per_worker",
     "rollout.eval_device",
+    "rollout.eval_lockstep",
     "checkpoint",
     "metrics",
     "alarms",

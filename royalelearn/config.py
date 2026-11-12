@@ -182,6 +182,14 @@ class RolloutConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: a few milliseconds rather than tens. Off a CUDA run it is "cpu", and a line says so. A
     #: performance setting, so it is left out of the run identity, and unset out of the encoding.
     eval_device: str | msgspec.UnsetType = msgspec.UNSET
+    #: True: each evaluation worker plays ``eval_games_per_worker`` of its battles at once, a
+    #: decision at a time for all of them, with one forward per policy per decision over every
+    #: battle that policy is playing. Each battle keeps its own seed, side, frame history and
+    #: stream, so a gate is the same measurement; batched arithmetic can differ from a batch of
+    #: one in the last bits, so a sample at a near-tie can come out the other way, and a gate is
+    #: not bit-identical to one played a battle at a time. A performance setting, left out of the
+    #: run identity; unset (False) plays a battle at a time, and is left out of the encoding.
+    eval_lockstep: bool | msgspec.UnsetType = msgspec.UNSET
     #: Saves completed battles to disk so they can be watched afterwards, which is the only form
     #: that works: ``time/collection`` is about 5% of an iteration and those seconds hold tens of
     #: thousands of engine ticks, so a live view is a firehose between silences. NOT part of
@@ -311,6 +319,11 @@ def codec_unseen_float16_of(rollout: RolloutConfig) -> bool:
 
 #: The values ``rollout.eval_device`` takes.
 EVAL_DEVICES = ("cpu", "cuda")
+
+
+def eval_lockstep_of(rollout: RolloutConfig) -> bool:
+    """``rollout.eval_lockstep``, with an unset one read as False."""
+    return rollout.eval_lockstep is not msgspec.UNSET and bool(rollout.eval_lockstep)
 
 
 def eval_device_of(rollout: RolloutConfig) -> str:

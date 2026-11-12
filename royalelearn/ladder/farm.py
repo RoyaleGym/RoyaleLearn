@@ -85,6 +85,8 @@ class EvalWorkerConfig(msgspec.Struct, frozen=True):
     max_resident: int
     #: ``rollout.eval_device``: where this worker's actors run.
     device: str = "cpu"
+    #: ``rollout.eval_lockstep``: battles played this many at a time (one plays them singly).
+    width: int = 1
 
 
 def _build_player(config: EvalWorkerConfig) -> Any:
@@ -166,6 +168,10 @@ def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
         outbox.put(("failed", -1, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
         return
     outbox.put(("ready", -1, ""))
+    if config.width > 1:
+        _lockstep(player, inbox, outbox, config.width)
+        player.close()
+        return
     while True:
         item = inbox.get()
         if item is None:
@@ -186,6 +192,51 @@ def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
             continue
         outbox.put(("score", index, float(score)))
     player.close()
+
+
+def _lockstep(player: Any, inbox: Any, outbox: Any, width: int) -> None:
+    """Up to ``width`` battles in flight, a decision at a time for all of them.
+
+    It waits for work only when nothing is in flight, and otherwise takes what is already queued
+    and carries on, so a worker never sits on a battle it could be playing. A battle that cannot
+    start is reported; a decision that fails is reported for every battle in flight, because they
+    were played together.
+    """
+    import traceback
+
+    live: list[Any] = []
+    stopping = False
+    while True:
+        while not stopping and len(live) < width:
+            try:
+                item = inbox.get() if not live else inbox.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                stopping = True
+                break
+            index, request = item
+            try:
+                live.append(player.begin(index, request))
+            except BaseException as exc:  # reported, not swallowed
+                detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+                outbox.put(("failed", index, detail))
+        if not live:
+            if stopping:
+                return
+            continue
+        try:
+            ended = player.advance(live)
+        except BaseException as exc:  # reported for every battle played together
+            detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+            for battle in live:
+                outbox.put(("failed", battle.index, detail))
+            live = []
+            continue
+        done = {index for index, _score in ended}
+        for index, score in ended:
+            outbox.put(("score", index, float(score)))
+        live = [battle for battle in live if battle.index not in done]
 
 
 class EvalFarm:

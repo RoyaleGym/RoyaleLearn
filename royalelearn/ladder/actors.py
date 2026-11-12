@@ -23,7 +23,7 @@ by construction rather than by remembering to clear it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -83,10 +83,14 @@ class EvalActors:
 
     def __call__(self, member: str) -> Policy:
         """The policy for one member id."""
-        from .pool import is_learner
-
         if member.startswith("scripted:"):
             return scripted_policy(member.split(":", 1)[1])
+        return self.policy(self._actor(member))
+
+    def _actor(self, member: str) -> Any:
+        """The network a non-scripted member id plays with."""
+        from .pool import is_learner
+
         if is_learner(member):
             if self.model is None:
                 raise LookupError(
@@ -96,8 +100,51 @@ class EvalActors:
                 )
             # The actor itself, as a snapshot of it would play: ppo.policy_transform shapes the
             # policy the update trains, and evaluation judges the actor under release_mode.
-            return self.policy(getattr(self.model, "actor", self.model))
-        return self.policy(self.snapshots.get(member, self.device))
+            return getattr(self.model, "actor", self.model)
+        return self.snapshots.get(member, self.device)
+
+    def act_many(
+        self,
+        member: str,
+        rows: Sequence[tuple[Mapping[str, Any], float, list[dict[str, np.ndarray]]]],
+    ) -> list[int]:
+        """One decision for each of several battles' seats ``member`` plays, in one forward.
+
+        ``rows`` are ``(observation, uniform, that seat's own frame history)``: the history is
+        the one ``policy`` keeps in its closure, held by the caller instead so that several
+        battles can share the forward. Each row is decoded with its own uniform, so a row's
+        action is what ``policy`` would choose for it, up to the arithmetic of a batched forward.
+        A network member only: a scripted one holds state of its own and draws from its battle's
+        generator, so it is played a battle at a time.
+        """
+        import torch
+
+        from ..api.policy import ObsBatch
+        from ..learn.decode import decode_actions, resolve_decoder
+        from ..learn.distribution import MaskedCategorical
+
+        if member.startswith("scripted:"):
+            raise ValueError(f"{member!r} is scripted, and a scripted member plays one battle")
+        if not rows:
+            return []
+        resolve_decoder(self.release_mode)
+        actor = self._actor(member)
+        parts = [self.obs_batch(obs, history) for obs, _uniform, history in rows]
+        batch = ObsBatch(
+            *(
+                None if column[0] is None else torch.cat(column)
+                for column in zip(*parts, strict=True)
+            )
+        )
+        with torch.inference_mode():
+            distribution = MaskedCategorical(actor.logits(batch).float(), batch.mask)
+            draw = torch.tensor(
+                [uniform for _obs, uniform, _history in rows],
+                dtype=torch.float32,
+                device=batch.mask.device,
+            )
+            chosen = decode_actions(distribution, self.release_mode, draw, vector=batch.vector)
+        return [int(action) for action in chosen.tolist()]
 
     def policy(self, actor: Any) -> Policy:
         """A frozen actor behind the battle player's signature.

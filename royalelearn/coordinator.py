@@ -561,6 +561,43 @@ class _RecordingEvalRunner(EvalRunner):
         return comparison
 
 
+class _LockstepBattle:
+    """One battle in flight under ``EnvBattlePlayer.advance``."""
+
+    __slots__ = (
+        "decisions",
+        "env",
+        "history",
+        "index",
+        "obs",
+        "request",
+        "rng",
+        "scripted",
+        "seats",
+    )
+
+    def __init__(
+        self,
+        index: int,
+        request: Any,
+        env: Any,
+        seats: dict[int, str],
+        scripted: dict[int, Any],
+        rng: Any,
+        obs: Any,
+    ) -> None:
+        self.index = index
+        self.request = request
+        self.env = env
+        self.seats = seats
+        self.scripted = scripted
+        self.rng = rng
+        self.obs = obs
+        self.decisions = 0
+        #: Each network seat's frame history, as ``EvalActors.policy`` keeps it per battle.
+        self.history: dict[int, list[dict[str, np.ndarray]]] = {0: [], 1: []}
+
+
 class EnvBattlePlayer:
     """One evaluation battle, played end to end in this process.
 
@@ -656,6 +693,84 @@ class EnvBattlePlayer:
                 break
         self.battles += 1
         return 0.5 + 0.5 * float(np.sign(outcome))
+
+    # -- lockstep: several battles a decision at a time ----------------------
+
+    def begin(self, index: int, request: Any) -> _LockstepBattle:
+        """A battle of ``play``'s, set up to be advanced by ``advance`` beside others.
+
+        Its own environment (one kept per battle in flight and reused), its own generator from
+        ``act_path``, and its own frame history per seat, which is what ``play``'s policies keep.
+        """
+        from .seeding import derive_generator
+
+        spare = getattr(self, "_spare", None)
+        if spare is None:
+            spare = self._spare = []
+        env = spare.pop() if spare else self.factory_spec.factory(self.extra_modules)()
+        seats = {request.a_seat: request.a, 1 - request.a_seat: request.b}
+        scripted = {
+            seat: self.actors(name)
+            for seat, name in seats.items()
+            if str(name).startswith("scripted:")
+        }
+        rng = derive_generator(self.master_seed, request.act_path)
+        obs, _info = env.reset(seed=request.seed)
+        return _LockstepBattle(index, request, env, seats, scripted, rng, obs)
+
+    def advance(self, battles: Sequence[_LockstepBattle]) -> list[tuple[int, float]]:
+        """One decision in each battle, and the ``(index, A's score)`` of each that ended.
+
+        Each battle draws its two uniforms and its scripted seats act, in seat order, exactly as
+        in ``play``; then every seat a network plays is answered in one forward per network over
+        all the battles it is in (``EvalActors.act_many``).
+        """
+        agents = ("blue", "red")
+        actions: list[dict[int, int]] = []
+        groups: dict[str, list[tuple[int, int, float]]] = {}
+        for position, battle in enumerate(battles):
+            uniforms = battle.rng.random(2, dtype=np.float32)
+            chosen: dict[int, int] = {}
+            for seat in (0, 1):
+                if seat in battle.scripted:
+                    chosen[seat] = int(
+                        battle.scripted[seat](
+                            battle.obs[agents[seat]], float(uniforms[seat]), battle.rng
+                        )
+                    )
+                else:
+                    groups.setdefault(battle.seats[seat], []).append(
+                        (position, seat, float(uniforms[seat]))
+                    )
+            actions.append(chosen)
+        for member, entries in groups.items():
+            answers = self.actors.act_many(  # type: ignore[attr-defined]
+                member,
+                [
+                    (battles[position].obs[agents[seat]], uniform, battles[position].history[seat])
+                    for position, seat, uniform in entries
+                ],
+            )
+            for (position, seat, _uniform), action in zip(entries, answers, strict=True):
+                actions[position][seat] = action
+        ended: list[tuple[int, float]] = []
+        for battle, chosen in zip(battles, actions, strict=True):
+            obs, _reward, terminated, truncated, infos = battle.env.step(
+                {agents[seat]: action for seat, action in chosen.items()}
+            )
+            battle.obs = obs
+            battle.decisions += 1
+            seat = agents[battle.request.a_seat]
+            if terminated[seat] or truncated[seat] or battle.decisions >= self.max_decisions:
+                outcome = (
+                    int(infos[seat].get("outcome", 0) or 0)
+                    if terminated[seat] or truncated[seat]
+                    else 0
+                )
+                ended.append((battle.index, 0.5 + 0.5 * float(np.sign(outcome))))
+                self._spare.append(battle.env)
+                self.battles += 1
+        return ended
 
 
 # ---------------------------------------------------------------------------
@@ -1542,7 +1657,7 @@ class LearningCoordinator:
         A worker that fails DURING a batch is a different matter and raises: half a comparison
         from the parent and half from a worker would be one measurement from two sources.
         """
-        from .config import eval_device_of
+        from .config import eval_device_of, eval_lockstep_of
         from .ladder.farm import EvalFarm, EvalWorkerConfig
 
         device = eval_device_of(config.rollout)
@@ -1568,7 +1683,17 @@ class LearningCoordinator:
                 max_decisions=self.player.max_decisions,
                 max_resident=config.ladder.max_resident_opponents + 2,
                 device=device,
+                width=(
+                    max(1, int(config.rollout.eval_games_per_worker))
+                    if eval_lockstep_of(config.rollout)
+                    else 1
+                ),
             )
+            if eval_lockstep_of(config.rollout):
+                self.printer(
+                    f"eval lockstep {worker_config.width} battles a worker, one forward per "
+                    "policy per decision"
+                )
             return EvalFarm(
                 worker_config,
                 workers=config.rollout.eval_workers,

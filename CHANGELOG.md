@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `rollout.eval_lockstep`: each evaluation worker plays `rollout.eval_games_per_worker` of its
+  battles at once, a decision at a time for all of them, with one forward per policy per decision
+  over every battle that policy is playing (`EvalActors.act_many`). Each battle keeps its own seed,
+  side, frame history and stream, and a scripted anchor acts a battle at a time in seat order, so
+  a gate is the same measurement as before; batched arithmetic can differ from a batch of one in
+  the last bits, so a near-tie sample can come out the other way. With `rollout.eval_device`
+  "cuda" a gate's decision costs one forward per policy for all of a worker's battles rather than
+  one per battle. Left out of the run identity; unset plays a battle at a time.
+
 ## 0.5.25
 
 - `rollout.eval_device: "cuda"`: the gate's evaluation workers run their actors on the run's GPU

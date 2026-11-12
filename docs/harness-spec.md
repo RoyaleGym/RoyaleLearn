@@ -1195,6 +1195,7 @@ class RunConfig(Struct, forbid_unknown_fields=True):
 | `eval_workers` | 2 | processes | the gate's farm, built at gate time and closed after |
 | `eval_games_per_worker` | 24 | battles | |
 | `eval_device` | unset | | where the evaluation workers (`eval_workers` above 1) run their actors: "cpu" (unset) at one thread and a batch of one per decision, or "cuda" on the run's own GPU, which the synchronous gate otherwise leaves idle while the update waits for it. Off a CUDA run it is "cpu" and a line says so. Left out of the run identity |
+| `eval_lockstep` | unset | | true: each evaluation worker plays `eval_games_per_worker` of its battles at once, a decision at a time for all of them, with one forward per policy per decision over every battle that policy is in. Each battle keeps its own seed, side, frame history and stream, and the scripted anchors act a battle at a time in seat order, so a gate is the same measurement; a batched forward can differ from a batch of one in the last bits, so a near-tie sample can come out the other way. Left out of the run identity |
 | **`net`** (`ArchSpec`) | | | |
 | `channels` C | 64 | | about 430 k parameters per network; 223 TFLOP per iteration is about 25 s bf16 on a 3050 |
 | `blocks` N | 4 | residual blocks | |
