@@ -10,6 +10,9 @@
   the last bits, so a near-tie sample can come out the other way. With `rollout.eval_device`
   "cuda" a gate's decision costs one forward per policy for all of a worker's battles rather than
   one per battle. Left out of the run identity; unset plays a battle at a time.
+- The gate's farm waits for an answer in proportion to the battles a worker plays at once, closes
+  itself when a wait fails, and no longer holds the process at exit when a failed batch left
+  requests unread in its queue.
 
 ## 0.5.25
 

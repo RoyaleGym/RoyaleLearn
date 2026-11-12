@@ -59,9 +59,10 @@ def test_unset_nothing_is_encoded_and_it_plays_a_battle_at_a_time() -> None:
 
 @pytest.mark.parametrize("width", [4])
 def test_battles_in_lockstep_score_as_they_do_one_at_a_time(tmp_path: Path, width: int) -> None:
-    """Plant: draw the anchor's moves from another battle's generator, and a score moves. A
-    shared frame history moves actions but rarely a score in a battle this short, so the
-    history has its own test below."""
+    """The scores of six battles, two of them against a scripted anchor, played both ways. A
+    score is a coarse witness: it catches a battle that plays another battle's moves, not one
+    that reorders its own draws, and a shared frame history moves actions but rarely a score,
+    which is why the history has its own test below."""
     # Two frames, so each seat's history is part of what it sees.
     with coordinator(_config(tmp_path, frames=2)) as run:
         _two_snapshots(run)
@@ -108,6 +109,8 @@ def test_a_farm_in_lockstep_returns_the_comparison_a_battle_at_a_time_does(
             comparison = run.eval_runner.compare("snap:a", "snap:b", games=8)
             results[lockstep] = [(s.as_blue, s.as_red) for s in comparison.seed_scores]
             assert run.eval_player.config.width == (4 if lockstep else 1)
+            # What the workers themselves said when they came up: they took the lockstep path.
+            assert run.eval_player.worker_widths == [4 if lockstep else 1] * 2
         assert any(line.startswith("eval lockstep 4 battles") for line in lines) is lockstep
     assert results[True] == results[False]
 

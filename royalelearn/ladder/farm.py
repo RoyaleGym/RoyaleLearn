@@ -167,7 +167,7 @@ def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
 
         outbox.put(("failed", -1, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
         return
-    outbox.put(("ready", -1, ""))
+    outbox.put(("ready", -1, str(config.width)))
     if config.width > 1:
         _lockstep(player, inbox, outbox, config.width)
         player.close()
@@ -262,6 +262,7 @@ class EvalFarm:
         self._inbox: Any = None
         self._outbox: Any = None
         self.battles_played = 0
+        self.worker_widths: list[int] = []
         #: Workers that survived every signal ``close`` has. Kept, because the defect this
         #: replaced was that they were dropped and could not be asked about afterwards.
         self.unkilled: list[Any] = []
@@ -321,11 +322,14 @@ class EvalFarm:
             )
             process.start()
             self._procs.append(process)
+        self.worker_widths = []
         for _ in range(self.workers):
             kind, _index, detail = self._take(STARTUP_TIMEOUT_S)
             if kind != "ready":
                 self.close()
                 raise RuntimeError(f"an evaluation worker did not come up:\n{detail}")
+            #: How many battles each worker said it plays at once (``rollout.eval_lockstep``).
+            self.worker_widths.append(int(detail or 1))
         self.printer(
             f"eval farm     {self.workers} workers up in {time.perf_counter() - started:.1f}s"
         )
@@ -335,8 +339,15 @@ class EvalFarm:
         for index, request in enumerate(requests):
             self._inbox.put((index, request))
         scores: list[float | None] = [None] * len(requests)
+        # A lockstep worker answers when the first of its battles ends, each decision of which
+        # costs a decision of every battle it holds: the wait grows with them.
+        wait = BATTLE_TIMEOUT_S * max(1, int(self.config.width))
         for _ in range(len(requests)):
-            kind, index, detail = self._take(BATTLE_TIMEOUT_S)
+            try:
+                kind, index, detail = self._take(wait)
+            except BaseException:
+                self.close()
+                raise
             if kind != "score":
                 self.close()
                 raise RuntimeError(
@@ -424,6 +435,13 @@ class EvalFarm:
                 f"ends.{note}"
             )
         self._procs = []
+        # Requests a failed batch left unread would otherwise hold the process at exit: the
+        # queue's feeder thread is blocked writing them into a pipe nobody reads, and exit joins it.
+        for channel in (self._inbox, self._outbox):
+            if channel is not None:
+                with _suppress():
+                    channel.cancel_join_thread()
+                    channel.close()
         self._inbox = None
         self._outbox = None
 

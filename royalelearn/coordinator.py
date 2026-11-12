@@ -1693,6 +1693,12 @@ class LearningCoordinator:
                 self.printer(
                     f"eval lockstep {worker_config.width} battles a worker, one forward per "
                     "policy per decision"
+                    + (
+                        "; on the cpu a batched forward costs about as much per row as one "
+                        "alone, so this is slower there than a battle at a time"
+                        if device == "cpu"
+                        else ""
+                    )
                 )
             return EvalFarm(
                 worker_config,
