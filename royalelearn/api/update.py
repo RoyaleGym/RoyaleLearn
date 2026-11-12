@@ -66,6 +66,11 @@ class UpdateResult(msgspec.Struct):
     #: of the update's own time rather than of the residual it is compared against.
     critic_pass_seconds: float = 0.0
     gae_seconds: float = 0.0
+    #: Seconds of the epochs by phase, on the device's own clock: "critic" (its forward and
+    #: backward where it runs apart from the actor), "actor" (the policy's forward), "terms"
+    #: (the extra actor-loss terms' forwards), "backward" (the actor's backward, the terms' with
+    #: it) and "optimizer" (clipping and the steps). A phase a path does not run is absent.
+    phase_seconds: dict[str, float] = msgspec.field(default_factory=dict)
     #: Share of each optimizer's parameters whose second moment sits under its own ``eps``, where
     #: Adam stops normalising and the step becomes proportional to the gradient again. ``None``
     #: before an optimizer has stepped: no second moments is not "nothing is on the floor".

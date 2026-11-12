@@ -2558,6 +2558,10 @@ class LearningCoordinator:
             "time/critic_pass": float(result.critic_pass_seconds),
             "time/gae": float(result.gae_seconds),
             "time/update": update_seconds,
+            **{
+                f"time/update_{phase}": float(seconds)
+                for phase, seconds in sorted(getattr(result, "phase_seconds", {}).items())
+            },
             "time/checkpoint": self._take_checkpoint_seconds(),
             "time/gate": gate_seconds,
             "time/probe": rung_seconds,

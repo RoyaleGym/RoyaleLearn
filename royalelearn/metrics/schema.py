@@ -196,6 +196,27 @@ METRICS: dict[str, MetricSpec] = {
     "time/critic_pass": _m("s", "Seconds in the whole-iteration critic pass."),
     "time/gae": _m("s", "Seconds computing advantages and returns."),
     "time/update": _m("s", "Seconds in the PPO update."),
+    "time/update_critic": _m(
+        "s",
+        "Seconds of the update's epochs in the critic's forward and backward, where it runs "
+        "apart from the actor (ppo.forced_rows skipping, or a frozen actor). Device time.",
+    ),
+    "time/update_actor": _m(
+        "s",
+        "Seconds of the update's epochs in the policy's forward (with the critic's, where one "
+        "forward computes both). Device time.",
+    ),
+    "time/update_terms": _m(
+        "s", "Seconds of the update's epochs in the extra actor-loss terms' forwards. Device time."
+    ),
+    "time/update_backward": _m(
+        "s",
+        "Seconds of the update's epochs in the actor's backward, the extra terms' with it. "
+        "Device time.",
+    ),
+    "time/update_optimizer": _m(
+        "s", "Seconds of the update's epochs clipping gradients and stepping. Device time."
+    ),
     "time/checkpoint": _m("s", "Seconds writing checkpoints this iteration."),
     "time/gate": _m("s", "Seconds in the promotion gate this iteration."),
     "time/probe": _m(
@@ -1021,6 +1042,11 @@ CONDITIONAL: dict[str, str] = {
     ),
     "ppo/actor_lr_scale": "the run schedules the actor's learning-rate scale",
     "ppo/behaviour_lag_iterations": "rollout.overlap is on",
+    "time/update_critic": "the critic runs apart from the actor: ppo.forced_rows skips, or the "
+    "actor is frozen",
+    "time/update_actor": "the actor trained this iteration",
+    "time/update_terms": "an extension adds actor-loss terms and the actor trained",
+    "time/update_backward": "the actor trained this iteration",
     "policy/button_press_rate": "the environment has ability buttons",
     **dict.fromkeys(
         ("ppo/entropy_gate", "ppo/entropy_candidate", "ppo/entropy_tile", "ppo/p_act"),

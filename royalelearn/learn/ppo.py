@@ -40,9 +40,10 @@ shrink the policy's step.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -239,6 +240,46 @@ def standardise(advantages: Tensor, mask: Tensor) -> Tensor:
 # --------------------------------------------------------------------------
 
 
+class _PhaseClock:
+    """Seconds by phase across one update, without a synchronisation per phase.
+
+    On CUDA each phase is a pair of events recorded on the stream and read once the update's
+    own synchronisation has run, so the clock measures the device's time and costs nothing the
+    update would not have waited for anyway. Elsewhere the work is synchronous and the wall clock
+    is the measure.
+    """
+
+    def __init__(self, device: torch.device) -> None:
+        self.cuda = device.type == "cuda"
+        self._events: list[tuple[str, Any, Any]] = []
+        self._wall: dict[str, float] = {}
+
+    @contextlib.contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        if self.cuda:  # pragma: no cover - the suite runs on the CPU
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            try:
+                yield
+            finally:
+                end.record()
+                self._events.append((name, start, end))
+        else:
+            began = time.perf_counter()
+            try:
+                yield
+            finally:
+                self._wall[name] = self._wall.get(name, 0.0) + time.perf_counter() - began
+
+    def seconds(self) -> dict[str, float]:
+        """Every phase's total. On CUDA, only after the events have completed."""
+        out = dict(self._wall)
+        for name, start, end in self._events:  # pragma: no cover - CUDA only
+            out[name] = out.get(name, 0.0) + start.elapsed_time(end) / 1000.0
+        return out
+
+
 def chunked_critic_pass(
     buffer: RectBuffer, model: ActorCritic, gather: RectGather, *, chunk: int
 ) -> tuple[Tensor, Tensor]:
@@ -419,6 +460,8 @@ class PPOUpdate(Update):
         self.master_seed = int(master_seed)
         self.backoff = backoff
         self.device = torch.device(device) if device is not None else _model_device(model)
+        #: The current update's phase timings (``UpdateResult.phase_seconds``).
+        self._clock = _PhaseClock(self.device)
         self.actor_params: list[Parameter] = list(model.actor_parameters())
         self.critic_params: list[Parameter] = list(model.critic_parameters())
         factory = optimizer_factory if optimizer_factory is not None else _adam
@@ -524,6 +567,7 @@ class PPOUpdate(Update):
             term.measure_grad_ratio for term in self.extra_actor_terms
         )
         gather = self._gather_for(buffer)
+        self._clock = _PhaseClock(self.device)
 
         critic_started = time.perf_counter()
         values, n_legal = chunked_critic_pass(
@@ -656,18 +700,20 @@ class PPOUpdate(Update):
                         first=first,
                         actor_scale=actor_scale,
                     )
-            if self._skip_forced and not self._frozen:
-                self._zero_the_actors_missing_gradients()
-            diagnostics.gradients(
-                clip_grad_norm_(self.actor_params, config.max_grad_norm),
-                clip_grad_norm_(self.critic_params, config.max_grad_norm),
-            )
-            for optimizer in self.optimizers:
-                # A frozen actor's optimizer does not step, so its moments are empty at unfreeze
-                # rather than filled with gradients of a policy that was not allowed to move.
-                if self._frozen and optimizer is self.actor_optimizer:
-                    continue
-                optimizer.step()
+            with self._clock.phase("optimizer"):
+                if self._skip_forced and not self._frozen:
+                    self._zero_the_actors_missing_gradients()
+                diagnostics.gradients(
+                    clip_grad_norm_(self.actor_params, config.max_grad_norm),
+                    clip_grad_norm_(self.critic_params, config.max_grad_norm),
+                )
+                for optimizer in self.optimizers:
+                    # A frozen actor's optimizer does not step, so its moments are empty at
+                    # unfreeze rather than filled with gradients of a policy that was not
+                    # allowed to move.
+                    if self._frozen and optimizer is self.actor_optimizer:
+                        continue
+                    optimizer.step()
             self.model_updates += 1
         if self.device.type == "cuda":  # pragma: no cover - the suite runs on the CPU
             # One synchronisation for the whole update, and every .item() below is behind it.
@@ -693,6 +739,7 @@ class PPOUpdate(Update):
             seconds=time.perf_counter() - started,
             critic_pass_seconds=critic_pass_seconds,
             gae_seconds=gae_seconds,
+            phase_seconds=self._clock.seconds(),
             eps_floor_actor=adam_eps_floor_frac(self.actor_optimizer),
             eps_floor_critic=adam_eps_floor_frac(self.critic_optimizer),
         )
@@ -752,7 +799,8 @@ class PPOUpdate(Update):
                 actor_scale=actor_scale,
             )
             return
-        result: BackpropResult = self.model.backprop(minibatch.obs, minibatch.actions)
+        with self._clock.phase("actor"):
+            result: BackpropResult = self.model.backprop(minibatch.obs, minibatch.actions)
         diagnostics.actor_forward(minibatch.n)
         log_probs = result.log_probs
         if check:
@@ -810,17 +858,19 @@ class PPOUpdate(Update):
                     "extra actor-loss term needs every legal action's log-probability"
                 )
             rows = minibatch.choice_index
-            extra = self._extra_actor_loss(
-                minibatch,
-                result.distribution.log_probs.index_select(0, rows),
-                minibatch.obs.mask.index_select(0, rows),
-                epoch,
-                actor_scale,
-                policy_loss,
-            )
+            with self._clock.phase("terms"):
+                extra = self._extra_actor_loss(
+                    minibatch,
+                    result.distribution.log_probs.index_select(0, rows),
+                    minibatch.obs.mask.index_select(0, rows),
+                    epoch,
+                    actor_scale,
+                    policy_loss,
+                )
             if extra is not None:
                 loss = loss + extra
-        loss.backward()
+        with self._clock.phase("backward"):
+            loss.backward()
         with torch.no_grad():
             diagnostics.minibatch(
                 epoch=epoch,
@@ -866,17 +916,19 @@ class PPOUpdate(Update):
         """
         config = self.config
         rows = minibatch.choice_index
-        values = self.model.value(minibatch.obs)
-        mean_squared_error = value_error(
-            values,
-            minibatch.values,
-            minibatch.returns,
-            clip_range=config.clip_range if config.value_clipping else None,
-        )
-        (config.vf_coef * mean_squared_error * minibatch.weight).backward()
+        with self._clock.phase("critic"):
+            values = self.model.value(minibatch.obs)
+            mean_squared_error = value_error(
+                values,
+                minibatch.values,
+                minibatch.returns,
+                clip_range=config.clip_range if config.value_clipping else None,
+            )
+            (config.vf_coef * mean_squared_error * minibatch.weight).backward()
 
         if minibatch.n_choice:
-            distribution = self.model.distribution_on_rows(minibatch.obs, rows)
+            with self._clock.phase("actor"):
+                distribution = self.model.distribution_on_rows(minibatch.obs, rows)
             diagnostics.actor_forward(minibatch.n_choice)
             actions = minibatch.actions.index_select(0, rows)
             log_probs = distribution.log_prob(actions)
@@ -920,17 +972,19 @@ class PPOUpdate(Update):
             entropy_loss = -(bonus + sched.ent_coef_noop * noop_entropy.sum()) * actor_scale
             actor_loss = policy_loss + entropy_loss
             if self.extra_actor_terms:
-                extra = self._extra_actor_loss(
-                    minibatch,
-                    distribution.log_probs,
-                    distribution.mask,
-                    epoch,
-                    actor_scale,
-                    policy_loss,
-                )
+                with self._clock.phase("terms"):
+                    extra = self._extra_actor_loss(
+                        minibatch,
+                        distribution.log_probs,
+                        distribution.mask,
+                        epoch,
+                        actor_scale,
+                        policy_loss,
+                    )
                 if extra is not None:
                     actor_loss = actor_loss + extra
-            actor_loss.backward()
+            with self._clock.phase("backward"):
+                actor_loss.backward()
         else:
             # Every row of this minibatch was forced, so there is no actor forward to run and
             # nothing of the policy term to differentiate. The diagnostics are still told about
@@ -1139,14 +1193,15 @@ class PPOUpdate(Update):
         from ..api.policy import ObsBatch
 
         config = self.config
-        values = self.model.value(minibatch.obs)
-        mean_squared_error = value_error(
-            values,
-            minibatch.values,
-            minibatch.returns,
-            clip_range=config.clip_range if config.value_clipping else None,
-        )
-        (config.vf_coef * mean_squared_error * minibatch.weight).backward()
+        with self._clock.phase("critic"):
+            values = self.model.value(minibatch.obs)
+            mean_squared_error = value_error(
+                values,
+                minibatch.values,
+                minibatch.returns,
+                clip_range=config.clip_range if config.value_clipping else None,
+            )
+            (config.vf_coef * mean_squared_error * minibatch.weight).backward()
         if first and minibatch.n_choice:
             rows = minibatch.choice_index
             subset = ObsBatch(
@@ -1671,6 +1726,7 @@ class _Diagnostics:
         seconds: float,
         critic_pass_seconds: float = 0.0,
         gae_seconds: float = 0.0,
+        phase_seconds: dict[str, float] | None = None,
         explained_choice: float = 0.0,
         forced_frac: float = 0.0,
         eps_floor_actor: float | None = None,
@@ -1731,6 +1787,7 @@ class _Diagnostics:
             seconds=seconds,
             critic_pass_seconds=critic_pass_seconds,
             gae_seconds=gae_seconds,
+            phase_seconds=dict(phase_seconds or {}),
             adam_eps_floor_frac_actor=eps_floor_actor,
             adam_eps_floor_frac_critic=eps_floor_critic,
         )

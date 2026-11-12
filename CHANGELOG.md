@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `time/update_critic`, `time/update_actor`, `time/update_terms`, `time/update_backward` and
+  `time/update_optimizer`: where the update's epochs spent their seconds. On CUDA each phase is a
+  pair of events read after the update's one synchronisation, so the split is the device's time
+  and costs no synchronisation of its own. A phase a path does not run is absent: the critic
+  apart from the actor only where `ppo.forced_rows` skips or the actor is frozen, the terms only
+  with extra actor-loss terms.
+
 ## 0.5.24
 
 - `net.critic_autocast_dtype`: the critic's trunk at its own precision (bfloat16, say) and its
