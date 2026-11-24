@@ -26,7 +26,10 @@ back to front, and it was pinned there before this module existed.
 
 from __future__ import annotations
 
+import contextlib
 import queue
+import signal
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -149,6 +152,37 @@ def _pin_threads() -> None:
     torch.set_num_threads(1)
 
 
+def _ignore_ctrl_c() -> None:
+    """Leave Ctrl-C to the parent, as a rollout worker does (``rollout.worker.preamble``).
+
+    An interrupt at the terminal reaches every process in the group. The parent turns the first
+    one into "stop after this update, with a checkpoint", but an evaluation worker died of it, so
+    a Ctrl-C during a gate failed the gate and the run stopped without that checkpoint. The
+    parent stops its workers with the stop word, SIGTERM and SIGKILL, none of which this touches.
+    """
+    # Only the main thread of a process may install a handler.
+    with contextlib.suppress(ValueError, OSError):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+@contextlib.contextmanager
+def _ctrl_c_ignored_while_starting() -> Any:
+    """SIGINT ignored in the parent while it starts workers, and put back after.
+
+    A worker ignores SIGINT as its first act, but a spawned one imports for seconds before it
+    gets there. An ignored signal stays ignored across exec, so a worker started inside this is
+    never without the setting. On another thread than the main one nothing changes.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
     """One worker: build a player, then answer battles until told to stop.
 
@@ -156,8 +190,10 @@ def eval_worker_main(payload: bytes, inbox: Any, outbox: Any) -> None:
     latency-bound, and on the CPU it is tens of milliseconds for a network the size of a real
     run's: a gate of a thousand battles then holds the update for hours while the GPU it waits
     beside is idle. On the GPU each worker has its own context and the same forward is a few
-    milliseconds. One thread each either way, before anything else.
+    milliseconds. One thread each either way. Ctrl-C is left to the parent, before anything
+    else.
     """
+    _ignore_ctrl_c()
     _pin_threads()
     config = msgspec.msgpack.decode(payload, type=EvalWorkerConfig)
     try:
@@ -313,15 +349,16 @@ class EvalFarm:
         self._outbox = context.Queue()
         payload = msgspec.msgpack.encode(self.config)
         started = time.perf_counter()
-        for index in range(self.workers):
-            process = context.Process(
-                target=eval_worker_main,
-                args=(payload, self._inbox, self._outbox),
-                name=f"royalelearn-eval-{index}",
-                daemon=True,
-            )
-            process.start()
-            self._procs.append(process)
+        with _ctrl_c_ignored_while_starting():
+            for index in range(self.workers):
+                process = context.Process(
+                    target=eval_worker_main,
+                    args=(payload, self._inbox, self._outbox),
+                    name=f"royalelearn-eval-{index}",
+                    daemon=True,
+                )
+                process.start()
+                self._procs.append(process)
         self.worker_widths = []
         for _ in range(self.workers):
             kind, _index, detail = self._take(STARTUP_TIMEOUT_S)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A gate's evaluation workers leave Ctrl-C to the parent, as the rollout workers already did, and
+  are started with it ignored. A terminal's Ctrl-C reaches every process in the group, so one
+  pressed during a gate killed the workers, the gate failed, and the run stopped without the
+  checkpoint the parent's handler was about to write.
 - `time/update_gather`: the update's seconds building each minibatch from the rectangle (the
   rows' gather and decode), which the other phases left out and a run's time/update counted.
 - `rollout.learner_gpus`: the update on several GPUs of one machine. The coordinator spawns a

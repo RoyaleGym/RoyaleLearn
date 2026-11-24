@@ -298,18 +298,58 @@ def test_a_worker_hands_the_player_each_battle_s_own_seed(
     assert len({r.seed for r in requests}) > 1, "one seed for every battle tests nothing"
 
 
-def test_an_eval_worker_pins_itself_to_one_thread_before_anything_else(monkeypatch) -> None:
-    """Pinned first: before the payload is even decoded, so a worker that fails to start
-    still started single-threaded."""
+def test_an_eval_worker_leaves_ctrl_c_and_pins_one_thread_before_anything_else(
+    monkeypatch,
+) -> None:
+    """Both before the payload is even decoded, so a worker that fails to start still started
+    single-threaded and deaf to Ctrl-C."""
     import msgspec
 
     from royalelearn.ladder import farm
 
     calls: list[str] = []
+    monkeypatch.setattr(farm, "_ignore_ctrl_c", lambda: calls.append("ctrl-c"))
     monkeypatch.setattr(farm, "_pin_threads", lambda: calls.append("pin"))
     with pytest.raises(msgspec.DecodeError):
         farm.eval_worker_main(b"not a payload", None, None)
-    assert calls == ["pin"]
+    assert calls == ["ctrl-c", "pin"]
+
+
+def test_starting_workers_puts_the_parents_ctrl_c_back() -> None:
+    import signal
+
+    from royalelearn.ladder import farm
+
+    before = signal.getsignal(signal.SIGINT)
+    with farm._ctrl_c_ignored_while_starting():
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+    assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_a_ctrl_c_at_the_workers_does_not_fail_the_gate(tmp_path: Path) -> None:
+    """A terminal's Ctrl-C reaches every process in the group. The parent's own handler turns
+    it into a checkpoint after the update; the workers must not die of it in the meantime. Each
+    worker is sent SIGINT between two batches, and the second batch still plays to the parent's
+    scores. Without the fix the workers die of KeyboardInterrupt."""
+    import os
+    import signal
+    import time
+
+    spec, eval_env = _setup(tmp_path)
+    parent = _parent_player(spec, eval_env, tmp_path / "snapshots")
+    requests = _requests(8)
+    here = play_all(parent, requests)
+    farm = _farm(spec, eval_env, tmp_path / "snapshots", parent, workers=2)
+    try:
+        assert farm.play_many(requests) == here
+        for process in farm._procs:
+            os.kill(process.pid, signal.SIGINT)
+        time.sleep(1.0)
+        assert all(process.is_alive() for process in farm._procs)
+        assert farm.play_many(requests) == here
+    finally:
+        farm.close()
+        parent.close()
 
 
 def test_the_pin_leaves_torch_one_thread_in_a_process_that_had_no_setting() -> None:
