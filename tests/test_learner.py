@@ -297,6 +297,38 @@ def test_the_defaults_build_the_config_they_always_built(tmp_path: Path) -> None
     assert cfg.config_hash(other.config).startswith("77db39c799d0")
 
 
+def test_workers_split_the_same_battles_over_processes(tmp_path: Path) -> None:
+    """One worker is the Learner's own process, as before; more split the same n_envs into two
+    shards a worker, and eval_workers reaches the gate either way."""
+
+    def shape(r: Any) -> tuple[Any, ...]:
+        return (r.source, r.workers, r.games_per_worker, r.shards_per_worker)
+
+    plain = Learner(build_env, save_dir=tmp_path / "a", device="cpu", n_envs=32).config.rollout
+    assert shape(plain) == ("inline", 1, 32, 1)
+    split = Learner(
+        build_env, save_dir=tmp_path / "b", device="cpu", n_envs=32, workers=4, eval_workers=6
+    ).config.rollout
+    assert shape(split) == ("process", 4, 8, 2) and split.eval_workers == 6
+    only_eval = Learner(build_env, save_dir=tmp_path / "c", device="cpu", eval_workers=5)
+    assert (only_eval.config.rollout.source, only_eval.config.rollout.eval_workers) == ("inline", 5)
+    with pytest.raises(PreflightError, match="multiple of 6"):
+        Learner(build_env, save_dir=tmp_path / "d", device="cpu", n_envs=32, workers=3)
+    with pytest.raises(PreflightError, match="workers is 0"):
+        Learner(build_env, save_dir=tmp_path / "e", device="cpu", workers=0)
+    with pytest.raises(PreflightError, match="eval_workers is 0"):
+        Learner(build_env, save_dir=tmp_path / "f", device="cpu", eval_workers=0)
+
+
+@pytest.mark.slow
+def test_a_run_on_worker_processes_trains_and_checkpoints(tmp_path: Path) -> None:
+    save = tmp_path / "workers"
+    learner = Learner(build_env, n_envs=4, workers=2, device="cpu", save_dir=save, **TINY)
+    learner.learn(total_steps=48)
+    assert learner.steps >= 48
+    assert any((save / "checkpoints").iterdir()), "no checkpoint was written into save_dir"
+
+
 def test_each_named_setting_reaches_the_run(tmp_path: Path) -> None:
     from royalelearn import config as cfg
 

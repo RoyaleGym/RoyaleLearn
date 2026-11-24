@@ -189,7 +189,14 @@ class Learner:
 
     The run:
 
-    - ``n_envs``: battles played at once, in this process.
+    - ``n_envs``: battles played at once.
+    - ``workers``: processes stepping those battles. 1 (the default) steps them all in this
+      process. More splits the same ``n_envs`` over that many worker processes, two shards each:
+      a worker steps one shard while this process infers the other's actions in one batch, so
+      ``n_envs`` must divide into ``2 * workers`` equal parts. It is part of the run's identity,
+      so a run carries on with the value it started with.
+    - ``eval_workers``: processes playing a gate's battles (default: ``rollout.eval_workers``'s
+      2). Not part of the run's identity, so a run may carry on with another value.
     - ``device``: "auto" (a GPU when torch can see one, else the CPU, with a line saying so),
       "cuda" or "cpu". ``threads``: CPU threads for the network's arithmetic (default: half the
       machine's logical cores, at most eight).
@@ -242,6 +249,8 @@ class Learner:
         build_env: Any,
         *,
         n_envs: int = 8,
+        workers: int = 1,
+        eval_workers: int | None = None,
         device: str = "auto",
         threads: int | None = None,
         vram_fraction: float | str | None = "auto",
@@ -305,6 +314,29 @@ class Learner:
                 f"steps_per_update {steps_per_update} is smaller than two decisions per battle "
                 f"of n_envs {n_envs}"
             )
+        workers = int(workers)
+        if workers < 1:
+            raise PreflightError(f"workers is {workers}; the battles need at least one process")
+        if workers > 1 and n_envs % (2 * workers):
+            raise PreflightError(
+                f"n_envs {n_envs} does not split into two equal shards for each of {workers} "
+                f"workers; make it a multiple of {2 * workers}"
+            )
+        if eval_workers is not None and int(eval_workers) < 1:
+            raise PreflightError(f"eval_workers is {eval_workers}; a gate needs at least one")
+        if workers == 1:
+            rollout = cfg.RolloutConfig(
+                source="inline", workers=1, games_per_worker=int(n_envs), shards_per_worker=1
+            )
+        else:
+            rollout = cfg.RolloutConfig(
+                source="process",
+                workers=workers,
+                games_per_worker=int(n_envs) // workers,
+                shards_per_worker=2,
+            )
+        if eval_workers is not None:
+            rollout = msgspec.structs.replace(rollout, eval_workers=int(eval_workers))
         steps = int(steps_per_update)
         width = int(trunk_channels)
         ppo: dict[str, Any] = {
@@ -342,9 +374,7 @@ class Learner:
             "runs_dir": str(self.save_dir.parent),
             "env": None,
             "extra_component_modules": [path.rsplit(".", 1)[0] + "."],
-            "rollout": cfg.RolloutConfig(
-                source="inline", workers=1, games_per_worker=int(n_envs), shards_per_worker=1
-            ),
+            "rollout": rollout,
             "net": cfg.NetConfig(
                 channels=width,
                 blocks=int(trunk_blocks),

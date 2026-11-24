@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `Learner(workers=..., eval_workers=...)`. `workers` above 1 steps the same `n_envs` battles in
+  that many worker processes, two shards each, while the Learner's process infers on its device;
+  1, the default, is the one-process run it always was, config hash unchanged. `eval_workers` sets
+  `rollout.eval_workers` for the gate.
 - `time/update_gather`: the update's seconds building each minibatch from the rectangle (the
   rows' gather and decode), which the other phases left out and a run's time/update counted.
 - `rollout.learner_gpus`: the update on several GPUs of one machine. The coordinator spawns a
